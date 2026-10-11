@@ -1,9 +1,9 @@
 import {
   Activity, BarChart3, BookOpen, BookText, Calendar, FlaskConical, GitBranch, Globe, LayoutGrid, type LucideIcon,
-  MessageSquare, Monitor, Moon, Network, Settings as Cog, ShieldAlert, Sparkles, Sun, Users, Zap,
+  MessageSquare, Monitor, Moon, Network, PhoneCall, Contact, Settings as Cog, ShieldAlert, Sparkles, Sun, Users, Zap,
 } from "lucide-react";
 
-export type Tab = "chat" | "council" | "mission" | "operator" | "browser" | "runs" | "knowledge" | "graph" | "workflows" | "analytics" | "evals" | "persona" | "schedules" | "triggers" | "audit" | "settings" | "guide";
+export type Tab = "chat" | "council" | "mission" | "operator" | "browser" | "calls" | "contacts" | "runs" | "knowledge" | "graph" | "workflows" | "analytics" | "evals" | "persona" | "schedules" | "triggers" | "audit" | "settings" | "guide";
 
 export const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "chat", label: "Chat", icon: MessageSquare },
@@ -11,6 +11,8 @@ export const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "mission", label: "Mission Control", icon: LayoutGrid },
   { id: "operator", label: "Operator", icon: Monitor },
   { id: "browser", label: "Browser", icon: Globe },
+  { id: "calls", label: "Calls", icon: PhoneCall },
+  { id: "contacts", label: "Contacts", icon: Contact },
   { id: "runs", label: "Runs", icon: Activity },
   { id: "knowledge", label: "Knowledge", icon: BookText },
   { id: "graph", label: "Knowledge Graph", icon: Network },

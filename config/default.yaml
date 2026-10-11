@@ -188,3 +188,32 @@ mcp:
     transport: stdio            # stdio | sse | streamable-http
     host: 127.0.0.1
     port: 8766
+
+# ─── Phone calling agent (inbound/outbound over a SIP/telephony provider) ───
+# Off by default. Needs `pip install 'xplogent[voip]'`, a Telnyx number, and a public
+# HTTPS/WSS address that points at this server. See extension-free setup in docs/voip.md.
+voip:
+  enabled: false
+  provider: telnyx                 # telnyx (Twilio-compatible media protocol also parsed)
+  public_url: ""                   # e.g. https://agent.example.com  (no trailing slash)
+  webhook_secret: ""               # random string; carrier webhook = {public_url}/telephony/webhook/<secret>
+  api_key_env: TELNYX_API_KEY      # env var holding the carrier API key
+  company: "our company"
+  greeting: "Hello, thanks for calling {company}. You're speaking with an AI assistant, and this call may be recorded. How can I help you?"
+  model: ""                        # LLM for calls; blank = use `model`. Pick a small fast streaming model.
+  transfer_number: ""              # human hand-off number (E.164), e.g. +15551234567
+  max_call_seconds: 900
+  cost_per_minute: 0.012           # your estimate: carrier + LLM (shown in the Calls view)
+  knowledge_top_k: 3
+  vad: { threshold: 500, silence_ms: 700 }
+  stt:                             # whisper-local = faster-whisper on your GPU; or an OpenAI-compatible URL
+    provider: whisper-local        # whisper-local | openai-compatible
+    model: small.en
+    base_url: ""
+    api_key_env: OPENAI_API_KEY
+  tts:                             # any OpenAI-compatible /audio/speech (OpenAI, or local Kokoro-FastAPI)
+    base_url: "https://api.openai.com/v1"
+    model: tts-1
+    voice: alloy
+    sample_rate: 24000
+    api_key_env: OPENAI_API_KEY

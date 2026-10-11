@@ -306,6 +306,37 @@ export async function getExtensionStatus(): Promise<ExtensionStatus> {
   return (await fetch("/extension/status")).json();
 }
 
+// ── Phone calling agent (VoIP) ────────────────────────────────────────────────
+export interface CallRow {
+  id: number; direction: string; contact_name?: string | null; from_number: string; to_number: string;
+  status: string; outcome?: string | null; summary?: string | null; cost: number;
+  started_at: number; ended_at?: number | null;
+}
+export interface CallTurn { speaker: string; text: string; created_at: number; }
+export interface Contact {
+  id: number; name: string; phone: string; email: string; timezone: string; status: string;
+  notes: string; fields: Record<string, string>;
+}
+export interface VoipStatus {
+  enabled: boolean; public_url: string; has_secret: boolean; contacts: number; calls: number;
+  active: { call_id: number; from: string; started: number }[];
+}
+export async function getVoipStatus(): Promise<VoipStatus> { return (await fetch("/voip/status")).json(); }
+export async function getCalls(): Promise<{ calls: CallRow[] }> { return (await fetch("/voip/calls")).json(); }
+export async function getCall(id: number): Promise<{ call: (CallRow & { turns: CallTurn[] }) | null }> {
+  return (await fetch(`/voip/calls/${id}`)).json();
+}
+export async function getContacts(q = ""): Promise<{ contacts: Contact[]; total: number }> {
+  return (await fetch(`/voip/contacts?q=${encodeURIComponent(q)}`)).json();
+}
+export async function importContactsCsv(csv: string): Promise<{ ok: boolean; imported: number; skipped: number; dnc?: number; error?: string; errors?: string[] }> {
+  return (await fetch("/voip/contacts/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ csv }) })).json();
+}
+export async function deleteContact(id: number) { await fetch(`/voip/contacts/${id}`, { method: "DELETE" }); }
+export async function addDnc(phone: string) {
+  await fetch("/voip/dnc", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone }) });
+}
+
 // ── Knowledge graph ───────────────────────────────────────────────────────────
 export interface GraphNode { name: string; type: string; mentions: number; }
 export interface GraphEdge { subject: string; relation: string; object: string; }

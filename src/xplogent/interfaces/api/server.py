@@ -85,6 +85,9 @@ def create_app():
         # Inbound webhooks authenticate via their secret token in the path.
         if path.startswith("/triggers/webhook/"):
             return True
+        # Carrier call webhooks authenticate with the secret in the path.
+        if path.startswith("/telephony/webhook/"):
+            return True
         return method == "GET" and (
             path == "/" or path.startswith("/assets") or path.endswith(_STATIC_EXT))
 
@@ -658,6 +661,91 @@ def create_app():
             return Response(status_code=204)
         return FileResponse(str(shots[0]), media_type="image/png",
                             headers={"Cache-Control": "no-store"})
+
+    # ── Phone calling agent (VoIP) ───────────────────────────────────────────
+    @app.post("/telephony/webhook/{secret}")
+    async def telephony_webhook(secret: str, request: Request):
+        from fastapi.responses import JSONResponse
+
+        from xplogent.voip.service import get_service
+
+        expected = str((load_config().voip or {}).get("webhook_secret", ""))
+        if not expected or not hmac.compare_digest(secret, expected):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        try:
+            payload = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"error": "bad json"}, status_code=400)
+        return await get_service().handle_webhook(payload)
+
+    @app.websocket("/ws/telephony/{token}")
+    async def ws_telephony(websocket: WebSocket, token: str) -> None:
+        # The carrier can't send our dashboard token; the one-time stream token
+        # (issued only after a verified webhook) authorises this socket instead.
+        from xplogent.voip.service import get_service
+
+        await get_service().run_media_socket(websocket, token)
+
+    @app.get("/voip/status")
+    async def voip_status() -> dict:
+        from xplogent.voip.service import get_service
+
+        cfg = load_config()
+        v = cfg.voip or {}
+        store = Store(cfg.db_path)
+        out = {"enabled": bool(v.get("enabled")), "public_url": v.get("public_url", ""),
+               "has_secret": bool(v.get("webhook_secret")),
+               "webhook_path": "/telephony/webhook/<your webhook_secret>",
+               "contacts": store.count_contacts(), "calls": len(store.list_calls(1000)),
+               "active": [{"call_id": k, **val} for k, val in get_service().active.items()]}
+        store.close()
+        return out
+
+    @app.get("/voip/calls")
+    async def voip_calls(limit: int = 100) -> dict:
+        store = Store(load_config().db_path)
+        out = store.list_calls(limit)
+        store.close()
+        return {"calls": out}
+
+    @app.get("/voip/calls/{call_id}")
+    async def voip_call(call_id: int) -> dict:
+        store = Store(load_config().db_path)
+        out = store.get_call(call_id)
+        store.close()
+        return {"call": out}
+
+    @app.get("/voip/contacts")
+    async def voip_contacts(q: str = "", limit: int = 500) -> dict:
+        store = Store(load_config().db_path)
+        out = store.list_contacts(limit, q)
+        total = store.count_contacts()
+        store.close()
+        return {"contacts": out, "total": total}
+
+    @app.post("/voip/contacts/import")
+    async def voip_import(body: dict) -> dict:
+        from xplogent.voip.contacts import import_csv
+
+        store = Store(load_config().db_path)
+        res = import_csv(store, str(body.get("csv", "")), source=str(body.get("source", "csv")))
+        store.close()
+        _audit_event("contacts_import", target=f"{res.get('imported', 0)} contacts", risk="medium")
+        return res
+
+    @app.delete("/voip/contacts/{contact_id}")
+    async def voip_delete_contact(contact_id: int) -> dict:
+        store = Store(load_config().db_path)
+        store.delete_contact(contact_id)
+        store.close()
+        return {"ok": True}
+
+    @app.post("/voip/dnc")
+    async def voip_add_dnc(body: dict) -> dict:
+        store = Store(load_config().db_path)
+        store.add_dnc(str(body.get("phone", "")), str(body.get("reason", "manual")))
+        store.close()
+        return {"ok": True}
 
     # ── Chrome extension bridge (real-browser control + monitoring) ──────────
     @app.websocket("/ws/extension")

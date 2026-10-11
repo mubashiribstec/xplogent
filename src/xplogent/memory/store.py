@@ -188,6 +188,46 @@ CREATE TABLE IF NOT EXISTS triggers (
     last_status TEXT,
     created_at REAL
 );
+CREATE TABLE IF NOT EXISTS contacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    phone TEXT,
+    email TEXT,
+    timezone TEXT,
+    status TEXT DEFAULT 'new',
+    notes TEXT,
+    fields TEXT,
+    source TEXT,
+    created_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_contacts_phone ON contacts(phone);
+CREATE TABLE IF NOT EXISTS calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    direction TEXT,
+    contact_id INTEGER,
+    from_number TEXT,
+    to_number TEXT,
+    provider_call_id TEXT,
+    status TEXT DEFAULT 'active',
+    outcome TEXT,
+    summary TEXT,
+    cost REAL DEFAULT 0,
+    started_at REAL,
+    ended_at REAL
+);
+CREATE TABLE IF NOT EXISTS call_turns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    call_id INTEGER,
+    speaker TEXT,
+    text TEXT,
+    created_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_call_turns_call ON call_turns(call_id);
+CREATE TABLE IF NOT EXISTS dnc (
+    phone TEXT PRIMARY KEY,
+    reason TEXT,
+    created_at REAL
+);
 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id);
 CREATE INDEX IF NOT EXISTS idx_msgs_run ON agent_messages(run_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON doc_chunks(doc_id);
@@ -842,6 +882,104 @@ class Store:
 
     def delete_trigger(self, trigger_id: int) -> None:
         self._write("DELETE FROM triggers WHERE id=?", (trigger_id,))
+
+    # -- voip: contacts, calls, transcripts, do-not-call ------------------------
+    @staticmethod
+    def normalize_phone(phone: str) -> str:
+        """Keep digits (and a leading +) so caller IDs match imported numbers."""
+        phone = (phone or "").strip()
+        digits = "".join(c for c in phone if c.isdigit())
+        return ("+" + digits) if phone.startswith("+") else digits
+
+    def add_contact(self, name: str, phone: str, email: str = "", timezone: str = "",
+                    notes: str = "", fields: dict | None = None, source: str = "") -> int:
+        cur = self._write(
+            "INSERT INTO contacts (name, phone, email, timezone, notes, fields, source, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (name, self.normalize_phone(phone), email, timezone, notes,
+             json.dumps(fields or {}), source, time.time()))
+        return int(cur.lastrowid)
+
+    def list_contacts(self, limit: int = 500, q: str = "") -> list[dict[str, Any]]:
+        if q:
+            like = f"%{q}%"
+            rows = self._query(
+                "SELECT * FROM contacts WHERE name LIKE ? OR phone LIKE ? OR email LIKE ? "
+                "ORDER BY id DESC LIMIT ?", (like, like, like, limit))
+        else:
+            rows = self._query("SELECT * FROM contacts ORDER BY id DESC LIMIT ?", (limit,))
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["fields"] = json.loads(d.get("fields") or "{}")
+            out.append(d)
+        return out
+
+    def find_contact_by_phone(self, phone: str) -> dict[str, Any] | None:
+        norm = self.normalize_phone(phone)
+        if not norm:
+            return None
+        # Match on the last 10 digits so +1-555... and 555... both hit.
+        tail = norm[-10:]
+        for r in self._query("SELECT * FROM contacts WHERE phone LIKE ? ORDER BY id DESC LIMIT 1",
+                             (f"%{tail}",)):
+            d = dict(r)
+            d["fields"] = json.loads(d.get("fields") or "{}")
+            return d
+        return None
+
+    def count_contacts(self) -> int:
+        return int(self._query("SELECT COUNT(*) FROM contacts")[0][0])
+
+    def delete_contact(self, contact_id: int) -> None:
+        self._write("DELETE FROM contacts WHERE id=?", (contact_id,))
+
+    def update_contact_status(self, contact_id: int, status: str, notes: str = "") -> None:
+        self._write("UPDATE contacts SET status=?, notes=CASE WHEN ?<>'' THEN ? ELSE notes END "
+                    "WHERE id=?", (status, notes, notes, contact_id))
+
+    def start_call(self, direction: str, from_number: str, to_number: str,
+                   provider_call_id: str = "", contact_id: int | None = None) -> int:
+        cur = self._write(
+            "INSERT INTO calls (direction, contact_id, from_number, to_number, provider_call_id, "
+            "status, started_at) VALUES (?,?,?,?,?,'active',?)",
+            (direction, contact_id, from_number, to_number, provider_call_id, time.time()))
+        return int(cur.lastrowid)
+
+    def add_call_turn(self, call_id: int, speaker: str, text: str) -> None:
+        self._write("INSERT INTO call_turns (call_id, speaker, text, created_at) VALUES (?,?,?,?)",
+                    (call_id, speaker, text, time.time()))
+
+    def end_call(self, call_id: int, outcome: str = "", summary: str = "",
+                 cost: float = 0.0, status: str = "ended") -> None:
+        self._write("UPDATE calls SET status=?, outcome=?, summary=?, cost=?, ended_at=? WHERE id=?",
+                    (status, outcome, summary, cost, time.time(), call_id))
+
+    def list_calls(self, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self._query(
+            "SELECT c.*, ct.name AS contact_name FROM calls c "
+            "LEFT JOIN contacts ct ON ct.id = c.contact_id ORDER BY c.id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in rows]
+
+    def get_call(self, call_id: int) -> dict[str, Any] | None:
+        rows = self._query(
+            "SELECT c.*, ct.name AS contact_name FROM calls c "
+            "LEFT JOIN contacts ct ON ct.id = c.contact_id WHERE c.id=?", (call_id,))
+        if not rows:
+            return None
+        d = dict(rows[0])
+        d["turns"] = [dict(r) for r in self._query(
+            "SELECT speaker, text, created_at FROM call_turns WHERE call_id=? ORDER BY id",
+            (call_id,))]
+        return d
+
+    def add_dnc(self, phone: str, reason: str = "") -> None:
+        self._write("INSERT OR REPLACE INTO dnc (phone, reason, created_at) VALUES (?,?,?)",
+                    (self.normalize_phone(phone), reason, time.time()))
+
+    def is_dnc(self, phone: str) -> bool:
+        norm = self.normalize_phone(phone)
+        return bool(norm) and bool(self._query("SELECT 1 FROM dnc WHERE phone=?", (norm,)))
 
     def close(self) -> None:
         with self._lock:

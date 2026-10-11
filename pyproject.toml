@@ -47,6 +47,11 @@ voice = [
     "sounddevice>=0.4",
     "pyttsx3>=2.90",
 ]
+# Phone calling agent (server side: no microphone/speaker needed)
+voip = [
+    "faster-whisper>=1.0",
+    "audioop-lts>=0.2; python_version >= '3.13'",
+]
 # Plugins / MCP
 mcp = [
     "mcp>=1.0",
@@ -71,7 +76,7 @@ dev = [
     "mypy>=1.10",
 ]
 all = [
-    "xplogent[providers,control,memory,api,voice,mcp,scheduler,rag,security,dev]",
+    "xplogent[providers,control,memory,api,voice,voip,mcp,scheduler,rag,security,dev]",
 ]
 
 [project.scripts]
