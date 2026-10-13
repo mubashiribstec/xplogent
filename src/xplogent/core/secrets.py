@@ -45,28 +45,56 @@ def _key_file() -> Path:
     return data_dir() / "secret.key"
 
 
-def _load_or_create_key() -> bytes:
-    """Return the Fernet key, preferring the OS keyring, else a 0600 key file."""
-    from cryptography.fernet import Fernet
-
-    # 1) OS keyring (best — the key never touches disk in our control).
+def _keyring_key() -> bytes | None:
+    """The key stored in the OS keyring, or None (no backend / locked / not set)."""
     try:
         import keyring
 
         existing = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USER)
-        if existing:
-            return existing.encode("ascii")
-        key = Fernet.generate_key()
-        keyring.set_password(_KEYRING_SERVICE, _KEYRING_USER, key.decode("ascii"))
-        return key
-    except Exception:  # noqa: BLE001 - no keyring backend; fall through to a key file
-        pass
+        return existing.encode("ascii") if existing else None
+    except Exception:  # noqa: BLE001 - no usable keyring backend
+        return None
 
-    # 2) 0600 key file in the data dir.
+
+def _candidate_keys() -> list[bytes]:
+    """Every key that might have encrypted the store, without creating any.
+
+    Order matters only for speed: whichever key actually decrypts the store wins, so a
+    keyring that appears (or gets locked) after the key file was used can never make us
+    "lose" the secrets by silently switching keys.
+    """
+    keys: list[bytes] = []
     path = _key_file()
     if path.exists():
-        return path.read_bytes().strip()
+        keys.append(path.read_bytes().strip())
+    kr = _keyring_key()
+    if kr and kr not in keys:
+        keys.append(kr)
+    return keys
+
+
+def _load_or_create_key() -> bytes:
+    """Return the Fernet key to use, creating one only when none exists anywhere.
+
+    An existing key file always wins (stable across keyring changes); otherwise an
+    existing keyring key; otherwise a new key, stored in the keyring if possible, else in
+    a 0600 key file in the data dir.
+    """
+    from cryptography.fernet import Fernet
+
+    existing = _candidate_keys()
+    if existing:
+        return existing[0]
     key = Fernet.generate_key()
+    try:
+        import keyring
+
+        keyring.set_password(_KEYRING_SERVICE, _KEYRING_USER, key.decode("ascii"))
+        if keyring.get_password(_KEYRING_SERVICE, _KEYRING_USER) == key.decode("ascii"):
+            return key
+    except Exception:  # noqa: BLE001 - no keyring backend; fall through to a key file
+        pass
+    path = _key_file()
     path.write_bytes(key)
     try:
         path.chmod(0o600)
@@ -75,43 +103,60 @@ def _load_or_create_key() -> bytes:
     return key
 
 
-def _fernet():
+def _decrypt_store() -> tuple[dict[str, str], bytes | None, bool]:
+    """Return ``(secrets, key_used, ok)``. ``ok`` is False when a store exists but no
+    known key can decrypt it — callers must then refuse to overwrite it."""
     from cryptography.fernet import Fernet
 
-    return Fernet(_load_or_create_key())
+    path = _store_path()
+    if not path.exists():
+        return {}, None, True
+    blob = path.read_bytes()
+    for key in _candidate_keys():
+        try:
+            raw = Fernet(key).decrypt(blob)
+            data = json.loads(raw.decode("utf-8"))
+            return {str(k): str(v) for k, v in data.items()}, key, True
+        except BaseException:  # noqa: B036,S112 - wrong key; try the next one
+            continue
+    return {}, None, False
 
 
 def read_secrets() -> dict[str, str]:
     """Decrypt and return the stored secrets (``{}`` if none / unavailable)."""
     if not available():
         return {}
-    path = _store_path()
-    if not path.exists():
-        return {}
     try:
-        raw = _fernet().decrypt(path.read_bytes())
-        data = json.loads(raw.decode("utf-8"))
-        return {str(k): str(v) for k, v in data.items()}
-    except BaseException:  # noqa: B036 - corrupt/rotated key or broken crypto → empty
+        data, _key, _ok = _decrypt_store()
+        return data
+    except BaseException:  # noqa: B036 - broken crypto → behave as empty
         return {}
 
 
 def write_secrets(updates: dict[str, str]) -> bool:
-    """Merge ``updates`` into the encrypted store. Returns False if unavailable."""
+    """Merge ``updates`` into the encrypted store. Returns False if unavailable, or if an
+    existing store can't be decrypted (it is never overwritten in that case)."""
     if not available():
         return False
     try:
-        current = read_secrets()
+        from cryptography.fernet import Fernet
+
+        current, key, ok = _decrypt_store()
+        if not ok:
+            return False  # e.g. keyring locked: keep the old store intact
+        key = key or _load_or_create_key()
         for k, v in updates.items():
             if v:
                 current[k] = v
-        blob = _fernet().encrypt(json.dumps(current).encode("utf-8"))
+        blob = Fernet(key).encrypt(json.dumps(current).encode("utf-8"))
         path = _store_path()
-        path.write_bytes(blob)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(blob)
         try:
-            path.chmod(0o600)
+            tmp.chmod(0o600)
         except OSError:
             pass
+        os.replace(tmp, path)  # atomic: a crash can't leave a half-written store
     except BaseException:  # noqa: B036 - never let a crypto failure lose the caller's keys
         return False
     # Reflect immediately in-process so the running server sees new keys.

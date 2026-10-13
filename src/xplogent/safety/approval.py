@@ -15,6 +15,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from xplogent.safety.commands import is_catastrophic
 from xplogent.safety.profile import PATH_WRITE_TOOLS, PermissionProfile
 
 
@@ -67,6 +68,24 @@ _DEFAULT_DENY = [
 ]
 
 
+def _merge_patterns(user: list[str] | None, base: list[str] | None = None) -> list[str]:
+    """User deny patterns *extend* the built-ins; they never replace them."""
+    out = list(base if base is not None else _DEFAULT_DENY)
+    for p in user or []:
+        if p not in out:
+            out.append(p)
+    return out
+
+
+def auto_approve_up_to_high() -> ApprovalCallback:
+    """Approver for unattended runs (scheduler, triggers): everything but CRITICAL."""
+
+    async def approve(req: ApprovalRequest) -> bool:
+        return req.risk != RiskLevel.CRITICAL
+
+    return approve
+
+
 @dataclass
 class SafetyManager:
     policy: dict[str, str] = field(
@@ -87,7 +106,7 @@ class SafetyManager:
     def from_config(cls, safety_cfg: dict[str, Any]) -> SafetyManager:
         return cls(
             policy=safety_cfg.get("policy") or cls().policy,
-            deny_patterns=safety_cfg.get("deny_patterns") or list(_DEFAULT_DENY),
+            deny_patterns=_merge_patterns(safety_cfg.get("deny_patterns")),
             allowed_write_roots=safety_cfg.get("allowed_write_roots") or [],
         )
 
@@ -95,14 +114,25 @@ class SafetyManager:
         """Return a SafetyManager scoped to a per-agent permission profile."""
         return SafetyManager(
             policy=profile.policy or self.policy,
-            deny_patterns=safety_cfg.get("deny_patterns") or list(self.deny_patterns),
+            deny_patterns=_merge_patterns(safety_cfg.get("deny_patterns"), self.deny_patterns),
             allowed_write_roots=profile.allowed_paths or self.allowed_write_roots,
             profile=profile,
         )
 
     def _matches_deny(self, arguments: dict[str, Any]) -> bool:
         blob = " ".join(str(v) for v in arguments.values())
-        return any(re.search(p, blob, re.IGNORECASE) for p in self.deny_patterns)
+        # Built-in detection of system/home wipes in any spelling (rm -fr /, rm -r -f ~,
+        # rm --recursive --force /, shutil.rmtree('/'), mkfs, dd of=/dev/sda, fork bomb...)
+        # plus the user's own regexes.
+        if is_catastrophic(blob):
+            return True
+        for p in self.deny_patterns:
+            try:
+                if re.search(p, blob, re.IGNORECASE):
+                    return True
+            except re.error:
+                continue  # a malformed user pattern must not disable the rest
+        return False
 
     def _path_violation(self, tool_name: str, arguments: dict[str, Any]) -> str | None:
         """Return a reason string if a write escapes allowed_write_roots."""

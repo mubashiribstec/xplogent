@@ -92,15 +92,18 @@ class WebFetchTool(Tool):
     risk = RiskLevel.LOW
 
     async def run(self, url: str, max_chars: int = 8000) -> ToolResult:
+        from xplogent.core.netguard import safe_get
+
         try:
-            async with httpx.AsyncClient(timeout=30, headers={"User-Agent": _UA},
-                                         follow_redirects=True) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
+            # Public addresses only (no localhost / LAN / cloud metadata), every redirect
+            # re-checked, body capped — a prompt-injected URL can't reach internal services.
+            final, html = await safe_get(url, headers={"User-Agent": _UA})
+        except ValueError as exc:
+            return ToolResult.failure(f"Fetch refused: {exc}")
         except Exception as exc:  # noqa: BLE001
             return ToolResult.failure(f"Fetch failed: {exc}")
-        text = _strip_html(resp.text)[:max_chars]
-        return ToolResult.success(text, url=url)
+        text = _strip_html(html)[: max(1, min(int(max_chars or 8000), 100_000))]
+        return ToolResult.success(text, url=final)
 
 
 def web_tools() -> list[Tool]:

@@ -149,7 +149,21 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 # ─── dotenv + writable config (used by the setup wizard and the GUI) ──────────
-_SECRET_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_API_KEY"]
+_SECRET_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_API_KEY",
+                "GEMINI_API_KEY", "TELNYX_API_KEY"]
+# Non-secret settings the dashboard may also write to .env. Anything else is refused so
+# an API call can't plant e.g. LD_PRELOAD / PYTHONPATH into the process environment.
+_ENV_SETTINGS = ["XPLOGENT_MODEL", "XPLOGENT_REFLECTION_MODEL", "XPLOGENT_EMBEDDING_MODEL",
+                 "OLLAMA_HOST", "XPLOGENT_LOG_LEVEL"]
+
+
+def allowed_env_key(key: str) -> bool:
+    return key in _SECRET_KEYS or key in _ENV_SETTINGS
+
+
+def valid_env_value(value: str) -> bool:
+    """Values are written one-per-line to .env: no line breaks or NULs."""
+    return not any(c in str(value) for c in ("\n", "\r", "\x00"))
 
 
 def env_path() -> Path:
@@ -225,6 +239,9 @@ def save_env(updates: dict[str, str]) -> None:
     everything else is merged into ``~/.xplogent/.env``."""
     from xplogent.core import secrets as _sec
 
+    bad = [k for k, v in updates.items() if not allowed_env_key(k) or not valid_env_value(v)]
+    if bad:
+        raise ValueError(f"refusing to save unknown key or invalid value: {', '.join(bad)}")
     secret_updates = {k: v for k, v in updates.items() if k in _SECRET_KEYS and v}
     plain_updates = {k: v for k, v in updates.items() if k not in _SECRET_KEYS}
 

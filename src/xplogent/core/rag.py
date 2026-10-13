@@ -8,6 +8,7 @@ cite sources. Reuses the same SQLite ``Store`` and ``Embedder`` as memory.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -58,12 +59,37 @@ def chunk_text(text: str, size: int = 3200, overlap: int = 400) -> list[str]:
     return out or ([text.strip()] if text.strip() else [])
 
 
+# Never ingest credentials into the searchable knowledge base (they could then be read
+# back through search/export, or quoted to a caller by the phone agent).
+_SECRET_DIRS = {".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".password-store"}
+# Also skipped when walking a folder (noise, not secrets).
+_SENSITIVE_DIRS = _SECRET_DIRS | {".git", "node_modules", ".venv", "venv", "__pycache__"}
+_SENSITIVE_NAMES = {".env", ".netrc", ".pgpass", ".npmrc", ".pypirc", "secrets.enc",
+                    "secret.key", "credentials", "credentials.json", "id_rsa", "id_dsa",
+                    "id_ecdsa", "id_ed25519", "known_hosts", "authorized_keys"}
+_SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".kdbx", ".keystore", ".jks"}
+
+
+def is_sensitive(path: Path) -> bool:
+    name = path.name.lower()
+    if name in _SENSITIVE_NAMES or name.startswith((".env.", "id_rsa", "id_ed25519")):
+        return True
+    if path.suffix.lower() in _SENSITIVE_SUFFIXES:
+        return True
+    return any(part.lower() in _SENSITIVE_DIRS for part in path.parts[:-1])
+
+
 def _iter_files(path: Path) -> list[Path]:
     if path.is_file():
-        return [path]
-    files = [p for p in path.rglob("*")
-             if p.is_file() and (p.suffix.lower() in _TEXT_EXT or p.suffix.lower() == ".pdf")]
-    return files[:500]  # safety bound
+        return [] if is_sensitive(path) else [path]
+    files: list[Path] = []
+    for p in path.rglob("*"):
+        if p.is_file() and (p.suffix.lower() in _TEXT_EXT or p.suffix.lower() == ".pdf") \
+                and not is_sensitive(p.relative_to(path)):
+            files.append(p)
+            if len(files) >= 500:  # safety bound
+                break
+    return files
 
 
 async def ingest_path(store, embedder: Embedder, path: str) -> dict[str, Any]:
@@ -71,10 +97,14 @@ async def ingest_path(store, embedder: Embedder, path: str) -> dict[str, Any]:
     root = Path(path).expanduser()
     if not root.exists():
         return {"ok": False, "error": f"no such path: {root}"}
+    if (root.is_file() and is_sensitive(root)) or any(
+            part.lower() in _SECRET_DIRS for part in root.resolve().parts):
+        return {"ok": False, "error": f"refusing to ingest credentials/secret files: {root}"}
     ingested, skipped, chunks_total = [], 0, 0
-    for fp in _iter_files(root):
+    files = await asyncio.to_thread(_iter_files, root)   # big folders: don't block the loop
+    for fp in files:
         try:
-            text = read_text(fp)
+            text = await asyncio.to_thread(read_text, fp)
         except Exception as exc:  # noqa: BLE001 - one bad file shouldn't stop the rest
             _log.warning("skip %s: %s", fp, exc)
             skipped += 1

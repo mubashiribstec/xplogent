@@ -6,14 +6,8 @@ from typing import Any
 
 from xplogent.core.backends import TerminalBackend, resolve_backend
 from xplogent.safety.approval import RiskLevel
+from xplogent.safety.commands import classify_command
 from xplogent.tools.base import Tool, ToolResult
-
-_DESTRUCTIVE = (
-    # POSIX
-    "rm ", "rmdir", "mv ", "dd ", "mkfs", "shutdown", "reboot", "kill", ">", "sudo",
-    # Windows
-    "del ", "erase ", "format ", "rd ", "rmdir ", "diskpart", "rundll32", "reg delete",
-)
 
 
 class ShellTool(Tool):
@@ -37,19 +31,9 @@ class ShellTool(Tool):
         self._backend = backend
 
     def risk_for(self, arguments: dict[str, Any]) -> RiskLevel:
-        cmd = str(arguments.get("command", "")).lower()
-        if any(tok in cmd for tok in _DESTRUCTIVE):
-            return RiskLevel.HIGH
-        # Read-only-ish commands are lower risk.
-        first = cmd.strip().split(" ", 1)[0] if cmd.strip() else ""
-        if first in {
-            # POSIX read-only-ish
-            "ls", "cat", "pwd", "echo", "whoami", "date", "df", "ps", "grep", "find", "which",
-            # Windows read-only-ish
-            "dir", "type", "where", "cd", "hostname", "ver", "tasklist",
-        }:
-            return RiskLevel.LOW
-        return RiskLevel.MEDIUM
+        # Only a single, simple, read-only command auto-runs; pipes/chains/redirects,
+        # interpreters, network and destructive programs need approval.
+        return RiskLevel(classify_command(str(arguments.get("command", ""))))
 
     async def run(self, command: str, timeout: int = 120, cwd: str | None = None) -> ToolResult:
         backend = self._backend or resolve_backend()

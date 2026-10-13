@@ -59,7 +59,7 @@ async def _emit(bus: EventBus | None, node_id: str, status: str, output: str = "
 
 
 async def _run_node(node: dict, outputs: dict[str, str], preds: list[str],
-                    config: Config, bus: EventBus | None) -> str:
+                    config: Config, bus: EventBus | None, approve=None) -> str:
     ntype = node.get("type")
     cfg = node.get("config", {}) or {}
     if ntype == "input":
@@ -68,7 +68,8 @@ async def _run_node(node: dict, outputs: dict[str, str], preds: list[str],
         from xplogent.runtime import build_runtime
 
         prompt = _interp(str(cfg.get("prompt", "")), outputs, preds)
-        rt = build_runtime(config, with_memory=False, model=cfg.get("model") or None)
+        rt = build_runtime(config, with_memory=False, model=cfg.get("model") or None,
+                           approve=approve)
         try:
             return await rt.agent.run(prompt)
         finally:
@@ -82,14 +83,25 @@ async def _run_node(node: dict, outputs: dict[str, str], preds: list[str],
             raise ValueError(f"unknown tool '{cfg.get('tool')}'")
         args = {k: (_interp(v, outputs, preds) if isinstance(v, str) else v)
                 for k, v in (cfg.get("args") or {}).items()}
+        # Same gate as an agent's tool call: upstream outputs flow into these arguments
+        # (e.g. a shell command built from an agent's text), so they must not skip it.
+        from xplogent.safety.approval import SafetyManager
+
+        decision = await SafetyManager.from_config(config.safety).evaluate(tool, args, approve)
+        if not decision.allowed:
+            raise PermissionError(f"tool '{tool.name}' blocked ({decision.risk.value}): "
+                                  f"{decision.reason or 'needs approval'}")
         result = await tool.run(**args)
         return result.as_text()
     raise ValueError(f"unknown node type '{ntype}'")
 
 
 async def run_workflow(graph: dict, config: Config | None = None, *,
-                       bus: EventBus | None = None) -> dict:
-    """Execute a workflow DAG and return per-node results."""
+                       bus: EventBus | None = None, approve=None) -> dict:
+    """Execute a workflow DAG and return per-node results.
+
+    ``approve`` answers confirm-tier tool calls; without one they are blocked (fail safe).
+    """
     config = config or load_config()
     nodes = {n["id"]: n for n in graph.get("nodes", []) if n.get("id")}
     edges = graph.get("edges", [])
@@ -111,7 +123,7 @@ async def run_workflow(graph: dict, config: Config | None = None, *,
         node = nodes[nid]
         await _emit(bus, nid, "running")
         try:
-            out = await _run_node(node, outputs, preds[nid], config, bus)
+            out = await _run_node(node, outputs, preds[nid], config, bus, approve)
             outputs[nid] = out
             results.append({"node_id": nid, "name": node.get("name", nid),
                             "status": "done", "output": out})

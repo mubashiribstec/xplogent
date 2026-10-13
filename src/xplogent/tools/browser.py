@@ -68,7 +68,10 @@ class BrowserTool(Tool):
     risk = RiskLevel.MEDIUM
 
     def risk_for(self, arguments: dict[str, Any]) -> RiskLevel:
-        return RiskLevel.LOW if arguments.get("action") in {"goto", "read", "screenshot"} else RiskLevel.MEDIUM
+        action = arguments.get("action")
+        if action == "screenshot" and arguments.get("path"):
+            return RiskLevel.MEDIUM  # caller-chosen path can overwrite any file
+        return RiskLevel.LOW if action in {"goto", "read", "screenshot"} else RiskLevel.MEDIUM
 
     async def run(self, action: str, url: str | None = None, selector: str | None = None,
                   text: str | None = None, path: str | None = None) -> ToolResult:

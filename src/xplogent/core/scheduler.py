@@ -152,13 +152,8 @@ def parse_schedule(text: str, tz: str = "") -> tuple[str, float]:
     return spec, nxt
 
 
-def _auto_approve():
-    from xplogent.safety.approval import ApprovalRequest, RiskLevel
-
-    async def approve(req: ApprovalRequest) -> bool:
-        return req.risk != RiskLevel.CRITICAL
-
-    return approve
+# Unattended runs approve everything except CRITICAL (shared implementation).
+from xplogent.safety.approval import auto_approve_up_to_high as _auto_approve  # noqa: E402
 
 
 class Scheduler:

@@ -16,7 +16,7 @@ from typing import Any
 NETWORK_TOOLS = {"web_search", "web_fetch", "browser"}
 
 # Filesystem-writing tools whose path arguments are checked against allowed_paths.
-PATH_WRITE_TOOLS = {"write_file", "edit_file"}
+PATH_WRITE_TOOLS = {"write_file", "edit_file", "screenshot", "browser"}
 
 
 @dataclass

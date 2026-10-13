@@ -59,14 +59,26 @@ def create_app():
                 await sched.stop()
             await watcher.stop()
 
-    import hmac
 
     from fastapi.responses import JSONResponse
 
+    from xplogent.interfaces.api.security import (
+        configured_hosts,
+        configured_origins,
+        host_allowed,
+        origin_allowed,
+        token_matches,
+    )
+
     app = FastAPI(title="Xplogent Agent API", version="0.1.0", lifespan=lifespan)
+    # No wildcard CORS: the dashboard is served same-origin. Only explicitly configured
+    # origins (server.allowed_origins / XPLOGENT_ALLOWED_ORIGINS, plus the Vite dev server)
+    # may make cross-origin calls.
+    _server_cfg = load_config().raw.get("server", {}) or {}
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+        allow_origins=sorted(configured_origins(_server_cfg)),
+        allow_methods=["*"], allow_headers=["*"], allow_credentials=True,
     )
 
     # ── Optional access-token gate ───────────────────────────────────────────
@@ -101,11 +113,28 @@ def create_app():
             return auth[7:].strip()
         return request.cookies.get("xpl_token", "") or request.query_params.get("token", "")
 
+    def _browser_check(headers, path: str, token: str) -> str:
+        """Return an error string if a request must be refused for origin/host reasons."""
+        cfg_server = load_config().raw.get("server", {}) or {}
+        if not host_allowed(headers.get("host"), bool(token), configured_hosts(cfg_server)):
+            return "host not allowed"
+        if not origin_allowed(headers.get("origin"), headers.get("host"), path,
+                              configured_origins(cfg_server)):
+            return "cross-origin request refused"
+        return ""
+
     @app.middleware("http")
     async def _auth_mw(request, call_next):
         token = _auth_token()
-        if token and not _is_public(request.url.path, request.method):
-            if not hmac.compare_digest(_request_token(request), token):
+        path = request.url.path
+        # Carrier/webhook callbacks come from servers (no browser Origin) and authenticate
+        # with their own path secret, so they skip the browser checks too.
+        if not path.startswith(("/telephony/webhook/", "/triggers/webhook/")):
+            problem = _browser_check(request.headers, path, token)
+            if problem:
+                return JSONResponse({"error": problem}, status_code=403)
+        if token and not _is_public(path, request.method):
+            if not token_matches(_request_token(request), token):
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
         return await call_next(request)
 
@@ -132,7 +161,7 @@ def create_app():
         specs: list[AgentSpecModel] | None = None
         max_concurrent: int | None = None
         mode: str = "auto"
-        auto_approve: bool = True
+        auto_approve: bool = False  # explicit opt-in (the dashboard sends it)
 
     class ConfigPatch(BaseModel):
         updates: dict = {}
@@ -165,6 +194,10 @@ def create_app():
 
     # Live multi-agent runs, keyed by run_id, for monitoring + control.
     active_runs: dict[str, dict] = {}
+    # Background tasks we fire and forget (kept referenced so they aren't GC'd).
+    _bg_tasks: set[asyncio.Task] = set()
+    _webhook_running: set[int] = set()
+    _WEBHOOK_MAX_BYTES = 256_000
 
     @app.get("/health")
     async def health() -> dict:
@@ -178,7 +211,7 @@ def create_app():
         token = _auth_token()
         if not token:
             return {"required": False, "ok": True}
-        ok = hmac.compare_digest(_request_token(request), token)
+        ok = token_matches(_request_token(request), token)
         return {"required": True, "ok": ok}
 
     @app.get("/status")
@@ -379,11 +412,15 @@ def create_app():
 
     def _ws_authorized(websocket: WebSocket) -> bool:
         token = _auth_token()
+        # Every browser WebSocket handshake carries Origin: refuse other sites, so a page
+        # the user visits can't open /ws and approve its own shell commands.
+        if _browser_check(websocket.headers, websocket.url.path, token):
+            return False
         if not token:
             return True
         provided = (websocket.query_params.get("token", "")
                     or websocket.cookies.get("xpl_token", ""))
-        return hmac.compare_digest(provided, token)
+        return token_matches(provided, token)
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
@@ -674,7 +711,7 @@ def create_app():
         from xplogent.voip.service import get_service
 
         expected = str((load_config().voip or {}).get("webhook_secret", ""))
-        if not expected or not hmac.compare_digest(secret, expected):
+        if not expected or not token_matches(secret, expected):
             return JSONResponse({"error": "forbidden"}, status_code=403)
         try:
             payload = await request.json()
@@ -930,7 +967,10 @@ def create_app():
 
     @app.put("/secrets")
     async def put_secrets(body: SecretsPatch) -> dict:
-        save_env(body.keys)
+        try:
+            save_env(body.keys)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         _audit_event("secret_change", target=",".join(body.keys.keys()), risk="high")
         return {"ok": True, "secrets": secret_status()}
 
@@ -1228,10 +1268,12 @@ def create_app():
     @app.post("/triggers")
     async def create_trigger(body: dict) -> dict:
         ttype = str(body.get("type", "webhook"))
-        # Webhook triggers get a random secret token as their spec.
         spec = str(body.get("spec", ""))
-        if ttype == "webhook" and not spec:
-            spec = uuid.uuid4().hex
+        if ttype == "webhook":
+            # Always a random, unguessable secret: the URL is the only credential.
+            import secrets as _pysecrets
+
+            spec = _pysecrets.token_hex(24)
         store = Store(load_config().db_path)
         tid = store.add_trigger(str(body.get("name", "trigger")), ttype, spec,
                                 str(body.get("prompt", "")), str(body.get("mode", "agent")))
@@ -1260,16 +1302,31 @@ def create_app():
         store = Store(cfg.db_path)
         trig = store.get_trigger_by_token(token)
         store.close()
-        if not trig or not trig.get("enabled"):
+        if not trig or not trig.get("enabled") or not token_matches(token, str(trig.get("spec", ""))):
             return JSONResponse({"error": "unknown or disabled webhook"}, status_code=404)
+        if int(request.headers.get("content-length") or 0) > _WEBHOOK_MAX_BYTES:
+            return JSONResponse({"error": "payload too large"}, status_code=413)
+        if trig["id"] in _webhook_running:
+            # One run per trigger at a time: a flood of POSTs can't start (and pay for) many.
+            return JSONResponse({"error": "this trigger is already running"}, status_code=429)
         try:
-            body = (await request.body()).decode("utf-8", "replace")
+            body = (await request.body())[:_WEBHOOK_MAX_BYTES].decode("utf-8", "replace")
         except Exception:  # noqa: BLE001
             body = ""
         from xplogent.core.triggers import run_trigger
 
-        # Fire-and-forget so the caller gets a fast 202.
-        asyncio.create_task(run_trigger(trig, context=body, config=cfg))
+        async def _go() -> None:
+            _webhook_running.add(trig["id"])
+            try:
+                await run_trigger(trig, context=body, config=cfg)
+            finally:
+                _webhook_running.discard(trig["id"])
+
+        # Fire-and-forget so the caller gets a fast reply; keep a reference so the task
+        # can't be garbage-collected mid-run.
+        task = asyncio.create_task(_go())
+        _bg_tasks.add(task)
+        task.add_done_callback(_bg_tasks.discard)
         return {"ok": True, "fired": trig["name"]}
 
     # ── Evals ────────────────────────────────────────────────────────────────
@@ -1527,8 +1584,18 @@ def run_server(host: str | None = None, port: int | None = None,
 
             token = _pysecrets.token_urlsafe(32)
             save_user_config({"server": {"auth_token": token}})
-            print("\n  Binding to a non-local host — access token enabled.")
-            print(f"  Your dashboard token:  {token}")
+            import sys as _sys
+
+            from xplogent.core.config import xplogent_home as _home
+
+            print("\n  Access token enabled (exposed or behind a proxy).")
+            if _sys.stdout.isatty():
+                print(f"  Your dashboard token:  {token}")
+            else:
+                # Not a terminal (service / `xplogent start` log file): don't write the
+                # secret into a log; point at where it's stored instead.
+                print(f"  Token saved in {_home() / 'config.yaml'} (server.auth_token); "
+                      "run `xplogent token` to rotate.")
             print("  Paste it when the dashboard prompts (Settings → re-generate to rotate).\n")
 
     if open_browser:

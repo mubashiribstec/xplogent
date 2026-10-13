@@ -10,6 +10,7 @@ embedding-model that produced them) as portable JSON between instances.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import tarfile
 import tempfile
@@ -35,9 +36,18 @@ def _snapshot_db(db_path: Path, out: Path) -> None:
         src.close()
 
 
+_KEEP_BACKUPS = 10
+_SECRET_FILES = ("secrets.enc", "secret.key")
+
+
 def create_backup(dest: Path | str | None = None, *, include_secrets: bool = False) -> dict[str, Any]:
-    """Write a .tar.gz of DB + skills + config. Returns ``{ok, path, size}``."""
+    """Write a .tar.gz of DB + skills + config. Returns ``{ok, path, size}``.
+
+    With ``include_secrets`` it also carries the encrypted key store *and* its key file
+    (useless apart) plus any plaintext ``.env``, so a restore really brings the API keys back.
+    """
     home = xplogent_home()
+    auto = dest is None
     if dest is None:
         backups = home / "backups"
         backups.mkdir(parents=True, exist_ok=True)
@@ -45,7 +55,8 @@ def create_backup(dest: Path | str | None = None, *, include_secrets: bool = Fal
     dest = Path(dest)
 
     # Memory (DB) + skills live in the install data dir; config/.env in home.
-    db = data_dir() / "xplogent.db"
+    data = data_dir()
+    db = data / "xplogent.db"
     with tempfile.TemporaryDirectory() as tmp:
         tmp_db = Path(tmp) / "xplogent.db"
         if db.exists():
@@ -53,40 +64,121 @@ def create_backup(dest: Path | str | None = None, *, include_secrets: bool = Fal
         with tarfile.open(dest, "w:gz") as tar:
             if tmp_db.exists():
                 tar.add(tmp_db, arcname="xplogent.db")
-            skills = data_dir() / "skills"
+            skills = data / "skills"
             if skills.is_dir():
                 tar.add(skills, arcname="skills")
             cfg = home / "config.yaml"
             if cfg.exists():
                 tar.add(cfg, arcname="config.yaml")
-            if include_secrets and env_path().exists():
-                tar.add(env_path(), arcname=".env")
+            if include_secrets:
+                if env_path().exists():
+                    tar.add(env_path(), arcname=".env")
+                for name in _SECRET_FILES:
+                    if (data / name).exists():
+                        tar.add(data / name, arcname=name)
+    try:
+        dest.chmod(0o600)  # may contain secrets / the whole memory DB
+    except OSError:
+        pass
+    if auto:
+        _prune(dest.parent)
     return {"ok": True, "path": str(dest), "size": dest.stat().st_size}
 
 
+def _prune(folder: Path, keep: int = _KEEP_BACKUPS) -> None:
+    olds = sorted(folder.glob("xplogent-backup-*.tar.gz"), key=lambda p: p.stat().st_mtime)
+    for old in olds[:-keep]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def _restore_target(name: str, data: Path, home: Path) -> Path | None:
+    """Where an archive member may go, or None if it isn't something a backup contains."""
+    if name == "xplogent.db" or name in _SECRET_FILES or name == "skills" or name.startswith("skills/"):
+        return data
+    if name in ("config.yaml", ".env"):
+        return home
+    return None
+
+
 def restore_backup(path: Path | str) -> dict[str, Any]:
-    """Restore a backup: DB + skills → the data dir, config/.env → home."""
+    """Restore a backup: DB + skills (+ secrets) → the data dir, config/.env → home.
+
+    Only regular files and directories are accepted. Links, devices and anything whose
+    path would leave its destination are skipped, so a crafted archive can't overwrite
+    files elsewhere (tar-slip via ``..``, absolute paths, symlinks or hardlinks).
+    """
     path = Path(path)
     if not path.exists():
         return {"ok": False, "error": f"no such file: {path}"}
     home = xplogent_home()
     data = data_dir()
+    restored: list[str] = []
+    skipped: list[str] = []
     with tarfile.open(path, "r:gz") as tar:
         for m in tar.getmembers():
             name = m.name.replace("\\", "/")
-            if name == "xplogent.db" or name.startswith("skills/") or name == "skills":
-                _extract_one(tar, m, data)
-            elif name in ("config.yaml", ".env"):
-                _extract_one(tar, m, home)
-    return {"ok": True, "restored_to": str(data)}
+            while name.startswith("./"):
+                name = name[2:]
+            name = name.rstrip("/")
+            base = _restore_target(name, data, home)
+            if base is None or not (m.isfile() or m.isdir()):
+                skipped.append(m.name)
+                continue
+            if _extract_safe(tar, m, name, base):
+                restored.append(name)
+            else:
+                skipped.append(m.name)
+    if skipped:
+        _log.warning("restore skipped %d unexpected/unsafe member(s): %s", len(skipped), skipped[:10])
+    return {"ok": True, "restored_to": str(data), "restored": len(restored), "skipped": skipped}
 
 
-def _extract_one(tar: tarfile.TarFile, member: tarfile.TarInfo, base: Path) -> None:
-    target = (base / member.name).resolve()
-    if base.resolve() not in target.parents and target != base.resolve():
-        _log.warning("skipping unsafe path in backup: %s", member.name)
-        return
-    tar.extract(member, base)  # noqa: S202 - path validated above
+def _inside(base: Path, target: Path) -> bool:
+    base = base.resolve()
+    return target == base or base in target.parents
+
+
+def _extract_safe(tar: tarfile.TarFile, member: tarfile.TarInfo, name: str, base: Path) -> bool:
+    if name.startswith("/") or ".." in Path(name).parts:
+        return False
+    target = base / name
+    # Resolve the *parent* (which must already be safe) and never follow a link at the
+    # final component: an existing symlink there is removed, not written through.
+    if not _inside(base, target.parent.resolve() / target.name):
+        return False
+    if member.isdir():
+        if target.is_symlink():
+            target.unlink()
+        target.mkdir(parents=True, exist_ok=True)
+        return _inside(base, target.resolve())
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not _inside(base, target.parent.resolve()):
+        return False
+    src = tar.extractfile(member)
+    if src is None:
+        return False
+    tmp = target.with_name(target.name + ".restore-tmp")
+    with src, open(tmp, "wb") as out:
+        while chunk := src.read(1 << 20):
+            out.write(chunk)
+    if target.is_symlink():
+        target.unlink()
+    os.replace(tmp, target)
+    if name == "xplogent.db":
+        # A stale write-ahead log from the old DB would be replayed onto the restored one.
+        for suffix in ("-wal", "-shm"):
+            sidecar = target.with_name(target.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
+    if name in _SECRET_FILES or name == ".env":
+        try:
+            target.chmod(0o600)
+        except OSError:
+            pass
+    return True
 
 
 # ── knowledge (facts + skills) export / import ───────────────────────────────

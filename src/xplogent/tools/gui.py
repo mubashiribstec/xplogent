@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Any
 
 from xplogent.core.config import xplogent_home
 from xplogent.core.platform import has_display as _has_display
@@ -27,6 +28,10 @@ class ScreenshotTool(Tool):
         "properties": {"path": {"type": "string", "description": "Optional output path."}},
     }
     risk = RiskLevel.LOW
+
+    def risk_for(self, arguments: dict[str, Any]) -> RiskLevel:
+        # Writing to a caller-chosen path can overwrite any file (e.g. ~/.bashrc).
+        return RiskLevel.MEDIUM if arguments.get("path") else RiskLevel.LOW
 
     async def run(self, path: str | None = None) -> ToolResult:
         if not _has_display():

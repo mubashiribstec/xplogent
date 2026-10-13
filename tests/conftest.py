@@ -25,6 +25,9 @@ def _isolate_data(tmp_path_factory, monkeypatch):
     home = tmp_path_factory.mktemp("xph")
     monkeypatch.setenv("XPLOGENT_HOME", str(home))
     monkeypatch.setattr("xplogent.core.config._migrated", True, raising=False)
+    # FastAPI's TestClient sends `Host: testserver`; the API's DNS-rebinding guard only
+    # accepts localhost names unless told otherwise.
+    monkeypatch.setenv("XPLOGENT_ALLOWED_HOSTS", "testserver")
 
 
 class ScriptedProvider(Provider):

@@ -41,17 +41,27 @@ def list_bundled() -> list[dict[str, Any]]:
     return out
 
 
+_MAX_SKILL_BYTES = 256_000
+
+
+def _read_md(path: Path) -> str:
+    """Only Markdown skill files, size-capped — so "install a skill from ~/.ssh/id_rsa"
+    can't pull arbitrary local files into the knowledge base (and out via export)."""
+    if path.suffix.lower() != ".md":
+        raise ValueError(f"skills must be .md files (got {path.name})")
+    if path.stat().st_size > _MAX_SKILL_BYTES:
+        raise ValueError(f"{path.name} is larger than {_MAX_SKILL_BYTES // 1000} KB")
+    return path.read_text(encoding="utf-8")
+
+
 def _collect(src: str) -> list[str]:
     """Return SKILL.md texts for a URL, file, directory, or a bundled pack name."""
-    if src.startswith(("http://", "https://")):
-        import httpx
-        return [httpx.get(src, timeout=30, follow_redirects=True).text]
     p = Path(src).expanduser()
     if p.is_file():
-        return [p.read_text(encoding="utf-8")]
+        return [_read_md(p)]
     if p.is_dir():
         files = sorted(p.glob("*/SKILL.md")) + sorted(p.glob("*.md"))
-        return [f.read_text(encoding="utf-8") for f in files]
+        return [_read_md(f) for f in files]
     # a bundled pack name
     lib = library_dir()
     if lib:
@@ -72,7 +82,13 @@ async def install_text(skill_md: str, memory: MemoryManager) -> dict[str, Any]:
 
 async def install_pack(src: str, memory: MemoryManager) -> dict[str, Any]:
     """Install one or many skills from a URL, path, or bundled pack name."""
-    texts = await asyncio.to_thread(_collect, src)  # URL fetch / file IO off the loop
+    if src.startswith(("http://", "https://")):
+        from xplogent.core.netguard import safe_get
+
+        _final, text = await safe_get(src, max_bytes=_MAX_SKILL_BYTES)  # SSRF-checked
+        texts = [text]
+    else:
+        texts = await asyncio.to_thread(_collect, src)  # file IO off the loop
     installed: list[str] = []
     for text in texts:
         meta = parse_skill_md(text)

@@ -42,7 +42,7 @@ def _agent_tool_specs() -> list[ToolSpec]:
                 "type": "object",
                 "properties": {
                     "task": {"type": "string", "description": "What the agent should do."},
-                    "role": {"type": "string", "description": "Optional role profile to scope rights."},
+                    "role": {"type": "string", "description": "Optional role profile (only roles listed in the server's mcp.server.allowed_roles are honoured)."},
                 },
                 "required": ["task"],
             },
@@ -142,9 +142,14 @@ class XplogentMCP:
         from xplogent.runtime import build_orchestrator, build_runtime
 
         if name == "xplogent_run_agent":
+            # The client may only pick a role the operator explicitly allowed
+            # (mcp.server.allowed_roles); otherwise the configured role applies, so a client
+            # can't escape a restricted role by asking for "operator".
+            asked = str(arguments.get("role") or "")
+            allowed = set((self.config.mcp.get("server", {}) or {}).get("allowed_roles") or [])
+            role = asked if asked and asked in allowed else self.role
             runtime = build_runtime(self.config, bus=EventBus(),
-                                    approve=self._approver(),
-                                    role=arguments.get("role") or self.role)
+                                    approve=self._approver(), role=role)
             try:
                 return await runtime.agent.run(str(arguments.get("task", "")))
             finally:
@@ -337,7 +342,29 @@ def _run_http(server, host: str, port: int, streamable: bool = True) -> None:
 
     manager = StreamableHTTPSessionManager(app=server)
 
+    from xplogent.core.config import load_config as _lc
+    from xplogent.interfaces.api.security import (
+        configured_hosts,
+        configured_origins,
+        host_allowed,
+        origin_allowed,
+    )
+
+    server_cfg = _lc().raw.get("server", {}) or {}
+    hosts, origins = configured_hosts(server_cfg), configured_origins(server_cfg)
+
     async def handle(scope, receive, send):  # ASGI app
+        # No token on this transport, so refuse other websites (Origin) and DNS
+        # rebinding (Host) — otherwise any page the user visits could drive the agent.
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1")
+                   for k, v in scope.get("headers", [])}
+        if not host_allowed(headers.get("host"), False, hosts) or not origin_allowed(
+                headers.get("origin"), headers.get("host"), scope.get("path", ""), origins):
+            from starlette.responses import JSONResponse
+
+            await JSONResponse({"error": "forbidden origin/host"}, status_code=403)(
+                scope, receive, send)
+            return
         await manager.handle_request(scope, receive, send)
 
     @contextlib.asynccontextmanager
