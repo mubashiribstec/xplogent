@@ -665,6 +665,16 @@ class Store:
         return [{"id": r["id"], "doc_id": r["doc_id"], "content": r["content"],
                  "embedding": json.loads(r["embedding"] or "[]")} for r in rows]
 
+    def chunks_missing_embeddings(self, limit: int = 64) -> list[dict[str, Any]]:
+        rows = self._query(
+            "SELECT id, content FROM doc_chunks WHERE embedding IS NULL OR embedding IN ('', '[]') "
+            "ORDER BY id LIMIT ?", (limit,))
+        return [dict(r) for r in rows]
+
+    def set_chunk_embedding(self, chunk_id: int, embedding: list[float]) -> None:
+        self._write("UPDATE doc_chunks SET embedding=? WHERE id=?",
+                    (json.dumps(embedding), chunk_id))
+
     def search_chunks_fts(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         if not (self._fts and query.strip()):
             return []

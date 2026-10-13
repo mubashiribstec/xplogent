@@ -26,10 +26,22 @@ def repo_root() -> Path | None:
     return None
 
 
-def _git(root: Path, *args: str) -> tuple[int, str]:
-    proc = subprocess.run(
-        ["git", *args], cwd=str(root), capture_output=True, text=True
-    )
+GIT_TIMEOUT = 120
+PIP_TIMEOUT = 900
+
+
+def _git(root: Path, *args: str, timeout: float = GIT_TIMEOUT) -> tuple[int, str]:
+    # Never wait on a credential prompt nobody can answer (the server has no TTY).
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    try:
+        proc = subprocess.run(
+            ["git", *args], cwd=str(root), capture_output=True, text=True,
+            env=env, timeout=timeout, stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, f"git {args[0] if args else ''} timed out after {timeout:.0f}s"
+    except OSError as exc:
+        return 127, f"git not runnable: {exc}"
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
@@ -81,10 +93,16 @@ def reinstall() -> dict:
     root = repo_root()
     if not root:
         return {"ok": False, "output": "not a git checkout"}
-    proc = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", ".", "--quiet"],
-        cwd=str(root), capture_output=True, text=True,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-e", ".", "--quiet"],
+            cwd=str(root), capture_output=True, text=True, timeout=PIP_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "output": f"pip install timed out after {PIP_TIMEOUT}s"}
+    except OSError as exc:
+        return {"ok": False, "output": str(exc)}
     return {"ok": proc.returncode == 0, "output": (proc.stdout + proc.stderr).strip()}
 
 

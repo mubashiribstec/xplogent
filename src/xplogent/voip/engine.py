@@ -20,7 +20,13 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from xplogent.core.logging import get_logger
-from xplogent.voip.audio import VAD, mulaw_to_pcm16, pcm16_to_mulaw, resample
+from xplogent.voip.audio import (
+    VAD,
+    Resampler,
+    mulaw_to_pcm16,
+    pcm16_to_mulaw,
+    resample,
+)
 from xplogent.voip.brain import CallBrain
 
 _log = get_logger("voip.engine")
@@ -168,8 +174,9 @@ class CallSession:
         self._speaking = True
         try:
             carry = b""
+            rs = Resampler(self.tts.sample_rate, 8000)  # one per utterance: no clicks between chunks
             async for pcm in self.tts.synthesize(text):
-                pcm8k = resample(pcm, self.tts.sample_rate, 8000)
+                pcm8k = rs.feed(pcm)
                 carry += pcm16_to_mulaw(pcm8k)
                 while len(carry) >= 160 * 5:  # send in ~100 ms chunks
                     await self.send_audio(carry[:800])

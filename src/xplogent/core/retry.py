@@ -56,7 +56,7 @@ def classify_error(err: Any) -> ErrorClass:
     if "timed out" in text or "timeout" in text:
         return ErrorClass.TIMEOUT
     if any(s in text for s in ("connection", "temporarily", "reset by peer",
-                               "network", "503", "502", "504")):
+                               "network", "503", "502", "504", "529", "overloaded")):
         return ErrorClass.TRANSIENT
     return ErrorClass.FATAL
 

@@ -120,8 +120,8 @@ class Agent:
         """Queue a user suggestion to fold into the run at its next step (steering)."""
         text = (text or "").strip()
         if text:
+            # Queued only: a paused run stays paused until the user resumes it.
             self._injections.append(text)
-            self._pause.set()  # wake the loop if it happens to be paused
 
     async def _set_status(self, status: str) -> None:
         self.status = status
@@ -143,7 +143,8 @@ class Agent:
         graph_block = ""
         if self.memory:
             facts = await self.memory.recall(task, k=int(self.config.memory.get("retrieval_top_k", 5)))
-            relevant = await self.memory.relevant_skills(task, k=3)
+            relevant = await self.memory.relevant_skills(task, k=3,
+                                                         counted=self._recalled_skills)
             skills = [(s.name, s.description, s.body, s.trigger, s.tools) for s in relevant]
             self._recalled_skills.update(s.name for s in relevant)
             if self.config.memory.get("graph_recall", True):
@@ -177,6 +178,11 @@ class Agent:
         tool_steps = 0
         final_answer = ""
         nudged = False
+        # Callers (e.g. the orchestrator's retry loop) need to know the run *failed*,
+        # since run() always returns a string instead of raising.
+        self.failed = False
+        self.last_exception: BaseException | None = None
+        self._recalled_skills.clear()  # a cancelled earlier run may have left some behind
 
         try:
             for step in range(self._max_steps):
@@ -197,6 +203,7 @@ class Agent:
                 assistant = await self._stream_assistant(messages, tool_specs)
                 if assistant is None:  # provider failed; error already emitted
                     final_answer = "(failed: the model provider returned an error)"
+                    self.failed = True
                     break
 
                 self.stm.add(assistant)
@@ -242,6 +249,8 @@ class Agent:
         except Exception as exc:  # noqa: BLE001 - a run must always return, never stall the chat
             _log.exception("agent run failed")
             final_answer = f"(run error: {exc})"
+            self.failed = True
+            self.last_exception = exc
             await self._emit(EventType.ERROR, message=str(exc))
 
         # Always finish cleanly: persist, emit RUN_END, consolidate — guarded so a
@@ -328,6 +337,7 @@ class Agent:
             except Exception as exc:  # noqa: BLE001 - one agent's failure must not crash others
                 kind = classify_error(exc)
                 if emitted or kind not in RETRYABLE or attempt >= policy.max_attempts:
+                    self.last_exception = exc
                     _log.warning("provider error for agent %s: %s", self.name, exc)
                     await self._emit(EventType.ERROR, message=f"provider error: {exc}")
                     return None
@@ -434,7 +444,9 @@ class Agent:
             await self._emit(EventType.TOOL_RESULT, tool=name, ok=result.ok, output=text)
             return text
         except TypeError as exc:
-            return f"ERROR: bad arguments for {name}: {exc}"
+            text = f"ERROR: bad arguments for {name}: {exc}"
+            await self._emit(EventType.TOOL_RESULT, tool=name, ok=False, output=text)
+            return text
         except Exception as exc:  # noqa: BLE001
             await self._emit(EventType.TOOL_RESULT, tool=name, ok=False, output=str(exc))
             return f"ERROR running {name}: {exc}"

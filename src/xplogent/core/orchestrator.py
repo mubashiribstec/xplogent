@@ -120,20 +120,32 @@ class Orchestrator:
         self.agents[agent_id] = agent
         return agent
 
-    async def _spawn(self, agent: Agent, task: str) -> str:
-        """Run one worker, bounded by the shared concurrency semaphore."""
+    async def _spawn(self, agent: Agent, task: str, *, nested: bool = False) -> str:
+        """Run one worker, bounded by the shared concurrency semaphore.
+
+        ``nested`` workers (spawned by ``delegate_task`` from inside another worker) run
+        under their parent's slot instead of taking a new one: the parent is blocked
+        waiting for them, so making them queue for the same semaphore deadlocked any run
+        whose workers all delegated (e.g. max_concurrent=1). Nesting is bounded by
+        ``max_delegation_depth``.
+        """
+        if nested:
+            return await self._run_worker(agent, task)
         async with self._sem:
-            self._active += 1
-            self.peak_concurrency = max(self.peak_concurrency, self._active)
-            await self.bus.publish(Event(
-                type=EventType.AGENT_SPAWN,
-                data={"run_id": self.run_id, "agent_id": agent.agent_id,
-                      "agent_name": agent.name, "role": agent.role},
-            ))
-            try:
-                return await agent.run(task)
-            finally:
-                self._active -= 1
+            return await self._run_worker(agent, task)
+
+    async def _run_worker(self, agent: Agent, task: str) -> str:
+        self._active += 1
+        self.peak_concurrency = max(self.peak_concurrency, self._active)
+        await self.bus.publish(Event(
+            type=EventType.AGENT_SPAWN,
+            data={"run_id": self.run_id, "agent_id": agent.agent_id,
+                  "agent_name": agent.name, "role": agent.role},
+        ))
+        try:
+            return await agent.run(task)
+        finally:
+            self._active -= 1
 
     async def delegate(self, task: str, role: str = "operator", depth: int = 1) -> str:
         """Spawn a fresh sub-agent mid-run (used by the ``delegate_task`` tool).
@@ -143,7 +155,7 @@ class Orchestrator:
         """
         name = f"{role}-sub-{uuid.uuid4().hex[:6]}"
         agent = self._make_worker(name, role, depth=depth)
-        return await self._spawn(agent, task)
+        return await self._spawn(agent, task, nested=True)
 
     # -- control ---------------------------------------------------------------
     def control(self, agent_id: str, action: str) -> bool:
@@ -240,6 +252,10 @@ class Orchestrator:
             agent = self._make_worker(name, task.role, agent_id=agent_id)
             try:
                 answer = await self._spawn(agent, prompt)
+                if getattr(agent, "failed", False):
+                    # run() reports failure as text; surface it so the retry policy
+                    # applies and dependents don't receive "(failed: ...)" as input.
+                    raise agent.last_exception or RuntimeError(answer)
                 await self.board.complete(task.id, answer)
                 return
             except Exception as exc:  # noqa: BLE001
@@ -258,6 +274,8 @@ class Orchestrator:
         await self.board.fail(task.id, str(last_exc))
 
     async def aclose(self) -> None:
+        # Background helpers must stop before their providers' HTTP clients are closed.
+        await self.background_tasks.cancel_all()
         for provider in self._providers:
             try:
                 await provider.aclose()

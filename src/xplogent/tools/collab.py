@@ -26,9 +26,28 @@ class BackgroundTasks:
     removed so each is reported once.
     """
 
+    MAX_RUNNING = 8  # cap fan-out so one agent can't launch an unbounded swarm
+
     def __init__(self) -> None:
         self._tasks: dict[str, dict] = {}
         self._n = 0
+        self._running: set[asyncio.Task] = set()  # strong refs: unreferenced tasks get GC'd
+
+    def can_start(self) -> bool:
+        return self.pending() < self.MAX_RUNNING
+
+    def spawn(self, coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._running.add(task)
+        task.add_done_callback(self._running.discard)
+        return task
+
+    async def cancel_all(self) -> None:
+        """Stop helpers still running when the run ends (before providers are closed)."""
+        for task in list(self._running):
+            task.cancel()
+        if self._running:
+            await asyncio.gather(*self._running, return_exceptions=True)
 
     def register(self, desc: str) -> str:
         self._n += 1
@@ -160,6 +179,10 @@ class DelegateTool(Tool):
                 f"delegation depth limit reached ({self._max}); do this work yourself."
             )
         if background and self._bg is not None:
+            if not self._bg.can_start():
+                return ToolResult.failure(
+                    f"{self._bg.MAX_RUNNING} background helpers are already running; "
+                    "call collect_tasks first or do this one in the foreground.")
             tid = self._bg.register(task)
 
             async def _go() -> None:
@@ -169,7 +192,7 @@ class DelegateTool(Tool):
                 except Exception as exc:  # noqa: BLE001 - background failure mustn't crash the lead
                     self._bg.complete(tid, f"error: {exc}", ok=False)
 
-            asyncio.create_task(_go())
+            self._bg.spawn(_go())
             return ToolResult.success(
                 f"dispatched background task {tid}. Keep working; call collect_tasks "
                 "to gather results when ready.")

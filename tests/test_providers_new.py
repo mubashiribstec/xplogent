@@ -69,6 +69,8 @@ class _FakeStdout:
         if not self._lines:
             raise StopAsyncIteration
         return self._lines.pop(0)
+    async def readline(self):
+        return self._lines.pop(0) if self._lines else b""
 
 
 class _FakeStdin:
@@ -106,6 +108,72 @@ async def test_claude_cli_stream_parses_assistant_and_usage(monkeypatch):
     final = await prov.complete([Message(role=Role.USER, content="hello")])
     assert "Hi from claude" in final.content
     assert final.usage == {"input_tokens": 50, "output_tokens": 4}
+
+
+class _HangingProc:
+    """A CLI that never writes anything: must be killed on timeout / cancel."""
+
+    def __init__(self):
+        self.stdin = _FakeStdin()
+        self.stdout = self
+        self.stderr = self
+        self.returncode = None
+        self.killed = False
+        self._exit = asyncio.Event()
+
+    async def readline(self):
+        await self._exit.wait()
+        return b""
+
+    async def read(self):
+        await self._exit.wait()
+        return b""
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+        self._exit.set()
+
+    async def wait(self):
+        await self._exit.wait()
+        return self.returncode
+
+
+@pytest.mark.asyncio
+async def test_claude_cli_timeout_kills_process(monkeypatch):
+    from xplogent.providers import claude_cli
+
+    proc = _HangingProc()
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda _x: "/usr/bin/claude")
+
+    async def fake_exec(*a, **k):
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    prov = claude_cli.ClaudeCLIProvider("sonnet", timeout=0.05)
+    with pytest.raises(TimeoutError):
+        await prov.complete([Message(role=Role.USER, content="hello")])
+    assert proc.killed
+
+
+@pytest.mark.asyncio
+async def test_claude_cli_cancel_kills_process(monkeypatch):
+    from xplogent.providers import claude_cli
+
+    proc = _HangingProc()
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda _x: "/usr/bin/claude")
+
+    async def fake_exec(*a, **k):
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    prov = claude_cli.ClaudeCLIProvider("sonnet")
+    task = asyncio.create_task(prov.complete([Message(role=Role.USER, content="hello")]))
+    await asyncio.sleep(0.02)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert proc.killed
 
 
 @pytest.mark.asyncio

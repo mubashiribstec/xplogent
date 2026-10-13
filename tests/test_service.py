@@ -79,14 +79,29 @@ def test_stop_clears_state(home, monkeypatch):
     monkeypatch.setattr(service, "_can_launch", lambda: (True, ""))
     monkeypatch.setattr(service.subprocess, "Popen", lambda *a, **k: _FakeProc(4242))
     service.start()
-    monkeypatch.setattr(service, "_pid_alive", lambda pid: True)
-    monkeypatch.setattr(service, "is_windows", lambda: False)
     killed = {}
+    # Alive until it has been signalled (stop now waits for the exit).
+    monkeypatch.setattr(service, "_pid_alive", lambda pid: "pid" not in killed)
+    monkeypatch.setattr(service, "is_windows", lambda: False)
     monkeypatch.setattr(service.os, "kill", lambda pid, sig: killed.setdefault("pid", pid))
     res = service.stop()
     assert res["stopped"] is True
     assert killed["pid"] == 4242
     assert not service._state_path().exists()
+
+
+def test_stop_reports_a_server_that_will_not_exit(home, monkeypatch):
+    monkeypatch.setattr(service, "_can_launch", lambda: (True, ""))
+    monkeypatch.setattr(service.subprocess, "Popen", lambda *a, **k: _FakeProc(4242))
+    service.start()
+    monkeypatch.setattr(service, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(service, "is_windows", lambda: False)
+    signals = []
+    monkeypatch.setattr(service.os, "kill", lambda pid, sig: signals.append(sig))
+    res = service.stop(timeout=0.3)
+    assert res["ok"] is False
+    assert service.signal.SIGKILL in signals  # escalated after SIGTERM
+    assert service._state_path().exists()      # still tracked: it's still running
 
 
 def test_install_service_systemd(home, monkeypatch, tmp_path):

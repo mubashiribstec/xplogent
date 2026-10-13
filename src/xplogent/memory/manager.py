@@ -59,11 +59,22 @@ class MemoryManager:
         """A stored vector is comparable only if it came from the same embed model."""
         return not em or not self.embed_model or em == self.embed_model
 
+    async def _query_vec(self, query: str) -> list[float]:
+        """Embed a query, reusing the last result: the agent recalls facts and skills
+        for the same task on every step, which used to cost two embeddings per step."""
+        cached = getattr(self, "_qcache", None)
+        if cached and cached[0] == query:
+            return cached[1]
+        vec = await self.embedder.embed_one(query)
+        if vec:
+            self._qcache = (query, vec)
+        return vec
+
     async def recall(self, query: str, k: int = 5) -> list[str]:
         facts = self.store.all_facts()
         if not facts:
             return []
-        qvec = await self.embedder.embed_one(query)
+        qvec = await self._query_vec(query)
         if qvec:
             usable = [(f, f.embedding) for f in facts
                       if f.embedding and self._embed_match(f.embed_model)]
@@ -85,11 +96,14 @@ class MemoryManager:
         self.store.upsert_skill(name, description, body, vec, embed_model=self.embed_model,
                                 tools=tools, trigger=trigger, source=source)
 
-    async def relevant_skills(self, query: str, k: int = 3) -> list[RetrievedSkill]:
+    async def relevant_skills(self, query: str, k: int = 3,
+                              counted: set[str] | None = None) -> list[RetrievedSkill]:
+        """Top-k skills for ``query``. A use is recorded once per skill: names in
+        ``counted`` (already retrieved earlier in the same run) aren't counted again."""
         skills: list[SkillRow] = self.store.all_skills()
         if not skills:
             return []
-        qvec = await self.embedder.embed_one(query)
+        qvec = await self._query_vec(query)
         if qvec:
             usable = [(s, s.embedding) for s in skills
                       if s.embedding and self._embed_match(s.embed_model)]
@@ -102,7 +116,8 @@ class MemoryManager:
             picked = [(s, 1.0) for s in skills if q in (s.name + s.description).lower()][:k]
         out = []
         for s, score in picked:
-            self.store.increment_skill_use(s.name)  # type: ignore[attr-defined]
+            if counted is None or s.name not in counted:  # type: ignore[attr-defined]
+                self.store.increment_skill_use(s.name)  # type: ignore[attr-defined]
             out.append(RetrievedSkill(s.name, s.description, s.body, score,  # type: ignore[attr-defined]
                                       trigger=s.trigger, tools=s.tools))
         return out

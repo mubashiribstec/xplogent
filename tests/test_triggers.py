@@ -63,7 +63,74 @@ async def test_file_watcher_fires_on_change(monkeypatch, tmp_path):
     w = FileWatcher(cfg, tick=999)
     await w._tick_once()            # first observation — must NOT fire
     assert fired == []
-    watched.write_text("one\ntwo")  # change it
+    _touch_later(watched, "one\ntwo")  # change it
     await w._tick_once()            # now it should fire
+    await w.drain()
     assert len(fired) == 1
     assert "changed" in fired[0]["context"]
+
+
+def _touch_later(path, text):
+    """Write and push the mtime forward so coarse filesystem clocks still see a change."""
+    import os
+    import time as _time
+
+    st = path.stat().st_mtime if path.exists() else _time.time()
+    path.write_text(text)
+    os.utime(path, (st + 5, st + 5))
+
+
+@pytest.mark.asyncio
+async def test_file_watcher_ignores_its_own_writes(monkeypatch, tmp_path):
+    """A run that writes into the watched folder must not re-trigger itself forever."""
+    folder = tmp_path / "inbox"
+    folder.mkdir()
+    (folder / "a.txt").write_text("a")
+    fired: list[str] = []
+
+    async def fake_run(trigger, context="", config=None):
+        fired.append(context)
+        _touch_later(folder / "summary.md", "written by the run")
+        return ""
+
+    monkeypatch.setattr(trig_mod, "run_trigger", fake_run)
+    cfg = load_config()
+    store = Store(cfg.db_path)
+    store.add_trigger("watch", "file", str(folder), "summarize")
+    store.close()
+
+    w = FileWatcher(cfg, tick=999, cooldown=0)
+    await w._tick_once()
+    _touch_later(folder / "b.txt", "b")
+    await w._tick_once()
+    await w.drain()
+    await w._tick_once()  # only the run's own write changed: no new fire
+    await w.drain()
+    assert len(fired) == 1
+
+
+@pytest.mark.asyncio
+async def test_file_watcher_cooldown(monkeypatch, tmp_path):
+    fired: list[str] = []
+
+    async def fake_run(trigger, context="", config=None):
+        fired.append(context)
+        return ""
+
+    monkeypatch.setattr(trig_mod, "run_trigger", fake_run)
+    cfg = load_config()
+    watched = tmp_path / "f.txt"
+    watched.write_text("0")
+    store = Store(cfg.db_path)
+    store.add_trigger("watch", "file", str(watched), "x")
+    store.close()
+
+    w = FileWatcher(cfg, tick=999, cooldown=3600)
+    await w._tick_once()
+    _touch_later(watched, "1")
+    await w._tick_once()
+    await w.drain()
+    _touch_later(watched, "2")
+    await w._tick_once()
+    await w.drain()
+    assert len(fired) == 1

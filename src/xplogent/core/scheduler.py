@@ -156,12 +156,23 @@ def parse_schedule(text: str, tz: str = "") -> tuple[str, float]:
 from xplogent.safety.approval import auto_approve_up_to_high as _auto_approve  # noqa: E402
 
 
+def _is_one_shot(spec: str) -> bool:
+    spec = spec.strip().lower()
+    return spec.startswith("in ") or spec == "once"
+
+
 class Scheduler:
-    def __init__(self, config: Any, *, tick: float = 30.0) -> None:
+    def __init__(self, config: Any, *, tick: float = 30.0, max_parallel: int | None = None,
+                 stop_grace: float = 10.0) -> None:
         self.config = config
         self.tick = tick
+        self.stop_grace = stop_grace
+        sched_cfg = getattr(config, "scheduler", {}) or {}
+        self.max_parallel = int(max_parallel or sched_cfg.get("max_parallel_jobs", 3))
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        self._sem = asyncio.Semaphore(self.max_parallel)
+        self._jobs: dict[int, asyncio.Task] = {}  # schedule id -> running job
 
     async def start(self) -> None:
         self._realign()
@@ -169,12 +180,30 @@ class Scheduler:
         _log.info("scheduler started (tick=%ss)", self.tick)
 
     async def stop(self) -> None:
+        """Stop ticking; give running jobs a short grace period, then cancel them."""
         self._stop.set()
         if self._task:
             await self._task
+        if self._jobs:
+            _done, still = await asyncio.wait(list(self._jobs.values()), timeout=self.stop_grace)
+            for t in still:
+                t.cancel()
+            if still:
+                await asyncio.gather(*still, return_exceptions=True)
+
+    async def drain(self) -> None:
+        """Wait for every job started so far (used by tests and graceful shutdown)."""
+        while self._jobs:
+            await asyncio.gather(*list(self._jobs.values()), return_exceptions=True)
 
     def _realign(self) -> None:
-        """On startup, recompute next_run for enabled jobs so none are stuck."""
+        """On startup, repair next_run for enabled jobs.
+
+        Recurring jobs that were missed skip ahead to their next slot. A one-shot whose
+        time passed while the server was down fires on the next tick (instead of being
+        pushed another "in N minutes" into the future on every restart); one that
+        already fired but wasn't disabled (crash mid-run) is disabled.
+        """
         store = Store(self.config.db_path)
         try:
             now = time.time()
@@ -182,9 +211,19 @@ class Scheduler:
                 if not job.get("enabled"):
                     continue
                 nr = job.get("next_run")
-                if nr is None or nr < now - 1:
-                    nxt = next_run_after(job["spec"], job.get("tz") or "")
-                    store.set_schedule_next(job["id"], nxt)
+                one_shot = _is_one_shot(job["spec"])
+                if nr is None:
+                    if one_shot:
+                        store.set_schedule_enabled(job["id"], False)
+                    else:
+                        store.set_schedule_next(
+                            job["id"], next_run_after(job["spec"], job.get("tz") or ""))
+                elif nr < now - 1:
+                    if one_shot:
+                        store.set_schedule_next(job["id"], now)
+                    else:
+                        store.set_schedule_next(
+                            job["id"], next_run_after(job["spec"], job.get("tz") or ""))
         finally:
             store.close()
 
@@ -200,29 +239,47 @@ class Scheduler:
                 pass
 
     async def _tick_once(self) -> None:
+        """Start every due job in the background (bounded) and return immediately.
+
+        A long job no longer delays the other due jobs or the next tick.
+        """
         store = Store(self.config.db_path)
         try:
-            for job in store.due_schedules(time.time()):
-                await self._fire(store, job)
+            now = time.time()
+            for job in store.due_schedules(now):
+                jid = int(job["id"])
+                if jid in self._jobs:
+                    continue  # previous run still going
+                nxt = next_run_after(job["spec"], job.get("tz") or "", after=now)
+                # Advance next_run up front so a long job can't double-fire next tick.
+                store.set_schedule_run(jid, last_run=now, last_status="running", next_run=nxt)
+                task = asyncio.create_task(self._fire(job, now, nxt))
+                self._jobs[jid] = task
+                task.add_done_callback(lambda _t, j=jid: self._jobs.pop(j, None))
         finally:
             store.close()
 
-    async def _fire(self, store: Store, job: dict[str, Any]) -> None:
-        now = time.time()
-        tz = job.get("tz") or ""
-        nxt = next_run_after(job["spec"], tz, after=now)
-        # Advance next_run up front so a long job can't double-fire on the next tick.
-        store.set_schedule_run(job["id"], last_run=now, last_status="running", next_run=nxt)
-        _log.info("running schedule %s: %s", job["id"], job["name"])
-        status = "ok"
-        try:
-            await self._run_job(job)
-        except Exception as exc:  # noqa: BLE001
-            status = f"error: {exc}"
-            _log.exception("schedule %s failed", job["id"])
-        store.set_schedule_run(job["id"], last_run=now, last_status=status, next_run=nxt)
-        if nxt is None:  # one-shot finished
-            store.set_schedule_enabled(job["id"], False)
+    async def _fire(self, job: dict[str, Any], started: float, nxt: float | None) -> None:
+        async with self._sem:
+            _log.info("running schedule %s: %s", job["id"], job["name"])
+            status = "ok"
+            try:
+                await self._run_job(job)
+            except asyncio.CancelledError:
+                status = "cancelled"
+                raise
+            except Exception as exc:  # noqa: BLE001
+                status = f"error: {exc}"
+                _log.exception("schedule %s failed", job["id"])
+            finally:
+                store = Store(self.config.db_path)
+                try:
+                    store.set_schedule_run(job["id"], last_run=started, last_status=status,
+                                           next_run=nxt)
+                    if nxt is None:  # one-shot finished
+                        store.set_schedule_enabled(job["id"], False)
+                finally:
+                    store.close()
 
     async def _run_job(self, job: dict[str, Any]) -> None:
         from xplogent.core.events import EventBus

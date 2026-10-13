@@ -95,6 +95,49 @@ def resample(data: bytes, src_rate: int, dst_rate: int) -> bytes:
     return out.tobytes()
 
 
+class Resampler:
+    """Streaming resampler for mono 16-bit PCM.
+
+    TTS engines deliver audio in chunks; resampling each chunk on its own resets the
+    filter/interpolation state at every boundary, which is audible as clicks. This
+    keeps that state (and any odd trailing byte) across ``feed`` calls.
+    """
+
+    def __init__(self, src_rate: int, dst_rate: int) -> None:
+        self.src_rate, self.dst_rate = src_rate, dst_rate
+        self._state = None          # audioop.ratecv state
+        self._odd = b""             # half a sample left over from the last chunk
+        self._prev: int | None = None  # fallback: last source sample
+        self._t = 0.0               # fallback: next output position in source samples
+
+    def feed(self, data: bytes) -> bytes:
+        data = self._odd + data
+        cut = len(data) - (len(data) % 2)
+        data, self._odd = data[:cut], data[cut:]
+        if not data or self.src_rate == self.dst_rate:
+            return data
+        if _audioop is not None:
+            out, self._state = _audioop.ratecv(data, 2, 1, self.src_rate, self.dst_rate,
+                                               self._state)
+            return out
+        buf = array("h")
+        if self._prev is not None:
+            buf.append(self._prev)
+        buf.frombytes(data)
+        step = self.src_rate / self.dst_rate
+        out = array("h")
+        t = self._t
+        while t + 1 < len(buf):
+            j = int(t)
+            frac = t - j
+            out.append(int(buf[j] + (buf[j + 1] - buf[j]) * frac))
+            t += step
+        # The last sample becomes index 0 of the next buffer.
+        self._t = t - (len(buf) - 1)
+        self._prev = buf[-1]
+        return out.tobytes()
+
+
 def rms(pcm16: bytes) -> float:
     """Root-mean-square level of 16-bit PCM (0..32768)."""
     if not pcm16:

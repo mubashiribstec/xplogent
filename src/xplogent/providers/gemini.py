@@ -52,15 +52,27 @@ class GeminiProvider(Provider):
             if m.role == Role.SYSTEM:
                 system_parts.append(m.content)
             elif m.role == Role.TOOL:
-                contents.append({"role": "user", "parts": [{
-                    "functionResponse": {"name": m.name or "tool",
-                                         "response": {"result": m.content}}}]})
+                part = {"functionResponse": {"name": m.name or "tool",
+                                             "response": {"result": m.content}}}
+                # Responses to parallel function calls go back together in one turn.
+                prev = contents[-1] if contents else None
+                if prev and prev["role"] == "user" and prev["parts"] and \
+                        "functionResponse" in prev["parts"][0]:
+                    prev["parts"].append(part)
+                else:
+                    contents.append({"role": "user", "parts": [part]})
             elif m.role == Role.ASSISTANT:
                 parts: list[dict[str, Any]] = []
                 if m.content:
                     parts.append({"text": m.content})
-                for tc in m.tool_calls:
-                    parts.append({"functionCall": {"name": tc.name, "args": tc.arguments}})
+                sigs = {b.get("call"): b.get("thoughtSignature") for b in m.thinking_blocks
+                        if "thoughtSignature" in b}
+                for i, tc in enumerate(m.tool_calls):
+                    fc_part: dict[str, Any] = {"functionCall": {"name": tc.name,
+                                                                "args": tc.arguments}}
+                    if sigs.get(i):  # thinking models require their signature echoed back
+                        fc_part["thoughtSignature"] = sigs[i]
+                    parts.append(fc_part)
                 contents.append({"role": "model", "parts": parts or [{"text": ""}]})
             else:  # USER
                 parts = [{"text": m.content}] if m.content else []
@@ -98,6 +110,7 @@ class GeminiProvider(Provider):
         content_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         usage: dict[str, int] | None = None
+        signatures: list[dict[str, Any]] = []
         url = f"/models/{self.model}:streamGenerateContent?alt=sse"
 
         async with self._client.stream("POST", url, json=payload) as resp:
@@ -112,17 +125,22 @@ class GeminiProvider(Provider):
                              "output_tokens": int(meta.get("candidatesTokenCount", 0))}
                 for cand in chunk.get("candidates", []) or []:
                     for part in (cand.get("content") or {}).get("parts", []) or []:
+                        if part.get("thought"):
+                            continue  # model's internal reasoning: not part of the answer
                         if "text" in part:
                             content_parts.append(part["text"])
                             yield StreamEvent(kind=StreamKind.TOKEN, text=part["text"])
                         elif "functionCall" in part:
                             fc = part["functionCall"]
+                            if part.get("thoughtSignature"):
+                                signatures.append({"call": len(tool_calls),
+                                                   "thoughtSignature": part["thoughtSignature"]})
                             tool_calls.append(ToolCall(
                                 id=f"call_{uuid.uuid4().hex[:8]}",
                                 name=fc.get("name", ""), arguments=fc.get("args", {}) or {}))
 
         final = Message(role=Role.ASSISTANT, content="".join(content_parts),
-                        tool_calls=tool_calls, usage=usage)
+                        tool_calls=tool_calls, usage=usage, thinking_blocks=signatures)
         yield StreamEvent(kind=StreamKind.DONE, message=final)
 
     async def list_models(self) -> list[str]:

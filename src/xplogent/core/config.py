@@ -28,11 +28,18 @@ def xplogent_home() -> Path:
 
 
 def install_root() -> Path | None:
-    """The framework's install/repo root (dir holding pyproject.toml or .git), or None."""
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        if (parent / "pyproject.toml").exists() or (parent / ".git").exists():
-            return parent
+    """The Xplogent source checkout root (``<root>/src/xplogent``), or None.
+
+    Only our own ``src/`` layout counts. Walking up to *any* pyproject.toml/.git
+    meant a wheel installed into some project's ``.venv`` treated that unrelated
+    project as home and wrote skills + memory into it.
+    """
+    package = Path(__file__).resolve().parents[1]  # .../xplogent
+    if package.parent.name != "src":
+        return None
+    root = package.parent.parent
+    if (root / "pyproject.toml").exists() or (root / ".git").exists():
+        return root
     return None
 
 

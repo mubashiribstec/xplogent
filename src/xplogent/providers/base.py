@@ -61,6 +61,9 @@ class Message:
     name: str | None = None          # tool name on TOOL messages
     images: list[str] = field(default_factory=list)  # image paths/data-URIs (vision)
     usage: dict[str, int] | None = None  # {input_tokens, output_tokens} when reported
+    # Provider-native reasoning blocks that must be echoed back verbatim on the next
+    # request (Anthropic extended thinking + tool use requires the signed blocks).
+    thinking_blocks: list[dict[str, Any]] = field(default_factory=list)
 
     def to_openai(self) -> dict[str, Any]:
         msg: dict[str, Any] = {"role": self.role.value}

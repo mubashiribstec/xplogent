@@ -71,17 +71,46 @@ class ShortTermMemory:
         self._summary: str = ""
 
     def add(self, message: Message) -> None:
+        # One huge tool output (e.g. read_file of a 200 KB file) must not blow the whole
+        # window: keep its head and tail, which is what the model usually needs.
+        limit = max(2000, self.max_tokens * 2)  # chars ≈ half the token budget
+        if message.role == Role.TOOL and len(message.content or "") > limit:
+            c = message.content
+            message.content = (c[: limit * 3 // 4] + f"\n…[{len(c) - limit} chars truncated]…\n"
+                               + c[-limit // 4:])
         self.messages.append(message)
 
     def _total_tokens(self) -> int:
         return sum(_approx_tokens(m.content) for m in self.messages)
 
+    def _fold(self, msg: Message) -> None:
+        snippet = (msg.content or "")[:200].replace("\n", " ")
+        if msg.tool_calls:
+            snippet = (snippet + " " + ", ".join(tc.name for tc in msg.tool_calls)).strip()
+        self._summary += f"\n[{msg.role.value}] {snippet}"
+
+    def _pop_turn(self, at: int) -> None:
+        """Remove the message at ``at`` *with* the tool results that belong to it.
+
+        Providers reject a tool result whose assistant tool-call message is gone (400),
+        so an assistant tool-call message and its TOOL replies are dropped together, and
+        a stray TOOL message is never left at the front.
+        """
+        first = self.messages.pop(at)
+        self._fold(first)
+        if first.role == Role.ASSISTANT and first.tool_calls:
+            while at < len(self.messages) and self.messages[at].role == Role.TOOL:
+                self._fold(self.messages.pop(at))
+
     def trim(self) -> None:
-        """Fold oldest messages into a summary placeholder when over budget."""
+        """Fold oldest turns into a summary placeholder when over budget.
+
+        The opening user message (the task) stays pinned: the model always sees what it
+        was asked, and the window keeps starting with a user turn.
+        """
         while self._total_tokens() > self.max_tokens and len(self.messages) > 4:
-            old = self.messages.pop(0)
-            snippet = old.content[:200].replace("\n", " ")
-            self._summary += f"\n[{old.role.value}] {snippet}"
+            at = 1 if self.messages[0].role == Role.USER else 0
+            self._pop_turn(at)
 
     def render(self) -> list[Message]:
         msgs: list[Message] = []
@@ -89,5 +118,9 @@ class ShortTermMemory:
             msgs.append(
                 Message(role=Role.SYSTEM, content="Earlier conversation summary:" + self._summary)
             )
-        msgs.extend(self.messages)
+        # Defensive: never hand a provider a tool result without its tool call.
+        start = 0
+        while start < len(self.messages) and self.messages[start].role == Role.TOOL:
+            start += 1
+        msgs.extend(self.messages[start:])
         return msgs

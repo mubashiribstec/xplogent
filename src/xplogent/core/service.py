@@ -148,7 +148,7 @@ def start(port: int = 8765, host: str = "127.0.0.1") -> dict:
     return {"ok": True, "started": True, **state}
 
 
-def stop() -> dict:
+def stop(timeout: float = 15.0) -> dict:
     state = _read_state()
     pid = state.get("pid")
     if not pid or not _pid_alive(pid):
@@ -160,8 +160,28 @@ def stop() -> dict:
             os.kill(pid, signal.SIGTERM)
     except OSError as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
+    # Wait for it to actually exit: a restart that starts the new server while the
+    # old one still holds the port fails with "address already in use".
+    if not _wait_exit(pid, timeout):
+        if not is_windows():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            _wait_exit(pid, 3.0)
+        if _pid_alive(pid):
+            return {"ok": False, "error": f"server (pid {pid}) did not exit"}
     _state_path().unlink(missing_ok=True)
     return {"ok": True, "stopped": True}
+
+
+def _wait_exit(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.2)
+    return not _pid_alive(pid)
 
 
 def status() -> dict:
@@ -180,8 +200,9 @@ def status() -> dict:
 
 
 def restart(port: int = 8765, host: str = "127.0.0.1") -> dict:
-    stop()
-    time.sleep(1.0)
+    stopped = stop()
+    if not stopped.get("ok"):
+        return stopped
     return start(port=port, host=host)
 
 

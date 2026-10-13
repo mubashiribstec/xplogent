@@ -96,6 +96,20 @@ def split_sentences(buffer: str, final: bool = False) -> tuple[list[str], str]:
     return out, rest
 
 
+def trim_history(history: list[Message], limit: int) -> list[Message]:
+    """Keep the last ``limit`` messages, starting on a caller (user) turn.
+
+    A plain slice could start on a TOOL result whose tool call was cut off, which
+    providers reject — every later turn of a long call would then fail.
+    """
+    if len(history) <= limit:
+        return history
+    out = history[-limit:]
+    while out and out[0].role != Role.USER:
+        out = out[1:]
+    return out or history[-1:]
+
+
 class CallBrain:
     def __init__(self, provider: Provider, *, persona: str = "", playbook: str = "",
                  contact: dict[str, Any] | None = None, retrieve: Retriever | None = None,
@@ -165,7 +179,7 @@ class CallBrain:
     async def respond(self, caller_text: str) -> AsyncIterator[str]:
         """Yield the agent's reply sentence by sentence."""
         self.history.append(Message(role=Role.USER, content=caller_text))
-        self.history = self.history[-(self.max_turns * 3):]
+        self.history = trim_history(self.history, self.max_turns * 3)
         knowledge: list[str] = []
         if self.retrieve is not None:
             try:

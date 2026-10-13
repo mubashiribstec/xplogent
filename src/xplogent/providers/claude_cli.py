@@ -32,9 +32,11 @@ _MISSING = ("The 'claude' CLI isn't installed or on PATH. Install Claude Code an
 class ClaudeCLIProvider(Provider):
     name = "claude-cli"
 
-    def __init__(self, model: str = "", cli: str = "claude", **kwargs: Any) -> None:
+    def __init__(self, model: str = "", cli: str = "claude", timeout: float = 600.0,
+                 **kwargs: Any) -> None:
         super().__init__(model, **kwargs)
         self.cli = cli
+        self.timeout = float(timeout)
 
     async def list_models(self) -> list[str]:
         # The CLI exposes fixed aliases through your subscription.
@@ -79,46 +81,84 @@ class ClaudeCLIProvider(Provider):
             *args, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
-        assert proc.stdin and proc.stdout
-        proc.stdin.write(prompt.encode("utf-8"))
-        await proc.stdin.drain()
-        proc.stdin.close()
-
+        assert proc.stdin and proc.stdout and proc.stderr
+        # Drain stderr concurrently: a chatty CLI filling the stderr pipe would block
+        # forever while we wait on stdout.
+        err_task = asyncio.create_task(proc.stderr.read())
         content_parts: list[str] = []
         usage: dict[str, int] | None = None
-        async for raw in proc.stdout:
-            line = raw.decode("utf-8", "replace").strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            etype = ev.get("type")
-            if etype == "assistant":
-                text = _assistant_text(ev)
-                if text:
-                    content_parts.append(text)
-                    yield StreamEvent(kind=StreamKind.TOKEN, text=text)
-            elif etype == "result":
-                u = ev.get("usage") or {}
-                if u:
-                    usage = {"input_tokens": int(u.get("input_tokens", 0)),
-                             "output_tokens": int(u.get("output_tokens", 0))}
-                if not content_parts and ev.get("result"):
-                    content_parts.append(str(ev["result"]))
-                    yield StreamEvent(kind=StreamKind.TOKEN, text=str(ev["result"]))
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.timeout
+        timed_out = False
+        try:
+            proc.stdin.write(prompt.encode("utf-8"))
+            await proc.stdin.drain()
+            proc.stdin.close()
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    raw = await asyncio.wait_for(proc.stdout.readline(), remaining)
+                except TimeoutError:
+                    timed_out = True
+                    break
+                if not raw:
+                    break
+                line = raw.decode("utf-8", "replace").strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                etype = ev.get("type")
+                if etype == "assistant":
+                    text = _assistant_text(ev)
+                    if text:
+                        content_parts.append(text)
+                        yield StreamEvent(kind=StreamKind.TOKEN, text=text)
+                elif etype == "result":
+                    u = ev.get("usage") or {}
+                    if u:
+                        usage = {"input_tokens": int(u.get("input_tokens", 0)),
+                                 "output_tokens": int(u.get("output_tokens", 0))}
+                    if not content_parts and ev.get("result"):
+                        content_parts.append(str(ev["result"]))
+                        yield StreamEvent(kind=StreamKind.TOKEN, text=str(ev["result"]))
+            if timed_out:
+                _kill(proc)
+            await proc.wait()
+            err = (await err_task).decode("utf-8", "replace").strip()
+        finally:
+            # Cancelled (client went away) or failed: never leave the CLI running.
+            if proc.returncode is None:
+                _kill(proc)
+                try:
+                    await asyncio.wait_for(proc.wait(), 5)
+                except (TimeoutError, ProcessLookupError):
+                    pass
+            if not err_task.done():
+                err_task.cancel()
 
-        await proc.wait()
+        if timed_out:
+            raise TimeoutError(f"claude CLI produced no result within {self.timeout:.0f}s")
         if proc.returncode and not content_parts:
-            err = (await proc.stderr.read()).decode("utf-8", "replace").strip()
-            msg = f"claude CLI failed (exit {proc.returncode}): {err or 'no output'}"
+            msg = f"claude CLI failed (exit {proc.returncode}): {err[-2000:] or 'no output'}"
             yield StreamEvent(kind=StreamKind.TOKEN, text=msg)
             content_parts.append(msg)
 
         yield StreamEvent(kind=StreamKind.DONE,
                           message=Message(role=Role.ASSISTANT,
                                           content="".join(content_parts), usage=usage))
+
+
+def _kill(proc: asyncio.subprocess.Process) -> None:
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
 
 
 def _assistant_text(ev: dict) -> str:

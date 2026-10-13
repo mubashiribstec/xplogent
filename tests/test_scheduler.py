@@ -1,7 +1,9 @@
+
 """Scheduler: NL parsing, due detection, firing a (scripted) run, one-shot."""
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timedelta
 
@@ -81,6 +83,7 @@ async def test_scheduler_fires_due_job(tmp_path, monkeypatch):
     store = Store(db)
     try:
         await sched._tick_once()
+        await sched.drain()
     finally:
         store.close()
 
@@ -110,4 +113,76 @@ async def test_disabled_job_does_not_fire(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sched, "_run_job", fake_run_job)
     await sched._tick_once()
+    await sched.drain()
     assert ran["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_due_jobs_run_concurrently(tmp_path, monkeypatch):
+    """A slow job must not hold up the other due jobs."""
+    db = tmp_path / "s.db"
+    store = Store(db)
+    past = (datetime.now() - timedelta(minutes=1)).timestamp()
+    store.add_schedule("slow", "slow", "agent", "every day at 9am", "", past)
+    store.add_schedule("fast", "fast", "agent", "every day at 9am", "", past)
+    store.close()
+
+    sched = Scheduler(_Cfg(db))
+    release = asyncio.Event()
+    done: list[str] = []
+
+    async def fake_run_job(job):
+        if job["prompt"] == "slow":
+            await release.wait()
+        done.append(job["prompt"])
+
+    monkeypatch.setattr(sched, "_run_job", fake_run_job)
+    await sched._tick_once()
+    for _ in range(50):
+        if "fast" in done:
+            break
+        await asyncio.sleep(0.01)
+    assert done == ["fast"]
+    # A second tick while "slow" is still running must not start it again.
+    await sched._tick_once()
+    release.set()
+    await sched.drain()
+    assert sorted(done) == ["fast", "slow"]
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_hung_job(tmp_path, monkeypatch):
+    db = tmp_path / "s.db"
+    store = Store(db)
+    past = (datetime.now() - timedelta(minutes=1)).timestamp()
+    sid = store.add_schedule("hang", "hang", "agent", "every day at 9am", "", past)
+    store.close()
+
+    sched = Scheduler(_Cfg(db), tick=0.01, stop_grace=0.05)
+
+    async def fake_run_job(job):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(sched, "_run_job", fake_run_job)
+    monkeypatch.setattr(sched, "_realign", lambda: None)
+    await sched.start()
+    await asyncio.sleep(0.05)
+    await asyncio.wait_for(sched.stop(), timeout=2)
+    store = Store(db)
+    assert store.get_schedule(sid)["last_status"] == "cancelled"
+    store.close()
+
+
+def test_missed_one_shot_fires_after_restart(tmp_path):
+    db = tmp_path / "s.db"
+    store = Store(db)
+    past = time.time() - 600
+    sid = store.add_schedule("once", "remind", "agent", "in 5 minutes", "", past)
+    store.close()
+
+    Scheduler(_Cfg(db))._realign()
+    store = Store(db)
+    job = store.get_schedule(sid)
+    store.close()
+    # Due now, not pushed another 5 minutes out.
+    assert job["next_run"] <= time.time()

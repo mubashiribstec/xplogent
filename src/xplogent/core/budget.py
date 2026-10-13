@@ -16,10 +16,10 @@ from xplogent.memory.store import Store
 
 
 def _local_midnight() -> float:
+    # Let the C library work out whether midnight itself was in DST (tm_isdst=-1);
+    # reusing *now's* DST flag is an hour off on the days the clocks change.
     now = time.localtime()
-    midnight = time.struct_time((now.tm_year, now.tm_mon, now.tm_mday, 0, 0, 0,
-                                 now.tm_wday, now.tm_yday, now.tm_isdst))
-    return time.mktime(midnight)
+    return time.mktime((now.tm_year, now.tm_mon, now.tm_mday, 0, 0, 0, 0, 0, -1))
 
 
 def today_spend(store: Store) -> float:

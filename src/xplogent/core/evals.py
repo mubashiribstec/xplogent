@@ -68,9 +68,17 @@ async def judge_answer(judge: Provider, prompt: str, criteria: str, answer: str)
         data = _extract_json(reply.content)
     except Exception:  # noqa: BLE001 - judging must never crash a suite
         data = {}
-    if data:
-        passed = bool(data.get("pass", False))
-        score = float(data.get("score", 1.0 if passed else 0.0))
+    if isinstance(data, dict) and data:
+        raw_pass = data.get("pass", False)
+        # A judge that writes "false" as a string must not count as a pass.
+        passed = (raw_pass.strip().lower() in ("true", "yes", "pass", "1")
+                  if isinstance(raw_pass, str) else bool(raw_pass))
+        try:
+            score = float(data.get("score", 1.0 if passed else 0.0))
+        except (TypeError, ValueError):  # e.g. "score": "high"
+            score = 1.0 if passed else 0.0
+        if score != score:  # NaN
+            score = 0.0
         return passed, max(0.0, min(1.0, score)), str(data.get("reason", ""))
     # Heuristic fallback when the judge is unavailable: substring match on criteria.
     ok = bool(criteria) and criteria.lower() in answer.lower()

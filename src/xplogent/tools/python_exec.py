@@ -6,7 +6,12 @@ import asyncio
 import base64
 import sys
 
-from xplogent.core.backends import TerminalBackend, resolve_backend
+from xplogent.core.backends import (
+    TerminalBackend,
+    communicate,
+    group_kwargs,
+    resolve_backend,
+)
 from xplogent.safety.approval import RiskLevel
 from xplogent.tools.base import Tool, ToolResult
 
@@ -50,11 +55,11 @@ class PythonExecTool(Tool):
                 sys.executable, "-c", code,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **group_kwargs(),
             )
             try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                stdout, stderr = await communicate(proc, timeout)
             except TimeoutError:
-                proc.kill()
                 return ToolResult.failure(f"Execution timed out after {timeout}s")
         except Exception as exc:  # noqa: BLE001
             return ToolResult.failure(f"Failed to execute: {exc}")

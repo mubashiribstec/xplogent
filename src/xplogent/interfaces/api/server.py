@@ -11,7 +11,6 @@ importing this module never requires FastAPI unless you actually serve.
 
 import asyncio
 import os
-import uuid
 
 from xplogent.core import guide, updater
 from xplogent.core.config import (
@@ -22,13 +21,13 @@ from xplogent.core.config import (
 )
 from xplogent.core.events import EventBus
 from xplogent.core.orchestrator import AgentSpec
+from xplogent.interfaces.api.wschannel import WsChannel
 from xplogent.memory.manager import MemoryManager
 from xplogent.memory.store import Store
 from xplogent.memory.vector import Embedder
 from xplogent.monitor.recorder import TraceRecorder
 from xplogent.providers.registry import available_providers, build_provider
 from xplogent.runtime import build_orchestrator, build_runtime
-from xplogent.safety.approval import ApprovalRequest
 from xplogent.tools.registry import _BUILTIN_GROUPS
 
 
@@ -314,7 +313,10 @@ def create_app():
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fh:
             fh.write(png)
             path = fh.name
-        res = await AnalyzeImageTool().run(path=path, question="What color is this image?")
+        try:
+            res = await AnalyzeImageTool().run(path=path, question="What color is this image?")
+        finally:
+            os.unlink(path)
         return {"ok": res.ok, "model": model,
                 "reply": res.output if res.ok else res.error}
 
@@ -429,22 +431,9 @@ def create_app():
             return
         await websocket.accept()
         bus = EventBus()
-        loop = asyncio.get_event_loop()
-        pending: dict[str, asyncio.Future] = {}
-
-        async def approve(reqo: ApprovalRequest) -> bool:
-            approval_id = uuid.uuid4().hex[:8]
-            fut: asyncio.Future = loop.create_future()
-            pending[approval_id] = fut
-            await websocket.send_json({
-                "type": "approval_required", "id": approval_id,
-                "tool": reqo.tool, "risk": reqo.risk.value,
-                "reason": reqo.reason, "arguments": reqo.arguments,
-            })
-            try:
-                return await asyncio.wait_for(fut, timeout=300)
-            except TimeoutError:
-                return False
+        chan = WsChannel(websocket)
+        send = chan.send
+        approve = chan.approve
 
         # Persistent session: reuse the one the client passes, else create one.
         cfg = load_config()
@@ -454,7 +443,7 @@ def create_app():
             s = Store(cfg.db_path)
             session_id = s.create_session(title="chat")
             s.close()
-        await websocket.send_json({"type": "session", "id": session_id})
+        await send({"type": "session", "id": session_id})
 
         # One runtime at a time; rebuilt (and history-reloaded) on model switch.
         current = {"model": None, "runtime": None}
@@ -475,7 +464,7 @@ def create_app():
 
         async def forward() -> None:
             async for ev in bus.stream():
-                await websocket.send_json({"type": ev.type.value, **ev.data})
+                await send({"type": ev.type.value, **ev.data})
 
         forwarder = asyncio.create_task(forward())
 
@@ -497,16 +486,10 @@ def create_app():
                 runtime = await get_runtime(model, gen_params)
                 await runtime.agent.run(msg.get("task", ""), images=images)
             except Exception as exc:  # noqa: BLE001 - never leave the chat stuck
-                try:
-                    await websocket.send_json({"type": "error", "message": f"run failed: {exc}"})
-                except Exception:  # noqa: BLE001
-                    pass
+                await send({"type": "error", "message": f"run failed: {exc}"})
             finally:
                 running["on"] = False
-                try:
-                    await websocket.send_json({"type": "done"})
-                except Exception:  # noqa: BLE001
-                    pass
+                await send({"type": "done"})
 
         async def handle_council(msg: dict) -> None:
             """Ask several models the same question at once, then synthesize."""
@@ -525,20 +508,20 @@ def create_app():
                     async for ev in provider.stream(base):
                         if ev.kind == StreamKind.TOKEN:
                             parts.append(ev.text)
-                            await websocket.send_json({"type": "council_token",
+                            await send({"type": "council_token",
                                                        "channel": model, "text": ev.text})
                         elif ev.kind == StreamKind.DONE and ev.message and not parts:
                             parts.append(ev.message.content)
-                            await websocket.send_json({"type": "council_token",
+                            await send({"type": "council_token",
                                                        "channel": model,
                                                        "text": ev.message.content})
                 except Exception as exc:  # noqa: BLE001 - one model failing must not sink the rest
-                    await websocket.send_json({"type": "council_token", "channel": model,
+                    await send({"type": "council_token", "channel": model,
                                                "text": f"[error: {exc}]"})
                 finally:
                     await provider.aclose()
                 answers[model] = "".join(parts)
-                await websocket.send_json({"type": "council_done", "channel": model})
+                await send({"type": "council_done", "channel": model})
 
             await asyncio.gather(*[run_one(m) for m in models])
 
@@ -556,11 +539,11 @@ def create_app():
                              Message(role=Role.USER, content=sp)]):
                         if ev.kind == StreamKind.TOKEN:
                             synthesis += ev.text
-                            await websocket.send_json({"type": "council_token",
+                            await send({"type": "council_token",
                                                        "channel": "synthesis", "text": ev.text})
                 finally:
                     await provider.aclose()
-                await websocket.send_json({"type": "council_done", "channel": "synthesis"})
+                await send({"type": "council_done", "channel": "synthesis"})
 
             # Persist the turn so it appears in history.
             if session_id is not None:
@@ -570,26 +553,21 @@ def create_app():
                 store.add_message(session_id, "assistant",
                                   synthesis or "\n\n".join(f"**{m}**: {a}" for m, a in answers.items()))
                 store.close()
-            await websocket.send_json({"type": "done"})
+            await send({"type": "done"})
 
         async def guarded(coro) -> None:
             """Run a handler so it always ends the turn, even on failure."""
             try:
                 await coro
             except Exception as exc:  # noqa: BLE001
-                for payload in ({"type": "error", "message": str(exc)}, {"type": "done"}):
-                    try:
-                        await websocket.send_json(payload)
-                    except Exception:  # noqa: BLE001
-                        pass
+                await send({"type": "error", "message": str(exc)})
+                await send({"type": "done"})
 
         async def keepalive() -> None:
             # Ping the client periodically so idle proxies don't drop a long turn.
             while True:
                 await asyncio.sleep(20)
-                try:
-                    await websocket.send_json({"type": "ping"})
-                except Exception:  # noqa: BLE001
+                if not await send({"type": "ping"}):
                     return
 
         pinger = asyncio.create_task(keepalive())
@@ -605,20 +583,21 @@ def create_app():
                     if rt is not None:
                         rt.agent.inject(str(msg.get("text") or msg.get("task") or ""))
                 elif kind == "task" and len([m for m in msg.get("models", []) if m]) > 1:
-                    asyncio.create_task(guarded(handle_council(msg)))
+                    chan.spawn(guarded(handle_council(msg)))
                 elif kind == "task":
-                    asyncio.create_task(handle_task(msg))
+                    chan.spawn(handle_task(msg))
                 elif kind == "cancel":
                     rt = current.get("runtime")
                     if rt is not None:
                         rt.agent.cancel()
                 elif kind == "approval":
-                    fut = pending.pop(msg.get("id", ""), None)
-                    if fut and not fut.done():
-                        fut.set_result(bool(msg.get("allowed")))
+                    chan.resolve(str(msg.get("id", "")), bool(msg.get("allowed")))
         except WebSocketDisconnect:
             pass
         finally:
+            # Stop this socket's runs (denying any pending approval) before the
+            # runtime they use is closed underneath them.
+            await chan.close()
             pinger.cancel()
             await bus.close()
             forwarder.cancel()
@@ -633,57 +612,51 @@ def create_app():
             return
         await websocket.accept()
         bus = EventBus()
-        loop = asyncio.get_event_loop()
-        pending: dict[str, asyncio.Future] = {}
+        chan = WsChannel(websocket)
+        send = chan.send
         runtime_box: dict = {"rt": None}
-
-        async def approve(reqo: ApprovalRequest) -> bool:
-            approval_id = uuid.uuid4().hex[:8]
-            fut: asyncio.Future = loop.create_future()
-            pending[approval_id] = fut
-            await websocket.send_json({
-                "type": "approval_required", "id": approval_id, "tool": reqo.tool,
-                "risk": reqo.risk.value, "reason": reqo.reason, "arguments": reqo.arguments,
-            })
-            try:
-                return await asyncio.wait_for(fut, timeout=300)
-            except TimeoutError:
-                return False
 
         async def forward() -> None:
             async for ev in bus.stream():
-                await websocket.send_json({"type": ev.type.value, **ev.data})
+                await send({"type": ev.type.value, **ev.data})
 
         forwarder = asyncio.create_task(forward())
 
         async def handle(msg: dict) -> None:
             from xplogent.core.operator import build_operator
 
-            rt = build_operator(bus=bus, approve=approve,
-                                 max_steps=int(msg.get("max_steps", 30)))
-            runtime_box["rt"] = rt
+            rt = None
             try:
+                rt = build_operator(bus=bus, approve=chan.approve,
+                                    max_steps=int(msg.get("max_steps", 30)))
+                runtime_box["rt"] = rt
                 await rt.agent.run(str(msg.get("goal", "")))
+            except Exception as exc:  # noqa: BLE001 - always end the run for the UI
+                await send({"type": "error", "message": f"operator failed: {exc}"})
             finally:
-                await rt.aclose()
                 runtime_box["rt"] = None
-            await websocket.send_json({"type": "done"})
+                if rt is not None:
+                    await rt.aclose()
+                await send({"type": "done"})
 
         try:
             while True:
                 msg = await websocket.receive_json()
                 kind = msg.get("type")
                 if kind == "start":
-                    asyncio.create_task(handle(msg))
+                    # One computer-use run per socket: two would fight over the mouse.
+                    if chan.busy():
+                        await send({"type": "error", "message": "an operator run is already active"})
+                    else:
+                        chan.spawn(handle(msg))
                 elif kind == "cancel" and runtime_box["rt"] is not None:
                     runtime_box["rt"].agent.cancel()
                 elif kind == "approval":
-                    fut = pending.pop(msg.get("id", ""), None)
-                    if fut and not fut.done():
-                        fut.set_result(bool(msg.get("allowed")))
+                    chan.resolve(str(msg.get("id", "")), bool(msg.get("allowed")))
         except WebSocketDisconnect:
             pass
         finally:
+            await chan.close()
             await bus.close()
             forwarder.cancel()
             if runtime_box["rt"] is not None:
@@ -837,7 +810,7 @@ def create_app():
         if req.auto_approve:
             from xplogent.safety.approval import RiskLevel
 
-            async def approve(reqo: ApprovalRequest) -> bool:  # noqa: F811
+            async def approve(reqo) -> bool:  # noqa: F811
                 return reqo.risk != RiskLevel.CRITICAL
 
         runtime = build_orchestrator(bus=mbus, approve=approve)
@@ -1469,7 +1442,10 @@ def create_app():
         with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
             tmp.write(data)
             tmp_path = tmp.name
-        return await asyncio.to_thread(backup_mod.restore_backup, tmp_path)
+        try:
+            return await asyncio.to_thread(backup_mod.restore_backup, tmp_path)
+        finally:
+            os.unlink(tmp_path)  # may hold API keys when the backup included secrets
 
     @app.get("/export/knowledge")
     async def export_knowledge() -> dict:
@@ -1568,7 +1544,8 @@ def run_server(host: str | None = None, port: int | None = None,
     host = host or os.environ.get("XPLOGENT_API_HOST", "127.0.0.1")
     port = int(port or os.environ.get("XPLOGENT_API_PORT", 8765))
     global _serve_args
-    _serve_args = ["up", "--port", str(port)]
+    # Keep the bind address after a self-update restart, and never pop a browser tab.
+    _serve_args = ["up", "--port", str(port), "--host", host, "--no-browser"]
 
     # Security: when exposed beyond localhost, require an access token. Generate
     # and persist one automatically if the operator hasn't set their own.

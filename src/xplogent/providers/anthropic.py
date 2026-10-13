@@ -63,27 +63,29 @@ class AnthropicProvider(Provider):
             if m.role == Role.SYSTEM:
                 system_parts.append(m.content)
             elif m.role == Role.TOOL:
-                out.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": m.tool_call_id or "",
-                                "content": m.content,
-                            }
-                        ],
-                    }
-                )
+                block = {"type": "tool_result", "tool_use_id": m.tool_call_id or "",
+                         "content": m.content or "(no output)"}
+                # All results for one assistant turn belong in a single user message.
+                prev = out[-1] if out else None
+                if (prev and prev["role"] == "user" and isinstance(prev["content"], list)
+                        and prev["content"] and prev["content"][0].get("type") == "tool_result"):
+                    prev["content"].append(block)
+                else:
+                    out.append({"role": "user", "content": [block]})
             elif m.role == Role.ASSISTANT:
-                content: list[dict[str, Any]] = []
+                # Signed thinking blocks must come first and be echoed back unchanged,
+                # otherwise a thinking + tool-use conversation is rejected on step 2.
+                content: list[dict[str, Any]] = [dict(b) for b in m.thinking_blocks]
                 if m.content:
                     content.append({"type": "text", "text": m.content})
                 for tc in m.tool_calls:
                     content.append(
                         {"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.arguments}
                     )
-                out.append({"role": "assistant", "content": content or ""})
+                if not content:
+                    # Anthropic rejects empty assistant content (e.g. before a nudge).
+                    content = [{"type": "text", "text": "(no reply)"}]
+                out.append({"role": "assistant", "content": content})
             elif m.images:  # USER with vision input
                 parts: list[dict[str, Any]] = []
                 if m.content:
@@ -133,6 +135,8 @@ class AnthropicProvider(Provider):
         tool_calls: list[ToolCall] = []
         cur_tool: dict[str, Any] | None = None
         cur_json = ""
+        cur_thinking: dict[str, Any] | None = None
+        thinking_blocks: list[dict[str, Any]] = []
         usage = {"input_tokens": 0, "output_tokens": 0}
 
         async with self._client.stream("POST", "/messages", json=payload) as resp:
@@ -143,6 +147,12 @@ class AnthropicProvider(Provider):
                     continue
                 event = json.loads(line[len("data:"):].strip())
                 etype = event.get("type")
+                if etype == "error":
+                    # e.g. overloaded_error mid-stream: raise so the agent's retry applies
+                    # instead of silently returning a truncated/empty answer.
+                    err = event.get("error") or {}
+                    raise RuntimeError(f"anthropic stream error: {err.get('type', 'error')}: "
+                                       f"{err.get('message', '')}")
                 if etype == "message_start":
                     u = (event.get("message") or {}).get("usage") or {}
                     usage["input_tokens"] = int(u.get("input_tokens", 0))
@@ -157,6 +167,12 @@ class AnthropicProvider(Provider):
                         cur_tool = {"id": block.get("id") or f"call_{uuid.uuid4().hex[:8]}",
                                     "name": block.get("name", "")}
                         cur_json = ""
+                    elif block.get("type") == "thinking":
+                        cur_thinking = {"type": "thinking", "thinking": block.get("thinking", ""),
+                                        "signature": block.get("signature", "")}
+                    elif block.get("type") == "redacted_thinking":
+                        thinking_blocks.append({"type": "redacted_thinking",
+                                                "data": block.get("data", "")})
                 elif etype == "content_block_delta":
                     delta = event.get("delta", {})
                     if delta.get("type") == "text_delta":
@@ -165,6 +181,13 @@ class AnthropicProvider(Provider):
                         yield StreamEvent(kind=StreamKind.TOKEN, text=text)
                     elif delta.get("type") == "input_json_delta":
                         cur_json += delta.get("partial_json", "")
+                    elif delta.get("type") == "thinking_delta" and cur_thinking is not None:
+                        cur_thinking["thinking"] += delta.get("thinking", "")
+                    elif delta.get("type") == "signature_delta" and cur_thinking is not None:
+                        cur_thinking["signature"] += delta.get("signature", "")
+                elif etype == "content_block_stop" and cur_thinking is not None:
+                    thinking_blocks.append(cur_thinking)
+                    cur_thinking = None
                 elif etype == "content_block_stop" and cur_tool is not None:
                     try:
                         args = json.loads(cur_json) if cur_json else {}
@@ -174,7 +197,7 @@ class AnthropicProvider(Provider):
                     cur_tool = None
 
         final = Message(role=Role.ASSISTANT, content="".join(content_parts),
-                        tool_calls=tool_calls,
+                        tool_calls=tool_calls, thinking_blocks=thinking_blocks,
                         usage=usage if usage["input_tokens"] or usage["output_tokens"] else None)
         yield StreamEvent(kind=StreamKind.DONE, message=final)
 

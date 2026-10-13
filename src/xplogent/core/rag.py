@@ -138,14 +138,37 @@ async def ingest_text(store, embedder: Embedder, content: str, title: str = "pas
     return {"ok": True, "ingested": [title], "skipped": 0, "chunks": len(pieces)}
 
 
+async def backfill_embeddings(store, embedder: Embedder, limit: int = 64) -> int:
+    """Embed chunks stored without a vector (ingested while embeddings were down).
+
+    Returns how many were filled. Bounded per call so a search never pays for a
+    whole re-index at once.
+    """
+    if not embedder.available:
+        return 0
+    missing = store.chunks_missing_embeddings(limit)
+    if not missing:
+        return 0
+    vecs = await embedder.embed([c["content"] for c in missing])
+    filled = 0
+    for c, vec in zip(missing, vecs, strict=False):
+        if vec:
+            store.set_chunk_embedding(c["id"], vec)
+            filled += 1
+    return filled
+
+
 async def hybrid_search(store, embedder: Embedder, query: str, k: int = 5) -> list[dict[str, Any]]:
     """Fuse semantic + bm25 results with reciprocal-rank fusion; returns cited chunks."""
     fts = store.search_chunks_fts(query, limit=20)
     fts_rank = {row["id"]: i for i, row in enumerate(fts)}
 
     sem_rank: dict[int, int] = {}
-    chunks = store.all_chunks()
     qvec = await embedder.embed_one(query)
+    if qvec:
+        # Embeddings work now: give a batch of earlier vector-less chunks their vectors.
+        await backfill_embeddings(store, embedder)
+    chunks = store.all_chunks()
     if qvec and chunks:
         scored = [(c, cosine(qvec, c["embedding"])) for c in chunks if c["embedding"]]
         scored.sort(key=lambda t: t[1], reverse=True)

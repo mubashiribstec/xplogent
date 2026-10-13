@@ -13,7 +13,11 @@ missing client yields a clear error instead of a crash.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import shlex
+import signal
+import subprocess
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -32,18 +36,53 @@ class TerminalBackend(ABC):
         raise NotImplementedError
 
 
+def group_kwargs() -> dict:
+    """Start the child in its own process group so a timeout can kill everything it
+    spawned (``sh -c "a | b"``, background jobs), not just the outer shell."""
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+    return {"start_new_session": True}
+
+
+def kill_tree(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           capture_output=True, timeout=10)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
+
+
+async def communicate(proc: asyncio.subprocess.Process, timeout: float) -> tuple[bytes, bytes]:
+    """``proc.communicate()`` with a timeout; on timeout *or cancellation* the whole
+    process group is killed and reaped before the exception propagates."""
+    try:
+        return await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except BaseException:
+        kill_tree(proc)
+        with contextlib.suppress(BaseException):
+            await asyncio.wait_for(proc.wait(), 5)
+        raise
+
+
 async def _exec(argv: list[str], timeout: int) -> tuple[int, str, str]:
     """Run an argv list, returning ``(exit_code, stdout, stderr)``."""
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            **group_kwargs(),
         )
     except FileNotFoundError:
         return 127, "", f"'{argv[0]}' was not found on this machine."
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        out, err = await communicate(proc, timeout)
     except TimeoutError:
-        proc.kill()
         return 124, "", f"Command timed out after {timeout}s"
     return proc.returncode or 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
@@ -56,14 +95,13 @@ class LocalBackend(TerminalBackend):
         try:
             proc = await asyncio.create_subprocess_shell(
                 command, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, cwd=cwd,
+                stderr=asyncio.subprocess.PIPE, cwd=cwd, **group_kwargs(),
             )
         except Exception as exc:  # noqa: BLE001
             return 1, "", f"Failed to run command: {exc}"
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            out, err = await communicate(proc, timeout)
         except TimeoutError:
-            proc.kill()
             return 124, "", f"Command timed out after {timeout}s"
         return proc.returncode or 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 

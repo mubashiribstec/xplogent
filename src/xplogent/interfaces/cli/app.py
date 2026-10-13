@@ -18,6 +18,7 @@ import asyncio
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -38,8 +39,10 @@ def _make_approver():
     async def approve(req: ApprovalRequest) -> bool:
         console.print(
             Panel(
-                f"[bold]{req.tool}[/]  risk=[yellow]{req.risk.value}[/]\n"
-                f"{req.reason or ''}\n\n{req.arguments}",
+                # Model-chosen text must not be able to restyle/hide parts of what
+                # the user is approving (e.g. "[black on black]...[/]").
+                f"[bold]{escape(req.tool)}[/]  risk=[yellow]{req.risk.value}[/]\n"
+                f"{escape(req.reason or '')}\n\n{escape(str(req.arguments))}",
                 title="⚠ approval required",
                 border_style="yellow",
             )
@@ -53,16 +56,17 @@ def _make_approver():
 async def _render_events(bus: EventBus) -> None:
     async for ev in bus.stream():
         if ev.type == EventType.TOKEN:
-            console.print(ev.data.get("text", ""), end="")
+            console.print(ev.data.get("text", ""), end="", markup=False, highlight=False)
         elif ev.type == EventType.MESSAGE:
             console.print()  # newline after streamed tokens
         elif ev.type == EventType.TOOL_CALL:
-            console.print(f"\n[cyan]→ {ev.data['tool']}[/] {ev.data.get('arguments', {})}")
+            console.print(f"\n[cyan]→ {escape(str(ev.data['tool']))}[/] "
+                          f"{escape(str(ev.data.get('arguments', {})))}")
         elif ev.type == EventType.TOOL_RESULT:
             ok = ev.data.get("ok")
             mark = "[green]✓[/]" if ok else "[red]✗[/]"
             out = str(ev.data.get("output", ""))
-            console.print(f"{mark} [dim]{out[:500]}[/]")
+            console.print(f"{mark} [dim]{escape(out[:500])}[/]")
         elif ev.type == EventType.MEMORY:
             console.print(
                 f"[dim]🧠 recalled {ev.data.get('facts',0)} facts, "
@@ -76,7 +80,7 @@ async def _render_events(bus: EventBus) -> None:
                 + "[/]"
             )
         elif ev.type == EventType.ERROR:
-            console.print(f"[red]error:[/] {ev.data.get('message')}")
+            console.print(f"[red]error:[/] {escape(str(ev.data.get('message')))}")
 
 
 # ── commands ──────────────────────────────────────────────────────────────────
@@ -134,7 +138,7 @@ def run(task: str) -> None:
         await bus.close()
         await consumer
         await runtime.aclose()
-        console.print(Panel(answer or "(no answer)", title="answer", border_style="green"))
+        console.print(Panel(escape(answer or "(no answer)"), title="answer", border_style="green"))
 
     asyncio.run(_go())
 
@@ -385,17 +389,18 @@ async def _render_multi(bus: EventBus) -> None:
         elif ev.type == EventType.AGENT_SPAWN:
             console.print(f"[green]🟢 {who}[/] ([dim]{d.get('role')}[/]) started")
         elif ev.type == EventType.TASK_UPDATE:
-            console.print(f"[blue]📋 {d.get('title')}[/]: {d.get('status')}")
+            console.print(f"[blue]📋 {escape(str(d.get('title')))}[/]: {d.get('status')}")
         elif ev.type == EventType.AGENT_MESSAGE:
             to = d.get("recipient") or "all"
-            console.print(f"[magenta]💬 {d.get('sender')} → {to}:[/] {d.get('content')}")
+            console.print(f"[magenta]💬 {escape(str(d.get('sender')))} → {escape(str(to))}:[/] "
+                          f"{escape(str(d.get('content')))}")
         elif ev.type == EventType.TOOL_CALL:
             console.print(f"   [cyan]{who} → {d.get('tool')}[/]")
         elif ev.type == EventType.TOOL_RESULT:
             mark = "[green]✓[/]" if d.get("ok") else "[red]✗[/]"
-            console.print(f"   {mark} [dim]{str(d.get('output',''))[:200]}[/]")
+            console.print(f"   {mark} [dim]{escape(str(d.get('output',''))[:200])}[/]")
         elif ev.type == EventType.MESSAGE:
-            console.print(f"[bold]{who}:[/] {d.get('content')}")
+            console.print(f"[bold]{who}:[/] {escape(str(d.get('content')))}")
         elif ev.type == EventType.SKILL:
             console.print(f"[magenta]✨ {who} learned {d.get('facts',0)} fact(s)[/]")
         elif ev.type == EventType.ERROR:
@@ -422,7 +427,7 @@ def orchestrate(goal: str, max: int = 0, mode: str = "auto") -> None:
     async def _go() -> None:
         bus = EventBus()
         runtime = build_orchestrator(bus=bus, approve=_make_approver())
-        console.print(Panel(f"Goal: [bold]{goal}[/]\nmax concurrent: "
+        console.print(Panel(f"Goal: [bold]{escape(goal)}[/]\nmax concurrent: "
                             f"{max or runtime.orchestrator.default_max}",
                             title="🧠 Xplogent orchestrator", border_style="cyan"))
         consumer = asyncio.create_task(_render_multi(bus))
