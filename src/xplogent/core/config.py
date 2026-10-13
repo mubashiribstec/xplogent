@@ -3,7 +3,7 @@
 Precedence (highest wins):
     1. Environment variables (``XPLOGENT_*`` and provider keys)
     2. User config at ``$XPLOGENT_HOME/config.yaml`` (default ``~/.xplogent``)
-    3. Packaged ``config/default.yaml``
+    3. Packaged ``xplogent/config/default.yaml``
 """
 
 from __future__ import annotations
@@ -15,8 +15,9 @@ from typing import Any
 
 import yaml
 
-_PACKAGE_ROOT = Path(__file__).resolve().parents[3]
-_DEFAULT_CONFIG = _PACKAGE_ROOT / "config" / "default.yaml"
+# Defaults ship inside the package (src/xplogent/config/default.yaml) so wheels and
+# normal `pip install`s work, not only editable/source checkouts.
+_DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config" / "default.yaml"
 
 
 def xplogent_home() -> Path:

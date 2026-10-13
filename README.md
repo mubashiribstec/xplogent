@@ -45,7 +45,7 @@ xplogent team -a "scout:researcher:find facts about X" \
 ```
 
 Agents share a **message bus** (broadcast + direct messages) and a **task board**.
-Each agent runs under a **role profile** (see `roles:` in `config/default.yaml`)
+Each agent runs under a **role profile** (see `roles:` in `src/xplogent/config/default.yaml`)
 that limits its tools, risk policy, filesystem paths, and network access — so you
 control exactly what every agent may do. Watch it all live in the **Mission
 Control** dashboard (agent cards with pause/cancel, kanban, agent chatter) or in
@@ -104,6 +104,18 @@ xplogent update                            # pull + reinstall from git
 xplogent serve                             # API only (no browser)
 ```
 
+### Linux server (Docker or systemd + HTTPS)
+
+```bash
+# Docker Compose + automatic HTTPS (Caddy):
+cd deploy/docker && cp .env.example .env && nano .env && docker compose up -d --build
+# or directly on the host as a hardened systemd service:
+sudo ./deploy/install-server.sh
+```
+
+Both require an access token and install from the pinned `requirements/server.lock`.
+Full guide (DNS, firewall, phone agent, GPU speech, backups, security): [docs/deploy-linux.md](docs/deploy-linux.md).
+
 ### Manual install
 
 ```bash
@@ -161,7 +173,9 @@ the `mcp.server.agent_role` profile; confirm-tier actions are blocked unless
 | `control` | `pyautogui`, `mss`, Playwright (GUI + browser control) |
 | `memory` | `sqlite-vec` + local embeddings |
 | `api` | FastAPI + Uvicorn (REST/WebSocket) |
-| `voice` | Whisper STT + TTS |
+| `voice` | Whisper STT + TTS (microphone/speaker, desktop) |
+| `voip` | Phone-call agent dependencies (server side: faster-whisper, no audio devices) |
+| `server` | Headless Linux server set: providers, api, voip, mcp, scheduler, rag, security (no desktop/torch) |
 | `mcp` | MCP client **and** server (run `xplogent mcp`) |
 | `all` | everything above + dev tools |
 
@@ -169,7 +183,7 @@ the `mcp.server.agent_role` profile; confirm-tier actions are blocked unless
 
 Full PC control is powerful, so it is **safe by default**. Every tool call is
 risk-classified (`low`/`medium`/`high`/`critical`) and routed through an
-approval policy you control in `config/default.yaml`. Destructive commands match
+approval policy you control in `src/xplogent/config/default.yaml`. Destructive commands match
 a deny-list and are blocked outright. In the CLI you approve inline; over the API
 the agent emits an `approval_required` event your UI resolves.
 

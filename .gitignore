@@ -25,6 +25,8 @@ xplogent_data/
 # Node / web
 web/node_modules/
 web/dist/
+src/xplogent/web_dist/
+requirements/*.tmp
 web/*.tsbuildinfo
 node_modules/
 npm-debug.log*

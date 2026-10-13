@@ -391,3 +391,34 @@ def test_webhook_to_media_socket_end_to_end(monkeypatch):
     assert call["contact_name"] == "Ann Lee"                   # caller-ID matched the contact
     assert any(t["speaker"] == "caller" for t in call["turns"])
     assert call["outcome"] == "abandoned" and call["cost"] > 0
+
+
+# ── Python 3.13 has no stdlib audioop: the pure-Python fallback must behave the same ──
+def test_audio_fallback_matches_audioop(monkeypatch):
+    from xplogent.voip import audio
+
+    pcm = tone_pcm(60)
+    with_audioop = (audio.pcm16_to_mulaw(pcm), audio.mulaw_to_pcm16(audio.pcm16_to_mulaw(pcm)),
+                    audio.rms(pcm), len(audio.resample(pcm, 8000, 16000)))
+    monkeypatch.setattr(audio, "_audioop", None)           # force the fallback code paths
+    mu = audio.pcm16_to_mulaw(pcm)
+    back = audio.mulaw_to_pcm16(mu)
+    assert mu == with_audioop[0]                           # identical G.711 encoding
+    assert back == with_audioop[1]                         # identical decoding
+    assert audio.rms(pcm) == pytest.approx(with_audioop[2], rel=0.01)
+    assert len(audio.resample(pcm, 8000, 16000)) == pytest.approx(with_audioop[3], rel=0.02)
+    # the VAD runs on the fallback too
+    vad = audio.VAD(threshold=500, silence_ms=100, min_speech_ms=60)
+    events = [vad.feed(tone_pcm(20)) for _ in range(6)] + [vad.feed(b"\x00\x00" * 160) for _ in range(8)]
+    assert "speech_start" in events and "speech_end" in events
+
+
+def test_empty_speech_config_falls_back_to_defaults():
+    # default.yaml ships `base_url: ""`; that must mean "use the OpenAI endpoint", not "no URL".
+    from xplogent.voip.providers import OpenAICompatSTT, OpenAICompatTTS, build_stt, build_tts
+
+    stt = build_stt({"provider": "openai-compatible", "base_url": "", "model": ""})
+    tts = build_tts({"base_url": "", "model": "", "voice": ""})
+    assert isinstance(stt, OpenAICompatSTT) and str(stt._client.base_url).startswith("https://api.openai.com")
+    assert isinstance(tts, OpenAICompatTTS) and str(tts._client.base_url).startswith("https://api.openai.com")
+    assert stt.model == "whisper-1" and tts.model == "tts-1" and tts.voice == "alloy"

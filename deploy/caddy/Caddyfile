@@ -1,0 +1,31 @@
+# Reverse proxy with automatic HTTPS (Let's Encrypt) for Xplogent.
+#
+# Used by both deployments:
+#   Docker  : docker-compose sets DOMAIN and XPLOGENT_UPSTREAM=xplogent:8765
+#   Host    : DOMAIN=agent.example.com caddy run --config deploy/caddy/Caddyfile
+#             (XPLOGENT_UPSTREAM defaults to 127.0.0.1:8765)
+#
+# WebSockets (dashboard chat, phone-call audio at /ws/telephony/...) pass through
+# reverse_proxy automatically; flush_interval -1 keeps streaming responses live.
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy {$XPLOGENT_UPSTREAM:127.0.0.1:8765} {
+		flush_interval -1
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

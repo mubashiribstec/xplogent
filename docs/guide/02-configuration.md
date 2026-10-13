@@ -10,7 +10,7 @@ editing files under `~/.xplogent/`.
 | Environment variables (`XPLOGENT_*`, API keys) | per-shell overrides | highest |
 | `~/.xplogent/.env` | your API keys (written by the GUI / wizard) | high |
 | `~/.xplogent/config.yaml` | your saved settings | medium |
-| packaged `config/default.yaml` | defaults | lowest |
+| packaged `src/xplogent/config/default.yaml` | defaults | lowest |
 
 ## Common settings
 

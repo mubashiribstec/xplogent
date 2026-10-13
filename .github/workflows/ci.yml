@@ -14,13 +14,19 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.11"]
+        include:
+          # 3.12 / 3.13 on Linux: 3.13 has no stdlib audioop, exercising the pure-Python fallback.
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
-        run: pip install -e ".[dev,api,mcp]"
+        run: pip install -e ".[dev,api,mcp,security,rag,scheduler]"
       - name: Lint
         run: ruff check src tests
       - name: Type check (non-blocking)
@@ -41,3 +47,42 @@ jobs:
           node-version: "20"
       - run: npm install
       - run: npm run build
+
+  lock:
+    name: Server — install from lock file
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned server dependencies
+        run: |
+          pip install -r requirements/server.lock
+          pip install --no-deps -e .
+          pip install pytest pytest-asyncio
+      - run: pytest -q
+
+  docker:
+    name: Docker — build image & validate compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        working-directory: deploy/docker
+        env:
+          DOMAIN: ci.example.com
+          XPLOGENT_AUTH_TOKEN: ci-token
+        run: |
+          cp .env.example .env
+          docker compose config -q
+          docker compose --profile gpu-speech config -q
+      - name: Build image
+        run: docker build -f deploy/docker/Dockerfile -t xplogent:ci .
+      - name: Smoke test the container
+        run: |
+          docker run -d --name xpl -e XPLOGENT_AUTH_TOKEN=ci-token -p 8765:8765 xplogent:ci
+          for i in $(seq 1 30); do curl -sf localhost:8765/health && break; sleep 1; done
+          curl -sf localhost:8765/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8765/config)" = "401"
+

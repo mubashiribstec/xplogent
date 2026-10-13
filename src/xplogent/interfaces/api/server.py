@@ -77,6 +77,10 @@ def create_app():
     _STATIC_EXT = (".js", ".css", ".svg", ".png", ".ico", ".woff", ".woff2", ".map", ".webmanifest")
 
     def _auth_token() -> str:
+        # XPLOGENT_AUTH_TOKEN (set by the Docker/systemd deployments) wins over config.
+        env = os.environ.get("XPLOGENT_AUTH_TOKEN", "").strip()
+        if env:
+            return env
         return str(load_config().raw.get("server", {}).get("auth_token") or "").strip()
 
     def _is_public(path: str, method: str) -> bool:
@@ -1477,6 +1481,9 @@ def _dashboard_dir():
     from pathlib import Path
 
     candidates = []
+    if os.environ.get("XPLOGENT_WEB_DIR"):                       # explicit override (Docker)
+        candidates.append(Path(os.environ["XPLOGENT_WEB_DIR"]))
+    candidates.append(Path(__file__).resolve().parents[2] / "web_dist")   # packaged build
     root = updater.repo_root()
     if root:
         candidates.append(root / "web" / "dist")
@@ -1509,9 +1516,13 @@ def run_server(host: str | None = None, port: int | None = None,
     # Security: when exposed beyond localhost, require an access token. Generate
     # and persist one automatically if the operator hasn't set their own.
     _is_local = host in ("127.0.0.1", "localhost", "::1", "")
-    if not _is_local:
+    # Behind a reverse proxy the app binds to localhost but is still internet-facing,
+    # so the deployment files set XPLOGENT_BEHIND_PROXY=1 to demand a token anyway.
+    _behind_proxy = os.environ.get("XPLOGENT_BEHIND_PROXY", "").lower() in ("1", "true", "yes")
+    if not _is_local or _behind_proxy:
         cfg = load_config()
-        if not str(cfg.raw.get("server", {}).get("auth_token") or "").strip():
+        if (not os.environ.get("XPLOGENT_AUTH_TOKEN", "").strip()
+                and not str(cfg.raw.get("server", {}).get("auth_token") or "").strip()):
             import secrets as _pysecrets
 
             token = _pysecrets.token_urlsafe(32)
@@ -1530,4 +1541,5 @@ def run_server(host: str | None = None, port: int | None = None,
             print("Dashboard not built yet — serving API only. "
                   "Build it with: cd web && npm install && npm run build")
 
-    uvicorn.run(create_app(), host=host, port=port)
+    uvicorn.run(create_app(), host=host, port=port, proxy_headers=True,
+                forwarded_allow_ips=os.environ.get("XPLOGENT_FORWARDED_ALLOW_IPS", "127.0.0.1"))

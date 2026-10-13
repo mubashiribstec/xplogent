@@ -2,6 +2,13 @@
 # Xplogent installer (Linux / macOS). Installs once and puts `xplogent` on PATH.
 set -e
 
+# Usage: ./install.sh [--server]
+#   (default)  desktop install: everything, including GUI/mic control and local embeddings
+#   --server   headless Linux server: pinned lock file, no desktop packages, no torch.
+#              For a full systemd + HTTPS deployment use deploy/install-server.sh instead.
+MODE=desktop
+[ "${1:-}" = "--server" ] && MODE=server
+
 echo "🧠 Installing Xplogent…"
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -13,7 +20,7 @@ echo "• Python $(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])')"
 # Prefer pipx (isolated, auto-on-PATH); fall back to a venv.
 if command -v pipx >/dev/null 2>&1; then
   echo "• Installing with pipx…"
-  pipx install --force ".[all]"
+  if [ "$MODE" = server ]; then pipx install --force ".[server]"; else pipx install --force ".[all]"; fi
   pipx ensurepath >/dev/null 2>&1 || true
   RUN="xplogent"
 else
@@ -22,7 +29,11 @@ else
   # shellcheck disable=SC1091
   . .venv/bin/activate
   python -m pip install --upgrade pip >/dev/null
-  pip install -e ".[all]"
+  if [ "$MODE" = server ]; then
+    pip install -r requirements/server.lock && pip install --no-deps -e .
+  else
+    pip install -e ".[all]"
+  fi
   RUN=".venv/bin/xplogent"
   echo "• Tip: add '$(pwd)/.venv/bin' to your PATH, or use pipx for a global command."
 fi

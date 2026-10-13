@@ -1,0 +1,31 @@
+[Unit]
+Description=Xplogent AI agent server
+Documentation=https://github.com/mubashiribstec/Ai-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xplogent
+Group=xplogent
+WorkingDirectory=/opt/xplogent
+EnvironmentFile=/etc/xplogent/xplogent.env
+# Binds localhost only; Caddy/nginx terminates HTTPS in front of it.
+ExecStart=/opt/xplogent/.venv/bin/xplogent up --no-browser --host 127.0.0.1 --port 8765
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+# Moderate hardening. Deliberately NOT ProtectHome/ProtectSystem=strict: the agent's
+# shell and python tools need to work, and the in-app updater writes to /opt/xplogent.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

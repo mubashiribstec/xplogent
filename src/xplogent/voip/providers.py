@@ -145,13 +145,13 @@ def build_stt(cfg: dict[str, Any]) -> STT:
         return WhisperLocalSTT(model=cfg.get("model", "small.en"), device=cfg.get("device", "auto"),
                                language=cfg.get("language", "en"))
     key = os.environ.get(str(cfg.get("api_key_env", "OPENAI_API_KEY")), "")
-    return OpenAICompatSTT(base_url=cfg.get("base_url", "https://api.openai.com/v1"),
-                           model=cfg.get("model", "whisper-1"), api_key=key,
+    return OpenAICompatSTT(base_url=cfg.get("base_url") or "https://api.openai.com/v1",
+                           model=cfg.get("model") or "whisper-1", api_key=key,
                            language=cfg.get("language", "en"))
 
 
 def build_tts(cfg: dict[str, Any]) -> TTS:
     key = os.environ.get(str(cfg.get("api_key_env", "OPENAI_API_KEY")), "")
-    return OpenAICompatTTS(base_url=cfg.get("base_url", "https://api.openai.com/v1"),
-                           model=cfg.get("model", "tts-1"), voice=cfg.get("voice", "alloy"),
+    return OpenAICompatTTS(base_url=cfg.get("base_url") or "https://api.openai.com/v1",
+                           model=cfg.get("model") or "tts-1", voice=cfg.get("voice") or "alloy",
                            api_key=key, sample_rate=int(cfg.get("sample_rate", 24000)))

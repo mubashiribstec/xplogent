@@ -54,7 +54,7 @@ voip = [
 ]
 # Plugins / MCP
 mcp = [
-    "mcp>=1.0",
+    "mcp>=1.0,<2",
 ]
 # Cron-expression schedules (natural-language schedules work without this)
 scheduler = [
@@ -75,6 +75,10 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
 ]
+# Headless Linux server: no desktop control, microphone, or multi-GB torch download.
+server = [
+    "xplogent[providers,api,voip,mcp,scheduler,rag,security]",
+]
 all = [
     "xplogent[providers,control,memory,api,voice,voip,mcp,scheduler,rag,security,dev]",
 ]
@@ -91,7 +95,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-xplogent = ["skills_library/**/*.md"]
+xplogent = ["skills_library/**/*.md", "config/*.yaml", "web_dist/**/*"]
 
 [tool.ruff]
 line-length = 100
