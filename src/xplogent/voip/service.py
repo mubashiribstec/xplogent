@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 import uuid
 from typing import Any
 
@@ -40,15 +41,30 @@ def load_playbook() -> str:
         return ""
 
 
+def is_outbound(info: dict[str, str]) -> bool:
+    return str(info.get("direction", "")).lower() in ("outgoing", "outbound")
+
+
+def customer_number(info: dict[str, str]) -> str:
+    """The customer's number: who called us (inbound) or who we called (outbound).
+
+    Using ``from`` for both put *our own* number on outbound calls, so the contact
+    lookup, DNC request and status updates all hit the wrong record.
+    """
+    return info.get("to", "") if is_outbound(info) else info.get("from", "")
+
+
 def build_session(cfg: Config, store: Store, info: dict[str, str], *, send_audio, clear_audio=None,
                   hangup=None, transfer=None, stt=None, tts=None, provider=None,
                   retrieve=None) -> tuple[CallSession, int, CallBrain]:
     """Create a CallSession + its call row. Injected parts make this unit-testable."""
     v = cfg.voip or {}
-    caller = info.get("from", "")
-    contact = store.find_contact_by_phone(caller) if caller else None
-    direction = "outbound" if info.get("direction") == "outgoing" else "inbound"
-    call_id = store.start_call(direction, caller, info.get("to", ""),
+    customer = customer_number(info)
+    contact = store.find_contact_by_phone(customer) if customer else None
+    if contact is not None and store.is_dnc(customer):
+        contact = {**contact, "do_not_call": True}
+    direction = "outbound" if is_outbound(info) else "inbound"
+    call_id = store.start_call(direction, info.get("from", ""), info.get("to", ""),
                                provider_call_id=info.get("call_control_id", ""),
                                contact_id=contact["id"] if contact else None)
 
@@ -75,18 +91,28 @@ def build_session(cfg: Config, store: Store, info: dict[str, str], *, send_audio
     return session, call_id, brain
 
 
-def _make_retriever(cfg: Config, store: Store, k: int):
-    from xplogent.core.rag import hybrid_search
-    from xplogent.memory.vector import Embedder
-    from xplogent.providers.registry import build_provider
+class _Retriever:
+    """Knowledge lookup for one call; owns an embedding client that must be closed."""
 
-    embedder = Embedder(build_provider(cfg.embedding_model))
+    def __init__(self, cfg: Config, store: Store, k: int) -> None:
+        from xplogent.memory.vector import Embedder
+        from xplogent.providers.registry import build_provider
 
-    async def retrieve(query: str) -> list[str]:
-        hits = await hybrid_search(store, embedder, query, k=k)
+        self.store, self.k = store, k
+        self.embedder = Embedder(build_provider(cfg.embedding_model))
+
+    async def __call__(self, query: str) -> list[str]:
+        from xplogent.core.rag import hybrid_search
+
+        hits = await hybrid_search(self.store, self.embedder, query, k=self.k)
         return [h["content"] for h in hits]
 
-    return retrieve
+    async def aclose(self) -> None:
+        await self.embedder.provider.aclose()
+
+
+def _make_retriever(cfg: Config, store: Store, k: int):
+    return _Retriever(cfg, store, k)
 
 
 def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
@@ -110,16 +136,64 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
 
 
 class VoipService:
+    PENDING_TTL = 120.0      # a stream token unused this long belongs to a call that never connected
+    CALL_TTL = 4 * 3600.0    # call info whose hangup webhook was lost
+
     def __init__(self) -> None:
         self.pending: dict[str, dict[str, str]] = {}      # stream token -> call info
         self.by_call: dict[str, dict[str, str]] = {}      # call_control_id -> info
         self.active: dict[int, dict[str, Any]] = {}       # call row id -> live info
         self._tasks: set[asyncio.Task] = set()
+        self._seen_at: dict[str, float] = {}              # token / call id -> created
+
+    def _remember(self, table: dict, key: str, value: dict[str, str]) -> None:
+        table[key] = value
+        self._seen_at[key] = time.monotonic()
+
+    def _expire(self) -> None:
+        now = time.monotonic()
+        for table, ttl in ((self.pending, self.PENDING_TTL), (self.by_call, self.CALL_TTL)):
+            for key in [k for k in table if now - self._seen_at.get(k, now) > ttl]:
+                table.pop(key, None)
+                self._seen_at.pop(key, None)
+
+    @staticmethod
+    def _blocked(cfg: Config, info: dict[str, str]) -> bool:
+        """Outbound calls to a do-not-call number must not go ahead."""
+        if not is_outbound(info):
+            return False
+        store = Store(cfg.db_path)
+        try:
+            return store.is_dnc(customer_number(info))
+        finally:
+            store.close()
 
     def _spawn(self, coro) -> None:
         task = asyncio.create_task(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    # -- outbound ---------------------------------------------------------------------
+    async def dial(self, to_number: str, cfg: Config | None = None) -> dict[str, Any]:
+        """Place an outbound call. The do-not-call list is checked *before* dialing:
+        ringing a number that opted out is already the violation."""
+        cfg = cfg or load_config()
+        v = cfg.voip or {}
+        store = Store(cfg.db_path)
+        try:
+            if store.is_dnc(to_number):
+                return {"ok": False, "error": "number is on the do-not-call list"}
+        finally:
+            store.close()
+        from_number, connection = str(v.get("from_number", "")), str(v.get("connection_id", ""))
+        if not (from_number and connection):
+            return {"ok": False, "error": "voip.from_number and voip.connection_id are required"}
+        client = TelnyxClient(api_key_env=str(v.get("api_key_env", "TELNYX_API_KEY")))
+        try:
+            res = await client.dial(to_number, from_number, connection)
+        finally:
+            await client.aclose()
+        return {"ok": True, "call": res.get("data", res)}
 
     # -- carrier webhook -------------------------------------------------------------
     async def handle_webhook(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -128,21 +202,33 @@ class VoipService:
         if not v.get("enabled"):
             return {"ok": False, "error": "voip is disabled"}
         ev = parse_webhook(payload)
-        client = TelnyxClient(api_key_env=str(v.get("api_key_env", "TELNYX_API_KEY")))
-        if ev["event"] == "call.initiated" and ev["direction"] in ("incoming", "inbound"):
-            self.by_call[ev["call_control_id"]] = ev
-            self._spawn(self._act(client, client.answer(ev["call_control_id"])))
+        self._expire()
+        ccid = ev["call_control_id"]
+
+        def client() -> TelnyxClient:
+            return TelnyxClient(api_key_env=str(v.get("api_key_env", "TELNYX_API_KEY")))
+
+        if ev["event"] == "call.initiated":
+            self._remember(self.by_call, ccid, ev)
+            if not is_outbound(ev):
+                c = client()
+                self._spawn(self._act(c, c.answer(ccid)))
         elif ev["event"] == "call.answered":
-            info = self.by_call.get(ev["call_control_id"], ev)
+            info = {**self.by_call.get(ccid, ev), "call_control_id": ccid}
+            if self._blocked(cfg, info):
+                _log.warning("outbound call to a do-not-call number: hanging up")
+                c = client()
+                self._spawn(self._act(c, c.hangup(ccid)))
+                return {"ok": True, "blocked": "do_not_call"}
             token = uuid.uuid4().hex
-            self.pending[token] = {**info, "call_control_id": ev["call_control_id"]}
+            self._remember(self.pending, token, info)
             base = str(v.get("public_url", "")).rstrip("/")
             ws_url = base.replace("https://", "wss://").replace("http://", "ws://") + f"/ws/telephony/{token}"
-            self._spawn(self._act(client, client.start_stream(ev["call_control_id"], ws_url)))
+            c = client()
+            self._spawn(self._act(c, c.start_stream(ccid, ws_url)))
         elif ev["event"] == "call.hangup":
-            self.by_call.pop(ev["call_control_id"], None)
-        else:
-            await client.aclose()
+            self.by_call.pop(ccid, None)
+            self._seen_at.pop(ccid, None)
         return {"ok": True}
 
     @staticmethod
@@ -156,7 +242,9 @@ class VoipService:
 
     # -- media socket -------------------------------------------------------------------
     async def run_media_socket(self, websocket, token: str) -> None:
+        self._expire()
         info = self.pending.pop(token, None)
+        self._seen_at.pop(token, None)
         if info is None:
             await websocket.close(code=1008)
             return
@@ -187,7 +275,7 @@ class VoipService:
         session, call_id, brain = build_session(
             cfg, store, info, send_audio=send_audio, clear_audio=clear_audio,
             hangup=hangup, transfer=transfer)
-        self.active[call_id] = {"from": info.get("from", ""), "started": session.started}
+        self.active[call_id] = {"from": customer_number(info), "started": session.started}
         started = False
         try:
             while not session.finished.is_set():
@@ -212,12 +300,15 @@ class VoipService:
         finally:
             self.active.pop(call_id, None)
             await session.stop()
-            result = finalize_call(cfg, store, call_id, session, brain, info.get("from", ""))
+            result = finalize_call(cfg, store, call_id, session, brain, customer_number(info))
             _log.info("call %s finished: %s", call_id, result)
-            for closer in (session.stt.aclose(), session.tts.aclose(), client.aclose(),
-                           brain.provider.aclose()):
+            closers = [session.stt.aclose, session.tts.aclose, client.aclose,
+                       brain.provider.aclose]
+            if hasattr(brain.retrieve, "aclose"):
+                closers.append(brain.retrieve.aclose)
+            for closer in closers:
                 with contextlib.suppress(Exception):
-                    await closer
+                    await closer()
             store.close()
             with contextlib.suppress(Exception):
                 await websocket.close()

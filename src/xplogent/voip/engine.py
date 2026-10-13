@@ -32,6 +32,7 @@ from xplogent.voip.brain import CallBrain
 _log = get_logger("voip.engine")
 
 FRAME_BYTES = 320  # 20 ms of 8 kHz 16-bit mono
+MULAW_FRAME = 160  # 20 ms of 8 kHz μ-law
 SendAudio = Callable[[bytes], Awaitable[None]]
 Hook = Callable[..., Awaitable[None]]
 
@@ -44,7 +45,8 @@ class CallSession:
                  on_turn: Callable[[str, str], None] | None = None,
                  greeting: str = "", vad: VAD | None = None,
                  idle_prompt_s: float = 12.0, idle_hangup_s: float = 30.0,
-                 max_call_s: float = 900.0) -> None:
+                 max_call_s: float = 900.0, realtime: bool = True,
+                 lead_s: float = 0.2) -> None:
         self.brain, self.stt, self.tts = brain, stt, tts
         self.send_audio, self.clear_audio = send_audio, clear_audio
         self.hangup_cb, self.transfer_cb = hangup, transfer
@@ -52,6 +54,9 @@ class CallSession:
         self.greeting = greeting
         self.vad = vad or VAD()
         self.idle_prompt_s, self.idle_hangup_s, self.max_call_s = idle_prompt_s, idle_hangup_s, max_call_s
+        # Send audio at playback speed (keeping only ``lead_s`` buffered at the carrier),
+        # so "speaking" means the caller is actually hearing it and barge-in can stop it.
+        self.realtime, self.lead_s = realtime, lead_s
 
         self.started = time.time()
         self.finished = asyncio.Event()
@@ -170,22 +175,60 @@ class CallSession:
 
     # -- speaking ----------------------------------------------------------------
     async def _say(self, text: str) -> None:
-        """Synthesize ``text`` and stream it to the caller as 20 ms μ-law frames."""
+        """Synthesize ``text`` and stream it to the caller as 20 ms μ-law frames.
+
+        Frames go out at playback speed. Pushing a whole reply at once (TTS is faster
+        than real time) left ``_speaking`` False while the carrier was still playing
+        seconds of buffered audio, so barge-in never triggered.
+        """
         self._speaking = True
+        loop = asyncio.get_running_loop()
+        play_end = loop.time()  # when the carrier will have played everything sent
+
+        async def push(frame: bytes) -> None:
+            nonlocal play_end
+            if self.realtime:
+                ahead = play_end - loop.time()
+                if ahead > self.lead_s:
+                    await asyncio.sleep(ahead - self.lead_s)
+            await self.send_audio(frame)
+            play_end = max(play_end, loop.time()) + len(frame) / 8000.0
+
         try:
             carry = b""
             rs = Resampler(self.tts.sample_rate, 8000)  # one per utterance: no clicks between chunks
             async for pcm in self.tts.synthesize(text):
-                pcm8k = rs.feed(pcm)
-                carry += pcm16_to_mulaw(pcm8k)
-                while len(carry) >= 160 * 5:  # send in ~100 ms chunks
-                    await self.send_audio(carry[:800])
-                    carry = carry[800:]
+                carry += pcm16_to_mulaw(rs.feed(pcm))
+                while len(carry) >= MULAW_FRAME:
+                    await push(carry[:MULAW_FRAME])
+                    carry = carry[MULAW_FRAME:]
             if carry:
-                await self.send_audio(carry)
+                await push(carry)
+            if self.realtime:
+                # Still "speaking" until the caller has heard the last frame.
+                remaining = play_end - loop.time()
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
         finally:
             self._speaking = False
             self._last_activity = time.time()
+
+    async def _prompt(self, text: str, *, interrupt: bool = False,
+                      wait: bool = False) -> asyncio.Task | None:
+        """Speak a watchdog line as the tracked turn, so barge-in can stop it and it
+        never talks over (or races) a reply that is already in progress."""
+        busy = self._turn_task is not None and not self._turn_task.done()
+        if busy and not interrupt:
+            return None
+        if busy:
+            self._turn_task.cancel()
+            await asyncio.wait([self._turn_task])
+        self._record("agent", text)
+        task = asyncio.create_task(self._say(text))
+        self._turn_task = task
+        if wait:
+            await asyncio.wait([task])
+        return task
 
     # -- watchdog: silence + max duration -------------------------------------------
     async def _watch(self) -> None:
@@ -193,16 +236,22 @@ class CallSession:
             await asyncio.sleep(1.0)
             now = time.time()
             if now - self.started > self.max_call_s:
-                await self._say("I'm sorry, we've reached the time limit for this call. Goodbye.")
+                await self._prompt("I'm sorry, we've reached the time limit for this call. "
+                                   "Goodbye.", interrupt=True, wait=True)
                 await self._hangup()
                 return
             if self._speaking or self.vad.in_speech:
                 continue
+            if self._turn_task is not None and not self._turn_task.done():
+                continue  # the agent is still working on a reply: not silence
             idle = now - self._last_activity
             if idle > self.idle_hangup_s:
-                await self._say("I haven't heard anything, so I'll end the call. Goodbye.")
+                task = await self._prompt(
+                    "I haven't heard anything, so I'll end the call. Goodbye.", wait=True)
+                if task is not None and task.cancelled():
+                    continue  # the caller spoke over the goodbye: they're still there
                 await self._hangup()
                 return
             if idle > self.idle_prompt_s and not self._idle_prompted:
                 self._idle_prompted = True
-                await self._say("Are you still there?")
+                await self._prompt("Are you still there?")

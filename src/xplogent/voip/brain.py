@@ -54,8 +54,8 @@ TOOLS = [
                        "note": {"type": "string"}}, "required": ["when"]}),
     ToolSpec("transfer_to_human", "Hand the call to a human agent.", {
         "type": "object", "properties": {"reason": {"type": "string"}}}),
-    ToolSpec("lookup_customer", "Look up a customer record by name or phone number.", {
-        "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
+    ToolSpec("lookup_customer", "Re-read the record of the customer on this call (if known).", {
+        "type": "object", "properties": {}}),
     ToolSpec("end_call", "Politely end the call after saying goodbye.", {
         "type": "object", "properties": {"reason": {"type": "string"}}}),
 ]
@@ -137,6 +137,9 @@ class CallBrain:
                          + (f", status {c['status']}" if c.get("status") else "")
                          + (f", notes: {c['notes']}" if c.get("notes") else "")
                          + (f", {extra}" if extra else ""))
+            if c.get("do_not_call"):
+                parts.append("This customer is on the do-not-call list: help with what they "
+                             "ask, but do not sell, pitch or offer callbacks.")
         else:
             parts.append("CUSTOMER: unknown caller (ask politely for their name if needed).")
         parts.append("KNOWLEDGE (most relevant first):\n"
@@ -165,14 +168,13 @@ class CallBrain:
             st.end = True
             return "call will end after your goodbye"
         if name == "lookup_customer":
-            if self.store is None:
-                return "customer lookup unavailable"
-            q = str(args.get("query", ""))
-            found = self.store.find_contact_by_phone(q) or next(iter(self.store.list_contacts(1, q)), None)
-            if not found:
-                return "no matching customer"
-            return (f"{found.get('name')}, phone {found.get('phone')}, status {found.get('status')}, "
-                    f"notes {found.get('notes') or 'none'}")
+            # Only ever the record of the person on this call. Searching by name or
+            # digits let any caller ask the agent to read out other customers' data.
+            c = self.contact
+            if not c:
+                return "no customer record for this caller"
+            return (f"{c.get('name')}, phone {c.get('phone')}, status {c.get('status')}, "
+                    f"notes {c.get('notes') or 'none'}")
         return f"unknown tool {name}"
 
     # -- one conversational turn ---------------------------------------------------

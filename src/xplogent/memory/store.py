@@ -926,13 +926,15 @@ class Store:
         return out
 
     def find_contact_by_phone(self, phone: str) -> dict[str, Any] | None:
-        norm = self.normalize_phone(phone)
-        if not norm:
+        # Match on the last 10 digits so +1-555... and 555... both hit. Too-short input
+        # ("123", a withheld caller ID) must not match whichever contact ends that way.
+        key = self.phone_key(phone)
+        if len(key) < 7:
             return None
-        # Match on the last 10 digits so +1-555... and 555... both hit.
-        tail = norm[-10:]
-        for r in self._query("SELECT * FROM contacts WHERE phone LIKE ? ORDER BY id DESC LIMIT 1",
-                             (f"%{tail}",)):
+        for r in self._query("SELECT * FROM contacts WHERE phone LIKE ? ORDER BY id DESC",
+                             (f"%{key}",)):
+            if self.phone_key(r["phone"]) != key:
+                continue
             d = dict(r)
             d["fields"] = json.loads(d.get("fields") or "{}")
             return d
@@ -983,13 +985,23 @@ class Store:
             (call_id,))]
         return d
 
+    @staticmethod
+    def phone_key(phone: str) -> str:
+        """Comparable form of a number: its last 10 digits (``+1 555…`` == ``555…``)."""
+        return "".join(c for c in (phone or "") if c.isdigit())[-10:]
+
     def add_dnc(self, phone: str, reason: str = "") -> None:
         self._write("INSERT OR REPLACE INTO dnc (phone, reason, created_at) VALUES (?,?,?)",
                     (self.normalize_phone(phone), reason, time.time()))
 
     def is_dnc(self, phone: str) -> bool:
-        norm = self.normalize_phone(phone)
-        return bool(norm) and bool(self._query("SELECT 1 FROM dnc WHERE phone=?", (norm,)))
+        # Same last-10-digit rule as contact matching: a number stored as +15550100
+        # must block a dial to 5550100, and vice versa.
+        key = self.phone_key(phone)
+        if len(key) < 7:
+            return False
+        rows = self._query("SELECT phone FROM dnc WHERE phone LIKE ?", (f"%{key}",))
+        return any(self.phone_key(r["phone"]) == key for r in rows)
 
     def close(self) -> None:
         with self._lock:
