@@ -23,6 +23,13 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   );
 }
 
+// Only real web/mail links become clickable: a model (or a document it quotes) could
+// otherwise emit [click](javascript:...) and run script in the dashboard's origin.
+function safeHref(url: string): string | null {
+  const u = url.trim();
+  return /^(https?:|mailto:)/i.test(u) ? u : null;
+}
+
 function inline(text: string): (JSX.Element | string)[] {
   // **bold**, `code`, and [label](url) — minimal but safe.
   const nodes: (JSX.Element | string)[] = [];
@@ -34,7 +41,12 @@ function inline(text: string): (JSX.Element | string)[] {
     if (m.index > last) nodes.push(text.slice(last, m.index));
     if (m[2]) nodes.push(<strong key={i++}>{m[2]}</strong>);
     else if (m[3]) nodes.push(<code key={i++}>{m[3]}</code>);
-    else if (m[4]) nodes.push(<a key={i++} href={m[5]} target="_blank" rel="noreferrer">{m[4]}</a>);
+    else if (m[4]) {
+      const href = safeHref(m[5]);
+      nodes.push(href
+        ? <a key={i++} href={href} target="_blank" rel="noopener noreferrer">{m[4]}</a>
+        : <span key={i++}>{m[4]}</span>);
+    }
     last = m.index + m[0].length;
   }
   if (last < text.length) nodes.push(text.slice(last));

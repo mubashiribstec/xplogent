@@ -39,12 +39,16 @@ export function Operator() {
     }
   };
 
+  // Close the socket when leaving the view (the server then stops the run).
+  useEffect(() => () => sock.current?.close(), []);
+
   const start = () => {
-    if (!goal.trim()) return;
+    if (!goal.trim() || running) return;
     setLines([]); setApprovals([]); setRunning(true);
-    const s = new OperatorSocket(onEvent, () => setRunning(false));
+    sock.current?.close();
+    const s = new OperatorSocket(onEvent, () => { setRunning(false); setApprovals([]); });
     sock.current = s;
-    setTimeout(() => s.start(goal.trim()), 150); // let the socket open
+    s.start(goal.trim());  // queued until the socket opens
   };
   const stop = () => { sock.current?.cancel(); setRunning(false); };
   const resolve = (id: string, ok: boolean) => {

@@ -8,6 +8,10 @@ export function getToken(): string { return localStorage.getItem(TOKEN_KEY) || "
 export function setToken(t: string) { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); }
 export function wsTokenParam(): string { const t = getToken(); return t ? `&token=${encodeURIComponent(t)}` : ""; }
 
+// Fired when the server rejects our token (rotated, or auth newly enabled): the app
+// listens for it and shows the login screen instead of failing every call silently.
+export const UNAUTHORIZED_EVENT = "xplogent:unauthorized";
+
 // Inject the bearer token into every same-origin request so existing call sites
 // don't each need to know about auth.
 window.fetch = ((input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -19,12 +23,34 @@ window.fetch = ((input: RequestInfo | URL, init: RequestInit = {}) => {
     if (!headers.has("Authorization")) headers.set("Authorization", `Bearer ${tok}`);
     init = { ...init, headers };
   }
-  return _origFetch(input as RequestInfo, init);
+  return _origFetch(input as RequestInfo, init).then((res) => {
+    if (sameOrigin && res.status === 401 && !url.includes("/auth/check")) {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
+    return res;
+  });
 }) as typeof fetch;
 
+// A malformed frame must not throw inside a socket handler (which kills the view).
+function parseFrame(data: unknown): XplogentEvent | null {
+  try {
+    const ev = JSON.parse(String(data));
+    return ev && typeof ev === "object" && typeof ev.type === "string" ? (ev as XplogentEvent) : null;
+  } catch {
+    return null;
+  }
+}
+
+function wsUrl(path: string): string {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${location.host}${path}`;
+}
+
 // Validate a token (or the absence of auth) without going through the wrapper,
-// so we can test a freshly typed token before storing it.
-export async function checkAuth(token?: string): Promise<{ required: boolean; ok: boolean }> {
+// so we can test a freshly typed token before storing it. Defaults to the stored
+// token: checking with none made every reload of a token-protected server show the
+// login screen again, even right after a successful login.
+export async function checkAuth(token: string = getToken()): Promise<{ required: boolean; ok: boolean }> {
   const headers: Record<string, string> = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
   try { return await (await _origFetch("/auth/check", { headers })).json(); }
@@ -42,11 +68,6 @@ export interface ApprovalRequest {
   risk: string;
   reason: string;
   arguments: Record<string, unknown>;
-}
-
-export async function getConfig(): Promise<Record<string, unknown>> {
-  const r = await fetch("/config");
-  return r.json();
 }
 
 export async function getSkills(): Promise<{ skills: { name: string; description: string; uses: number }[] }> {
@@ -67,6 +88,8 @@ export class XplogentSocket {
   private ws!: WebSocket;
   private closed = false;
   private retries = 0;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private outbox: string[] = [];   // sent before the socket opened; flushed on open
 
   constructor(
     private onEvent: (ev: XplogentEvent) => void,
@@ -77,23 +100,31 @@ export class XplogentSocket {
   }
 
   private connect() {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
+    this.timer = null;
+    if (this.closed) return;
     const qs = this.sessionId ? `?session_id=${this.sessionId}` : "?";
     this.onStatus?.("connecting");
-    this.ws = new WebSocket(`${proto}://${location.host}/ws${qs}${wsTokenParam()}`);
-    this.ws.onopen = () => { this.retries = 0; this.onStatus?.("online"); };
-    this.ws.onmessage = (m) => this.onEvent(JSON.parse(m.data) as XplogentEvent);
-    this.ws.onclose = () => {
-      if (this.closed) return;
+    const ws = new WebSocket(wsUrl(`/ws${qs}${wsTokenParam()}`));
+    this.ws = ws;
+    ws.onopen = () => {
+      this.retries = 0;
+      this.onStatus?.("online");
+      for (const m of this.outbox.splice(0)) ws.send(m);
+    };
+    ws.onmessage = (m) => { const ev = parseFrame(m.data); if (ev) this.onEvent(ev); };
+    ws.onclose = () => {
+      if (this.closed || ws !== this.ws) return;
       this.onStatus?.("offline");
       const delay = Math.min(1000 * 2 ** this.retries++, 10000);
-      setTimeout(() => this.connect(), delay);
+      this.timer = setTimeout(() => this.connect(), delay);
     };
-    this.ws.onerror = () => this.ws.close();
+    ws.onerror = () => ws.close();
   }
 
   private send(obj: unknown) {
-    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
+    const msg = JSON.stringify(obj);
+    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(msg);
+    else if (!this.closed && this.outbox.length < 20) this.outbox.push(msg);
   }
 
   sendTask(task: string, opts: TaskOptions & { images?: string[] } = {}) {
@@ -108,23 +139,35 @@ export class XplogentSocket {
   sendSteer(text: string) { this.send({ type: "steer", text }); }
   resolveApproval(id: string, allowed: boolean) { this.send({ type: "approval", id, allowed }); }
 
-  close() { this.closed = true; this.ws.close(); }
+  close() {
+    // No reconnect after an explicit close (a pending retry timer would revive it).
+    this.closed = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.outbox = [];
+    this.ws.close();
+  }
 }
 
 // Computer-use operator: drives the screen in a screenshot→analyze→act loop.
 export class OperatorSocket {
   private ws: WebSocket;
+  private outbox: string[] = [];
+  private closed = false;
   constructor(onEvent: (ev: XplogentEvent) => void, onClose?: () => void) {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    this.ws = new WebSocket(`${proto}://${location.host}/ws/operator?${wsTokenParam()}`);
-    this.ws.onmessage = (m) => onEvent(JSON.parse(m.data) as XplogentEvent);
-    this.ws.onclose = () => onClose?.();
+    this.ws = new WebSocket(wsUrl(`/ws/operator?${wsTokenParam()}`));
+    this.ws.onopen = () => { for (const m of this.outbox.splice(0)) this.ws.send(m); };
+    this.ws.onmessage = (m) => { const ev = parseFrame(m.data); if (ev) onEvent(ev); };
+    this.ws.onclose = () => { if (!this.closed) onClose?.(); };
   }
-  private send(o: unknown) { if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(o)); }
+  private send(o: unknown) {
+    const msg = JSON.stringify(o);
+    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(msg);
+    else if (this.ws.readyState === WebSocket.CONNECTING) this.outbox.push(msg);
+  }
   start(goal: string, maxSteps = 30) { this.send({ type: "start", goal, max_steps: maxSteps }); }
   cancel() { this.send({ type: "cancel" }); }
   resolveApproval(id: string, allowed: boolean) { this.send({ type: "approval", id, allowed }); }
-  close() { this.ws.close(); }
+  close() { this.closed = true; this.ws.close(); }
 }
 
 // ── Multi-agent orchestration + monitoring ────────────────────────────────────
@@ -142,7 +185,9 @@ export async function orchestrate(opts: OrchestrateOptions): Promise<{ run_id: s
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(opts),
   });
-  return r.json();
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data.run_id) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
 }
 
 export async function controlAgent(agentId: string, action: "pause" | "resume" | "cancel") {
@@ -584,14 +629,17 @@ export async function getGuidePage(slug: string): Promise<{ content: string }> {
 // Live monitor stream for one orchestration run.
 export class MonitorSocket {
   private ws: WebSocket;
+  private closed = false;
 
-  constructor(runId: string, onEvent: (ev: XplogentEvent) => void) {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    this.ws = new WebSocket(`${proto}://${location.host}/ws/monitor?run_id=${runId}${wsTokenParam()}`);
-    this.ws.onmessage = (m) => onEvent(JSON.parse(m.data) as XplogentEvent);
+  // ``onEnd`` fires when the server ends the stream (the run finished), not on close().
+  constructor(runId: string, onEvent: (ev: XplogentEvent) => void, onEnd?: () => void) {
+    this.ws = new WebSocket(wsUrl(`/ws/monitor?run_id=${encodeURIComponent(runId)}${wsTokenParam()}`));
+    this.ws.onmessage = (m) => { const ev = parseFrame(m.data); if (ev) onEvent(ev); };
+    this.ws.onclose = () => { if (!this.closed) onEnd?.(); };
   }
 
   close() {
+    this.closed = true;
     this.ws.close();
   }
 }

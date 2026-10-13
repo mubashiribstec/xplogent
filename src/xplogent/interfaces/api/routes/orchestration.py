@@ -36,10 +36,9 @@ async def orchestrate(req: OrchestrateRequest) -> dict:
     # critical ops stay denied by the role policy + deny-list.
     approve = None
     if req.auto_approve:
-        from xplogent.safety.approval import RiskLevel
+        from xplogent.safety.approval import auto_approve_up_to_high
 
-        async def approve(reqo) -> bool:  # noqa: F811
-            return reqo.risk != RiskLevel.CRITICAL
+        approve = auto_approve_up_to_high()
 
     runtime = deps.build_orchestrator(bus=mbus, approve=approve)
     orch = runtime.orchestrator
@@ -135,9 +134,12 @@ async def ws_monitor(websocket: WebSocket) -> None:
         while True:
             event = await queue.get()
             if event is None:
+                # Run finished: say so, then close, so the dashboard can re-enable Launch.
+                await websocket.send_json({"type": "run_done", "run_id": run_id or ""})
+                await websocket.close()
                 break
             await websocket.send_json({"type": event.type.value, **event.data})
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
         info["bus"].unsubscribe(queue)

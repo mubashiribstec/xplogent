@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LayoutGrid, Rocket } from "lucide-react";
 import { MonitorSocket, XplogentEvent, orchestrate } from "./api";
 import { AgentCard, AgentState } from "./AgentCard";
@@ -15,14 +15,21 @@ export function MissionControl() {
   const [tasks, setTasks] = useState<Record<string, TaskState>>({});
   const [messages, setMessages] = useState<AgentMsg[]>([]);
   const sock = useRef<MonitorSocket | null>(null);
+  const [error, setError] = useState("");
 
-  const upsertAgent = (id: string, patch: Partial<AgentState>) =>
+  // Stop listening when leaving the view.
+  useEffect(() => () => sock.current?.close(), []);
+
+  // ``patch`` may be a function of the current card: the socket handler is created once
+  // per launch, so reading ``agents`` from its closure would always see the empty map.
+  const upsertAgent = (id: string,
+                       patch: Partial<AgentState> | ((cur: AgentState) => Partial<AgentState>)) =>
     setAgents((prev) => {
       const cur = prev[id] ?? {
-        agent_id: id, name: String(patch.name ?? id), role: String(patch.role ?? ""),
-        status: "running", step: 0, tokens: 0, toolCalls: 0,
+        agent_id: id, name: id, role: "", status: "running", step: 0, tokens: 0, toolCalls: 0,
       };
-      return { ...prev, [id]: { ...cur, ...patch } };
+      const p = typeof patch === "function" ? patch(cur) : patch;
+      return { ...prev, [id]: { ...cur, ...p } };
     });
 
   const handle = (ev: XplogentEvent) => {
@@ -39,10 +46,10 @@ export function MissionControl() {
         upsertAgent(id, { step: Number(ev.step ?? 0) + 1, name: String(ev.agent_name) });
         break;
       case "token":
-        upsertAgent(id, { tokens: (agents[id]?.tokens ?? 0) + Math.ceil(String(ev.text ?? "").length / 4) });
+        upsertAgent(id, (cur) => ({ tokens: cur.tokens + Math.ceil(String(ev.text ?? "").length / 4) }));
         break;
       case "tool_call":
-        upsertAgent(id, { toolCalls: (agents[id]?.toolCalls ?? 0) + 1, current_tool: String(ev.tool) });
+        upsertAgent(id, (cur) => ({ toolCalls: cur.toolCalls + 1, current_tool: String(ev.tool) }));
         break;
       case "message":
         upsertAgent(id, { lastMessage: String(ev.content) });
@@ -67,19 +74,27 @@ export function MissionControl() {
 
   const launch = async () => {
     if (!goal.trim() || running) return;
-    setAgents({}); setTasks({}); setMessages([]);
+    setAgents({}); setTasks({}); setMessages([]); setError("");
     setRunning(true);
-    const { run_id } = await orchestrate({
-      goal, max_concurrent: maxConcurrent, mode: "auto", auto_approve: autoApprove,
-    });
-    setRunId(run_id);
-    sock.current = new MonitorSocket(run_id, handle);
+    sock.current?.close();
+    try {
+      const { run_id } = await orchestrate({
+        goal, max_concurrent: maxConcurrent, mode: "auto", auto_approve: autoApprove,
+      });
+      setRunId(run_id);
+      // The server closes the stream when the run finishes: re-enable Launch then.
+      sock.current = new MonitorSocket(run_id, handle, () => setRunning(false));
+    } catch (e) {
+      setError(`could not start the team: ${e instanceof Error ? e.message : String(e)}`);
+      setRunning(false);
+    }
   };
 
   return (
     <div className="mission">
       <div className="page-head" style={{ padding: "16px 24px 0" }}>
         <h1 style={{ fontSize: 20 }}><LayoutGrid size={20} /> Mission Control</h1>
+        {runId && <span className="dim">run {runId}</span>}
       </div>
       <div className="mission-bar">
         <input
@@ -97,9 +112,10 @@ export function MissionControl() {
           <input type="checkbox" checked={autoApprove}
                  onChange={(e) => setAutoApprove(e.target.checked)} /> auto-approve
         </label>
-        <button className="btn primary" onClick={launch} disabled={running && !!runId}>
-          <Rocket size={16} /> Launch team</button>
+        <button className="btn primary" onClick={launch} disabled={running}>
+          <Rocket size={16} /> {running ? "Running…" : "Launch team"}</button>
       </div>
+      {error && <p className="dim" style={{ padding: "0 24px", color: "var(--red, #e5484d)" }}>{error}</p>}
 
       <div className="mission-grid">
         <section>

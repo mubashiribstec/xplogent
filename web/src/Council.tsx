@@ -42,8 +42,7 @@ export function Council() {
     setCols({}); setDoneCh(new Set()); setRunning(true);
     sock.current?.close();
     sock.current = new XplogentSocket(handle, null);
-    // give the socket a tick to receive its session frame, then send
-    setTimeout(() => sock.current?.sendCouncil(task, selected, synth || selected[0]), 150);
+    sock.current.sendCouncil(task, selected, synth || selected[0]);  // queued until open
   };
 
   const channels = [...selected, "synthesis"];

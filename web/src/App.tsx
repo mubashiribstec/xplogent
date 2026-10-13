@@ -5,7 +5,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { Onboarding } from "./components/Onboarding";
 import { Login } from "./components/Login";
 import { useIsMobile } from "./hooks/useMediaQuery";
-import { checkAuth, getSessions, getStatus } from "./api";
+import { UNAUTHORIZED_EVENT, checkAuth, getSessions, getStatus, setToken } from "./api";
 import { Chat } from "./views/Chat";
 import { Runs } from "./views/Runs";
 import { Persona } from "./views/Persona";
@@ -45,6 +45,10 @@ export function App() {
   // Gate the app behind the access token when the backend requires one.
   useEffect(() => {
     checkAuth().then((r) => setAuthed(!r.required || r.ok));
+    // A 401 later on (token rotated / auth switched on): back to the login screen.
+    const onUnauthorized = () => { setToken(""); setAuthed(false); };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, []);
 
   // Health polling drives the rail status dot.

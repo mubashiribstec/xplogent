@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw } from "lucide-react";
 import {
   CallRow, CallTurn, VoipStatus, getCall, getCalls, getFullConfig, getVoipStatus, patchConfig,
@@ -97,19 +97,19 @@ export function Calls() {
             <thead><tr><th></th><th>When</th><th>Caller</th><th>Duration</th><th>Outcome</th><th>Est. cost</th></tr></thead>
             <tbody>
               {calls.map((c) => (
-                <>
-                  <tr key={c.id} style={{ cursor: "pointer" }}
+                <Fragment key={c.id}>
+                  <tr style={{ cursor: "pointer" }}
                     onClick={() => { const next = open === c.id ? null : c.id; setOpen(next); setTurns([]); }}>
                     <td>{open === c.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       {c.direction === "inbound" ? <PhoneIncoming size={14} /> : <PhoneOutgoing size={14} />}</td>
                     <td className="dim">{fmtTime(c.started_at)}</td>
-                    <td>{c.contact_name || c.from_number || "unknown"}</td>
+                    <td>{c.contact_name || (c.direction === "outbound" ? c.to_number : c.from_number) || "unknown"}</td>
                     <td>{fmtDur(c)}{c.status === "active" && <span className="badge warn" style={{ marginLeft: 6 }}>live</span>}</td>
                     <td>{c.outcome ? <span className="badge">{c.outcome}</span> : <span className="dim">—</span>}</td>
                     <td className="dim">${(c.cost ?? 0).toFixed(3)}</td>
                   </tr>
                   {open === c.id && (
-                    <tr key={`${c.id}-t`}><td colSpan={6}>
+                    <tr><td colSpan={6}>
                       {c.summary && <p className="dim" style={{ marginBottom: 6 }}><b>Summary:</b> {c.summary}</p>}
                       {turns.length === 0 && <p className="dim">no transcript yet</p>}
                       {turns.map((t, i) => (
@@ -120,7 +120,7 @@ export function Calls() {
                       ))}
                     </td></tr>
                   )}
-                </>
+                </Fragment>
               ))}
               {calls.length === 0 && <tr><td colSpan={6} className="dim">no calls yet</td></tr>}
             </tbody>

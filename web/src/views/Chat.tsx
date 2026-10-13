@@ -60,6 +60,12 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
   const [handsFree, setHandsFree] = useState(false);
   const handsFreeRef = useRef(false);
   const busyRef = useRef(false);
+  const loadSeq = useRef(0);  // ignore session loads that finish after a newer one started
+  const toMsgs = (r: { messages: any[] }): LogLine[] => r.messages.map((m: any) => ({
+    kind: m.role === "user" ? "user" : "assistant", text: m.content,
+  }));
+  const fail = (what: string) => (e: unknown) =>
+    toast(`${what}: ${e instanceof Error ? e.message : String(e)}`, "error");
 
   const pushAssistantToken = (text: string) =>
     setLog((l) => {
@@ -108,7 +114,7 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
         break;
       case "error": toast(String(ev.message ?? "error"), "error"); break;
       case "done":
-        setBusy(false); refreshSkills(); refreshSessions();
+        busyRef.current = false; setBusy(false); refreshSkills(); refreshSessions();
         if (handsFreeRef.current) voice.flush();
         break;
     }
@@ -129,8 +135,9 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
     if (s === "online" && busyRef.current) {
       busyRef.current = false; setBusy(false);
       if (sessionId.current) {
+        const seq = ++loadSeq.current;
         getSessionMessages(sessionId.current)
-          .then((r) => setLog(r.messages.map((m: any) => ({ kind: m.role === "user" ? "user" : "assistant", text: m.content }))))
+          .then((r) => { if (seq === loadSeq.current) setLog(toMsgs(r)); })
           .catch(() => {});
       }
     }
@@ -145,11 +152,15 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
     sessionId.current = id; setActiveId(id); setUsage(null);
     autoChat.current = false;  // per-chat approval doesn't carry across chats
     if (!autoSession.current) setAutoScope("");
+    // The old chat's run ends with its socket: don't leave this chat locked as "busy"
+    // or showing that run's approval prompt.
+    busyRef.current = false; setBusy(false); setApproval(null);
+    const seq = ++loadSeq.current;
     if (id) {
       localStorage.setItem("xplogent_session", String(id));
-      getSessionMessages(id).then((r) => setLog(r.messages.map((m: any) => ({
-        kind: m.role === "user" ? "user" : "assistant", text: m.content,
-      })))).catch(() => setLog([]));
+      getSessionMessages(id)
+        .then((r) => { if (seq === loadSeq.current) setLog(toMsgs(r)); })
+        .catch(() => { if (seq === loadSeq.current) setLog([]); });
     } else setLog([]);
     connect();
   };
@@ -164,16 +175,22 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
   const newChat = async () => {
     // End-of-conversation save: flush skills to the folder + distill MEMORY.md.
     if (log.length > 0) consolidateMemory().catch(() => {});
-    const { id } = await newSession(); loadSession(id); refreshSessions();
+    try {
+      const { id } = await newSession(); loadSession(id); refreshSessions();
+    } catch (e) { fail("could not start a new chat")(e); }
   };
   const removeSession = async (id: number) => {
-    await deleteSession(id);
-    if (id === activeId) { localStorage.removeItem("xplogent_session"); loadSession(null); }
-    refreshSessions(); toast("chat deleted", "success");
+    try {
+      await deleteSession(id);
+      if (id === activeId) { localStorage.removeItem("xplogent_session"); loadSession(null); }
+      refreshSessions(); toast("chat deleted", "success");
+    } catch (e) { fail("could not delete the chat")(e); }
   };
   const rename = async (id: number, current: string) => {
     const title = window.prompt("Rename chat:", current);
-    if (title?.trim()) { await renameSession(id, title.trim()); refreshSessions(); }
+    if (!title?.trim()) return;
+    try { await renameSession(id, title.trim()); refreshSessions(); }
+    catch (e) { fail("could not rename the chat")(e); }
   };
 
   const addFiles = async (files: FileList | File[]) => {
@@ -183,7 +200,10 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
   };
 
   const sendText = (text: string) => {
-    if ((!text.trim() && !images.length) || busy) return;
+    // busyRef, not busy: hands-free calls this from a listener created earlier, and two
+    // quick utterances must not start two runs before React re-renders.
+    if ((!text.trim() && !images.length) || busyRef.current) return;
+    busyRef.current = true;
     lastTask.current = text;
     setLog((l) => [...l, { kind: "user", text: text + (images.length ? `  ·  📎 ${images.length} image(s)` : "") }]);
     sock.current?.sendTask(text, {
@@ -192,6 +212,11 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
     });
     setInput(""); setImages([]); setBusy(true);
   };
+  // Voice callbacks outlive the render they were created in: always call the latest
+  // sendText so they use the current model / options instead of the ones at toggle time.
+  const sendTextRef = useRef(sendText);
+  sendTextRef.current = sendText;
+
   const send = () => {
     const cmd = input.trim().match(/^\/undo(?:\s+(\d+))?$/i);
     if (cmd) { undo(Number(cmd[1] || 1)); setInput(""); return; }
@@ -210,9 +235,11 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
   // Roll back the last N exchanges (also typed as "/undo [N]").
   const undo = async (n = 1) => {
     if (!activeId) { toast("nothing to undo", "info"); return; }
-    const res = await undoTurns(activeId, n);
-    if (res.removed > 0) { loadSession(activeId); toast(`undid ${n} turn${n > 1 ? "s" : ""}`, "success"); }
-    else toast("nothing to undo", "info");
+    try {
+      const res = await undoTurns(activeId, n);
+      if (res.removed > 0) { loadSession(activeId); toast(`undid ${n} turn${n > 1 ? "s" : ""}`, "success"); }
+      else toast("nothing to undo", "info");
+    } catch (e) { fail("undo failed")(e); }
   };
 
   // Hands-free conversation: speak replies, auto-send finished utterances, barge-in.
@@ -221,7 +248,7 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
     setHandsFree(next); handsFreeRef.current = next;
     if (next) {
       if (!voice.supported) { toast("voice isn't supported in this browser", "error"); setHandsFree(false); handsFreeRef.current = false; return; }
-      voice.startListening({ onFinal: (t) => sendText(t), onSpeechStart: () => voice.cancelSpeak() });
+      voice.startListening({ onFinal: (t) => sendTextRef.current(t), onSpeechStart: () => voice.cancelSpeak() });
       toast("hands-free on — just talk", "success");
     } else { voice.stopListening(); voice.cancelSpeak(); }
   };
@@ -231,8 +258,9 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
     if (voice.listening) voice.stopListening();
     else voice.startListening({ onFinal: (t) => setInput((v) => (v ? v + " " : "") + t) });
   };
-  const stop = () => { sock.current?.cancel(); setBusy(false); };
-  const regenerate = () => { if (lastTask.current && !busy) { setInput(lastTask.current); setTimeout(send, 0); } };
+  const stop = () => { sock.current?.cancel(); busyRef.current = false; setBusy(false); };
+  // Re-send the last task directly (the old setInput + send() read the stale input).
+  const regenerate = () => { if (lastTask.current && !busyRef.current) sendText(lastTask.current); };
   const resolve = (allowed: boolean, scope: "" | "chat" | "session" = "") => {
     if (allowed && scope === "chat") { autoChat.current = true; setAutoScope("chat"); }
     if (allowed && scope === "session") { autoSession.current = true; setAutoScope("session"); }
