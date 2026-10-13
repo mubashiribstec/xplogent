@@ -95,8 +95,8 @@ async def test_handle_task_always_sends_done_on_error(tmp_path, monkeypatch):
     monkeypatch.setenv("XPLOGENT_HOME", str(tmp_path))
 
     # Force run-building to blow up so handle_task hits its error path.
-    import xplogent.interfaces.api.server as srv
-    monkeypatch.setattr(srv, "build_runtime",
+    import xplogent.interfaces.api.deps as deps
+    monkeypatch.setattr(deps, "build_runtime",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("build failed")))
 
     c = TestClient(create_app())

@@ -58,10 +58,13 @@ async def test_recorder_persists_events_and_metrics(monkeypatch):
 
 
 def test_api_app_builds_with_monitoring_routes():
+    from xplogent.interfaces.api.routes import ALL_ROUTERS
     from xplogent.interfaces.api.server import create_app
 
     app = create_app()
-    paths = {r.path for r in app.routes}
+    # HTTP routes via the public OpenAPI schema; WebSocket routes aren't in it.
+    paths = set(app.openapi()["paths"])
+    paths |= {r.path for router in ALL_ROUTERS for r in router.routes if hasattr(r, "path")}
     assert "/orchestrate" in paths
     assert "/runs/{run_id}/events" in paths
     assert "/ws/monitor" in paths

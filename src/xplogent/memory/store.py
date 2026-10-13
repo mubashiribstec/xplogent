@@ -15,6 +15,7 @@ import json
 import sqlite3
 import threading
 import time
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -229,14 +230,35 @@ CREATE TABLE IF NOT EXISTS dnc (
     created_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id);
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_msgs_run ON agent_messages(run_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON doc_chunks(doc_id);
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value INTEGER DEFAULT 0
+);
 CREATE INDEX IF NOT EXISTS idx_cases_eval ON eval_cases(eval_id);
 CREATE INDEX IF NOT EXISTS idx_evalruns_eval ON eval_runs(eval_id);
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(created_at);
 CREATE INDEX IF NOT EXISTS idx_kg_edge_subj ON kg_edges(subject);
 CREATE INDEX IF NOT EXISTS idx_kg_edge_obj ON kg_edges(object);
 """
+
+
+# Columns added after the initial schema (applied idempotently by Store._migrate).
+_MIGRATIONS = [
+    ("facts", "embed_model", "TEXT DEFAULT ''"),
+    ("skills", "embed_model", "TEXT DEFAULT ''"),
+    ("skills", "successes", "INTEGER DEFAULT 0"),
+    ("skills", "failures", "INTEGER DEFAULT 0"),
+    ("skills", "last_used", "REAL"),
+    ("skills", "tools", "TEXT DEFAULT ''"),     # JSON list of required tools
+    ("skills", "trigger", "TEXT DEFAULT ''"),   # when to use this skill
+    ("skills", "source", "TEXT DEFAULT ''"),    # learned | installed | pack id
+]
+# Stored in the database (PRAGMA user_version): changes whenever the schema text or
+# the migration list changes, so existing databases get upgraded automatically.
+SCHEMA_VERSION = zlib.crc32((_SCHEMA + repr(_MIGRATIONS) + "fts1").encode()) & 0x7FFFFFFF
 
 
 @dataclass
@@ -288,33 +310,38 @@ class SkillRow:
 class Store:
     def __init__(self, path: Path) -> None:
         self.path = path
-        self.conn = sqlite3.connect(str(path), check_same_thread=False)
+        self.conn = sqlite3.connect(str(path), check_same_thread=False, timeout=10)
         self.conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         self._fts = False
         with self._lock:
+            # Request handlers open a Store per call; re-running the schema script,
+            # migrations and FTS setup every time was most of that cost. The database
+            # records which schema it has, so this only runs when the schema changed.
+            if self.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION:
+                self._fts = bool(self.conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='doc_chunks_fts'").fetchone())
+                return
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(_SCHEMA)
             self.conn.commit()
             self._migrate()
             self._init_fts()
+            self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            self.conn.commit()
+
+    def __enter__(self) -> Store:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     def _migrate(self) -> None:
         """Add columns introduced after the initial schema (idempotent)."""
         def cols(table: str) -> set[str]:
             return {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
 
-        adds = [
-            ("facts", "embed_model", "TEXT DEFAULT ''"),
-            ("skills", "embed_model", "TEXT DEFAULT ''"),
-            ("skills", "successes", "INTEGER DEFAULT 0"),
-            ("skills", "failures", "INTEGER DEFAULT 0"),
-            ("skills", "last_used", "REAL"),
-            ("skills", "tools", "TEXT DEFAULT ''"),     # JSON list of required tools
-            ("skills", "trigger", "TEXT DEFAULT ''"),   # when to use this skill
-            ("skills", "source", "TEXT DEFAULT ''"),    # learned | installed | pack id
-        ]
-        for table, col, ddl in adds:
+        for table, col, ddl in _MIGRATIONS:
             if col not in cols(table):
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
         self.conn.commit()
@@ -555,10 +582,24 @@ class Store:
         return dict(rows[0]) if rows else None
 
     def add_event(self, run_id: str, agent_id: str, type_: str, data: dict[str, Any]) -> None:
-        self._write(
-            "INSERT INTO events (run_id, agent_id, type, data, created_at) VALUES (?,?,?,?,?)",
-            (run_id, agent_id, type_, json.dumps(data, default=str), time.time()),
-        )
+        self.add_events([(run_id, agent_id, type_, data)])
+
+    def add_events(self, events: list[tuple[str, str, str, dict[str, Any]]]) -> None:
+        """Insert many monitor events in one transaction (one commit, not one per token)."""
+        if not events:
+            return
+        now = time.time()
+        with self._lock:
+            self.conn.executemany(
+                "INSERT INTO events (run_id, agent_id, type, data, created_at) VALUES (?,?,?,?,?)",
+                [(r, a, t, json.dumps(d, default=str), now) for r, a, t, d in events])
+            self.conn.commit()
+
+    def prune_events(self, max_age_days: float = 30.0) -> int:
+        """Drop monitor events older than ``max_age_days`` (the table grows per token)."""
+        cur = self._write("DELETE FROM events WHERE created_at < ?",
+                          (time.time() - max_age_days * 86400,))
+        return int(cur.rowcount or 0)
 
     def run_events(self, run_id: str, limit: int = 2000) -> list[dict[str, Any]]:
         rows = self._query(
@@ -655,6 +696,23 @@ class Store:
             self._write("INSERT INTO doc_chunks_fts (rowid, content, doc_id) VALUES (?,?,?)",
                         (int(cur.lastrowid), content, doc_id))
         self._write("UPDATE documents SET chunks = chunks + 1 WHERE id=?", (doc_id,))
+        self._bump_chunks()
+
+    def _bump_chunks(self) -> None:
+        self._write("INSERT INTO meta (key, value) VALUES ('chunks', 1) "
+                    "ON CONFLICT(key) DO UPDATE SET value = value + 1")
+
+    def chunks_signature(self) -> tuple[int, int, int]:
+        """Changes whenever document chunks or their vectors change (any process).
+
+        Lets the in-memory search index know when to rebuild without re-reading
+        every vector on every query.
+        """
+        with self._lock:
+            ver = self.conn.execute("SELECT value FROM meta WHERE key='chunks'").fetchone()
+            count, max_id = self.conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM doc_chunks").fetchone()
+        return (int(ver[0]) if ver else 0, int(count), int(max_id))
 
     def list_documents(self) -> list[dict[str, Any]]:
         return [dict(r) for r in self._query(
@@ -674,6 +732,7 @@ class Store:
     def set_chunk_embedding(self, chunk_id: int, embedding: list[float]) -> None:
         self._write("UPDATE doc_chunks SET embedding=? WHERE id=?",
                     (json.dumps(embedding), chunk_id))
+        self._bump_chunks()
 
     def search_chunks_fts(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         if not (self._fts and query.strip()):
@@ -700,6 +759,7 @@ class Store:
         self._write("DELETE FROM documents WHERE id=?", (doc_id,))
         if self._fts:
             self._write("DELETE FROM doc_chunks_fts WHERE doc_id=?", (doc_id,))
+        self._bump_chunks()
 
     # -- usage accounting (analytics) ------------------------------------------
     def add_usage(self, model: str, input_tokens: int, output_tokens: int,

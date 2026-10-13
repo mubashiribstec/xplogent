@@ -59,9 +59,9 @@ def test_secrets_masked_status(client):
 
 def test_memory_fact_lifecycle(client, monkeypatch):
     # avoid a real embedding call
-    import xplogent.interfaces.api.server as srv
+    import xplogent.interfaces.api.deps as deps
     from tests.conftest import ScriptedProvider
-    monkeypatch.setattr(srv, "build_provider", lambda *_a, **_k: ScriptedProvider([]))
+    monkeypatch.setattr(deps, "build_provider", lambda *_a, **_k: ScriptedProvider([]))
 
     client.post("/memory/facts", json={"content": "the sky is blue"})
     facts = client.get("/memory/facts").json()["facts"]

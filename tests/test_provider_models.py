@@ -84,6 +84,7 @@ def test_provider_models_endpoint(tmp_path, monkeypatch):
 
     monkeypatch.setenv("XPLOGENT_HOME", str(tmp_path))
 
+    import xplogent.interfaces.api.deps as deps
     import xplogent.interfaces.api.server as srv
 
     class _FakeProv:
@@ -93,7 +94,7 @@ def test_provider_models_endpoint(tmp_path, monkeypatch):
         async def aclose(self):
             return None
 
-    monkeypatch.setattr(srv, "build_provider", lambda spec, **k: _FakeProv())
+    monkeypatch.setattr(deps, "build_provider", lambda spec, **k: _FakeProv())
     c = TestClient(srv.create_app())
 
     out = c.get("/providers/openrouter/models").json()

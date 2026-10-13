@@ -158,6 +158,78 @@ async def backfill_embeddings(store, embedder: Embedder, limit: int = 64) -> int
     return filled
 
 
+class _ChunkIndex:
+    """All chunk vectors of one database, held in memory between searches.
+
+    Every query used to read and JSON-decode every vector in the table, then score
+    them one by one in Python. The index is rebuilt only when the store's chunk
+    signature changes (ingest, delete, backfill — from any process), and scoring is
+    one matrix product when numpy is installed (a cached pure-Python loop otherwise).
+    Ranking is identical to the old per-query cosine scan, including vectors of a
+    different dimension scoring 0.
+    """
+
+    def __init__(self, signature: tuple, chunks: list[dict[str, Any]]) -> None:
+        self.signature = signature
+        rows = [c for c in chunks if c["embedding"]]
+        self.ids = [c["id"] for c in rows]
+        self.rows = {c["id"]: {"id": c["id"], "doc_id": c["doc_id"], "content": c["content"]}
+                     for c in rows}
+        self._vectors = [c["embedding"] for c in rows]
+        self._np: Any = None
+        try:
+            import numpy as np
+        except ImportError:
+            np = None
+        if np is not None:
+            self._np = np
+            # Normalised matrices per dimension (mixed embedding models can coexist).
+            self._by_dim: dict[int, tuple[Any, Any]] = {}
+            for dim in {len(v) for v in self._vectors}:
+                pos = np.array([i for i, v in enumerate(self._vectors) if len(v) == dim])
+                mat = np.array([self._vectors[i] for i in pos], dtype=np.float64)
+                norms = np.linalg.norm(mat, axis=1)
+                norms[norms == 0] = np.inf  # zero vectors score 0, like cosine()
+                self._by_dim[dim] = (pos, mat / norms[:, None])
+            self._vectors = []  # the matrices hold them now
+
+    def rank(self, qvec: list[float], limit: int) -> list[int]:
+        """Chunk ids ordered by cosine similarity to ``qvec`` (best first)."""
+        if not self.ids:
+            return []
+        np = self._np
+        if np is None:
+            scored = [(cid, cosine(qvec, vec)) for cid, vec in zip(self.ids, self._vectors,
+                                                                    strict=False)]
+            scored.sort(key=lambda t: t[1], reverse=True)
+            return [cid for cid, _ in scored[:limit]]
+        scores = np.zeros(len(self.ids))
+        entry = self._by_dim.get(len(qvec))
+        q = np.asarray(qvec, dtype=np.float64)
+        qn = np.linalg.norm(q)
+        if entry is not None and qn > 0:
+            pos, mat = entry
+            scores[pos] = mat @ (q / qn)
+        # Stable sort on the negated scores keeps id order for ties (as list.sort did).
+        order = np.argsort(-scores, kind="stable")[:limit]
+        return [self.ids[i] for i in order]
+
+
+_INDEXES: dict[str, _ChunkIndex] = {}
+
+
+def _chunk_index(store) -> _ChunkIndex:
+    signature = store.chunks_signature()
+    key = str(getattr(store, "path", ""))
+    cached = _INDEXES.get(key) if key != ":memory:" else None
+    if cached is not None and cached.signature == signature:
+        return cached
+    index = _ChunkIndex(signature, store.all_chunks())
+    if key != ":memory:":
+        _INDEXES[key] = index
+    return index
+
+
 async def hybrid_search(store, embedder: Embedder, query: str, k: int = 5) -> list[dict[str, Any]]:
     """Fuse semantic + bm25 results with reciprocal-rank fusion; returns cited chunks."""
     fts = store.search_chunks_fts(query, limit=20)
@@ -168,14 +240,13 @@ async def hybrid_search(store, embedder: Embedder, query: str, k: int = 5) -> li
     if qvec:
         # Embeddings work now: give a batch of earlier vector-less chunks their vectors.
         await backfill_embeddings(store, embedder)
-    chunks = store.all_chunks()
-    if qvec and chunks:
-        scored = [(c, cosine(qvec, c["embedding"])) for c in chunks if c["embedding"]]
-        scored.sort(key=lambda t: t[1], reverse=True)
-        for i, (c, _s) in enumerate(scored[:20]):
-            sem_rank[c["id"]] = i
+    # A rebuild after ingest reads + decodes every vector: keep it off the event loop.
+    index = await asyncio.to_thread(_chunk_index, store)
+    if qvec:
+        for i, cid in enumerate(index.rank(qvec, 20)):
+            sem_rank[cid] = i
 
-    by_id = {c["id"]: c for c in chunks}
+    by_id = dict(index.rows)
     for row in fts:
         by_id.setdefault(row["id"], {"id": row["id"], "doc_id": row["doc_id"], "content": row["content"]})
 
