@@ -17,6 +17,7 @@
 #   --lan                  local mode: listen on all interfaces (default: this machine only)
 #   --ollama | --no-ollama run local models with Ollama (GPU used when available)    [XPL_OLLAMA]
 #   --model SPEC           default model, e.g. openai:gpt-4o-mini                   [XPL_MODEL]
+#   --speech | --no-speech local voices for the phone agent (Kokoro; GPU if present) [XPL_SPEECH]
 #   --reconfigure          ask the questions again for an existing install (token kept)
 #   --dir PATH             install directory (default /opt/xplogent-docker)          [XPL_DIR]
 #   --ref REF              git branch/tag to take the deploy files from (default main) [XPL_REF]
@@ -34,11 +35,12 @@ MODE="${XPL_MODE:-}"
 DOMAIN="${XPL_DOMAIN:-}"
 OLLAMA="${XPL_OLLAMA:-}"
 MODEL="${XPL_MODEL:-}"
+SPEECH="${XPL_SPEECH:-}"
 BIND=""
 YES=0; DRY=0; INSTALL_DOCKER=1; RECONFIGURE=0
 # Settings given explicitly (flags or XPL_* env) are applied even to an existing install.
 EXPLICIT=0
-[ -z "$MODE$DOMAIN$OLLAMA$MODEL" ] || EXPLICIT=1
+[ -z "$MODE$DOMAIN$OLLAMA$MODEL$SPEECH" ] || EXPLICIT=1
 BIN_DIR="${XPL_BIN_DIR:-/usr/local/bin}"
 
 while [ $# -gt 0 ]; do
@@ -50,6 +52,8 @@ while [ $# -gt 0 ]; do
     --ollama) OLLAMA=1; EXPLICIT=1 ;;
     --no-ollama) OLLAMA=0; EXPLICIT=1 ;;
     --model) MODEL="${2:?--model needs a value}"; EXPLICIT=1; shift ;;
+    --speech) SPEECH=1; EXPLICIT=1 ;;
+    --no-speech) SPEECH=0; EXPLICIT=1 ;;
     --reconfigure) RECONFIGURE=1 ;;
     --dir) DIR="${2:?--dir needs a path}"; shift ;;
     --ref) REF="${2:?--ref needs a branch or tag}"; shift ;;
@@ -111,6 +115,21 @@ set_env() {
   chmod 600 "$tmp"
   mv "$tmp" "$file"
 }
+# set_profile FILE NAME on|off: add/remove one entry of COMPOSE_PROFILES, keeping the rest.
+# Alternatives (ollama/ollama-gpu, speech/gpu-speech) replace each other.
+set_profile() {
+  local file="$1" name="$2" state="$3" cur new="" p
+  cur="$(get_env "$file" COMPOSE_PROFILES)"
+  for p in ${cur//,/ }; do
+    case "$p:$name" in
+      ollama*:ollama*|speech:speech|speech:gpu-speech|gpu-speech:speech|gpu-speech:gpu-speech) continue ;;
+    esac
+    new="${new:+$new,}$p"
+  done
+  [ "$state" = on ] && new="${new:+$new,}$name"
+  set_env "$file" COMPOSE_PROFILES "$new"
+}
+
 get_env() {  # get_env FILE KEY
   awk -v k="$2" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$1"
 }
@@ -242,12 +261,26 @@ if [ "$FRESH" -eq 1 ] || [ "$RECONFIGURE" -eq 1 ] || [ "$PARTIAL" -eq 1 ]; then
     elif command -v nvidia-smi >/dev/null 2>&1; then
       warn "NVIDIA GPU found but not the NVIDIA Container Toolkit; Ollama will use the CPU. Install the toolkit and run: xplogent-docker ollama on --gpu"
     fi
-    set_env "$ENV_FILE" COMPOSE_PROFILES "$profile"
+    set_profile "$ENV_FILE" "$profile" on
     set_env "$ENV_FILE" OLLAMA_HOST "http://ollama:11434"
     [ -n "$MODEL" ] || [ "$PARTIAL" -eq 1 ] || MODEL="ollama:llama3.1"
   elif [ "$OLLAMA" != keep ]; then
-    set_env "$ENV_FILE" COMPOSE_PROFILES ""
+    set_profile "$ENV_FILE" ollama off
     set_env "$ENV_FILE" OLLAMA_HOST ""
+  fi
+
+  # Local voices for the phone agent (asked only on a fresh install / --reconfigure).
+  if [ -z "$SPEECH" ] && [ "$PARTIAL" -eq 0 ]; then
+    if yes_no "Run local voices for the phone agent (Kokoro text-to-speech, ~2 GB)? [y/N]" n; then SPEECH=1; else SPEECH=0; fi
+  fi
+  if [ "$SPEECH" = 1 ]; then
+    if command -v nvidia-smi >/dev/null 2>&1 && { [ "$DRY" -eq 1 ] || docker info 2>/dev/null | grep -qi nvidia; }; then
+      set_profile "$ENV_FILE" gpu-speech on
+    else
+      set_profile "$ENV_FILE" speech on
+    fi
+  elif [ "$SPEECH" = 0 ]; then
+    set_profile "$ENV_FILE" speech off
   fi
 
   if [ -z "$MODEL" ] && [ "$PARTIAL" -eq 1 ]; then
@@ -304,6 +337,10 @@ if [ "$DRY" -eq 0 ] && ! pull_out="$(docker compose pull --quiet 2>&1)"; then
   warn "image pull failed; using the copy already on this machine"
 fi
 [ "$DRY" -eq 1 ] && run docker compose pull --quiet
+case ",$(get_env "$ENV_FILE" COMPOSE_PROFILES)," in
+  *,speech,*|*,gpu-speech,*) ;;
+  *) [ "$DRY" -eq 1 ] || COMPOSE_PROFILES=speech,gpu-speech docker compose rm -sf kokoro-cpu kokoro whisper >/dev/null 2>&1 || true ;;
+esac
 case ",$(get_env "$ENV_FILE" COMPOSE_PROFILES)," in
   *,ollama*) ;;
   *)  # Ollama switched off: a container from an earlier install would otherwise keep running.

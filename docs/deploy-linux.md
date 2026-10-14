@@ -163,11 +163,37 @@ Provider keys go in Settings (stored encrypted in the data directory) or in `/et
 
 ## Phone agent (Telnyx)
 
-1. Dashboard, **Calls**: set the public URL (`https://agent.example.com`), company name and
-   hand-off number, generate a webhook secret, and switch the phone agent on.
-2. In Telnyx, set your Call Control application's webhook to the URL shown there, and attach
-   your number. Put `TELNYX_API_KEY` in the env file / `.env` / Settings.
-3. See [voip.md](voip.md) for the call flow, cost notes and safety defaults.
+Everything is set in the dashboard's **Calls** view; its checklist shows what is still missing.
+
+1. **HTTPS first.** Telnyx must reach the server at a public `https://` address (webhook + call
+   audio). Point a domain at the server, open ports 80/443, and run
+   `xplogent-docker https agent.example.com`. A LAN address like `http://10.0.0.5:8765` can't work.
+2. **Setup:** company name, the public HTTPS address, a human hand-off number, then
+   **Generate webhook secret** and copy the webhook URL it shows.
+3. **Telnyx (Voice API):** in the Telnyx portal create a Voice API (Call Control) application with
+   that webhook URL, assign your number to it, and create an API key. Paste the key, the
+   application ID and your number in the Telnyx card and press **Test Telnyx** (it also checks
+   the webhook URL configured in Telnyx matches).
+4. **Speech:** `xplogent-docker speech on` (add `--gpu` on an NVIDIA server; the CPU image is
+   about 5 GB), then choose **Local on this server** in the Speech card and press **Test voice**.
+   Listening uses the built-in Whisper, which downloads its model on first use.
+5. **Model:** any model works; with your own Ollama, set it in Settings → Ollama server and use
+   "use for calls".
+6. Switch the phone agent on.
+
+**FreePBX / SIP trunk:** Xplogent uses the Telnyx Voice API, not the SIP trunk. To use the AI
+from FreePBX, route calls (inbound route / follow-me) to your Telnyx Voice API number over the
+trunk, and set the hand-off number to a FreePBX extension's DID so "talk to a person" rings
+your team.
+
+See [voip.md](voip.md) for the call flow, cost notes and safety defaults.
+
+## Your own Ollama server
+
+Settings → **Ollama server**: enter its URL (for example `https://ai.example.com`) and, if it is
+behind a proxy that requires one, the bearer token (stored encrypted). **Test connection** lists
+its models; use the buttons to pick the chat, embedding, reflection and call models. Settings
+made in the dashboard take precedence over `XPLOGENT_MODEL` / `OLLAMA_HOST` in `.env`.
 
 Caddy forwards WebSockets automatically, which the call audio stream needs.
 

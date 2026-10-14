@@ -16,6 +16,10 @@ import { CanvasPanel } from "../components/CanvasPanel";
 import { downloadJSON, downloadMarkdown, shareHTML } from "../lib/exportChat";
 import { useVoice } from "../hooks/useVoice";
 
+// Browsers only allow the microphone on https:// pages (or localhost).
+const MIC_NEEDS_HTTPS = "Microphone needs HTTPS (or localhost): set up a domain with xplogent-docker https <domain>";
+const micAllowed = typeof window !== "undefined" && window.isSecureContext;
+
 interface LogLine { kind: "assistant" | "tool" | "result" | "note" | "user"; text: string; ok?: boolean; }
 interface Usage {
   input_tokens?: number; output_tokens?: number; session_input?: number;
@@ -332,7 +336,9 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
           )}
           <div style={{ flex: 1 }} />
           {voice.supported && (
-            <button className={`btn ghost sm ${handsFree ? "active" : ""}`} title="Hands-free voice conversation"
+            <button className={`btn ghost sm ${handsFree ? "active" : ""}`}
+              disabled={!micAllowed} style={micAllowed ? undefined : { opacity: 0.5 }}
+              title={micAllowed ? "Hands-free voice conversation" : MIC_NEEDS_HTTPS}
               onClick={toggleHandsFree}><Volume2 size={15} /> {handsFree ? "Hands-free on" : "Hands-free"}</button>
           )}
           {canvas && (
@@ -405,8 +411,9 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
               <button className="icon-btn" style={{ width: 34, height: 34 }} aria-label="attach image"
                 onClick={() => fileRef.current?.click()}><ImagePlus size={18} /></button>
               {voice.supported && !handsFree && (
-                <button className={`icon-btn ${voice.listening ? "rec" : ""}`} style={{ width: 34, height: 34 }}
-                  aria-label="dictate" title="Dictate with your voice" onClick={toggleDictate}>
+                <button className={`icon-btn ${voice.listening ? "rec" : ""}`}
+                  style={{ width: 34, height: 34, opacity: micAllowed ? 1 : 0.5 }} disabled={!micAllowed}
+                  aria-label="dictate" title={micAllowed ? "Dictate with your voice" : MIC_NEEDS_HTTPS} onClick={toggleDictate}>
                   {voice.listening ? <MicOff size={18} /> : <Mic size={18} />}</button>
               )}
               <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }}

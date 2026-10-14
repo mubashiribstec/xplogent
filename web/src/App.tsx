@@ -32,10 +32,13 @@ const initialTheme = (): "dark" | "light" => {
   return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 };
 
+const NO_SCREEN = "Needs a screen; not available on this server";
+
 export function App() {
   const [tab, setTab] = useState<Tab>("chat");
   const [theme, setTheme] = useState<"dark" | "light">(initialTheme);
   const [online, setOnline] = useState(true);
+  const [caps, setCaps] = useState<{ display: boolean; docker: boolean; git: boolean } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [onboard, setOnboard] = useState(false);
@@ -56,7 +59,9 @@ export function App() {
   // Health polling drives the rail status dot.
   useEffect(() => {
     if (!authed) return;
-    const poll = () => getStatus().then(() => setOnline(true)).catch(() => setOnline(false));
+    const poll = () => getStatus()
+      .then((st) => { setOnline(true); if (st?.capabilities) setCaps(st.capabilities); })
+      .catch(() => setOnline(false));
     poll();
     const id = setInterval(poll, 15000);
     return () => clearInterval(id);
@@ -99,6 +104,7 @@ export function App() {
   return (
     <div className="shell">
       <NavRail tab={tab} onSelect={go} online={online} theme={theme} onTheme={toggleTheme}
+               unavailable={caps && !caps.display ? { operator: NO_SCREEN } : undefined}
                className={navOpen ? "open" : ""} />
       {isMobile && navOpen && <div className="scrim" onClick={() => setNavOpen(false)} />}
 
@@ -113,7 +119,13 @@ export function App() {
         {tab === "chat" && <Chat />}
         {tab === "council" && <Council />}
         {tab === "mission" && <MissionControl />}
-        {tab === "operator" && <Operator />}
+        {tab === "operator" && (caps && !caps.display
+          ? <div className="pane"><div className="pane-wide"><div className="card">
+              <h3>Operator isn't available on this server</h3>
+              <p className="dim">{NO_SCREEN}. The Operator drives a real desktop (screenshots, mouse,
+                keyboard); a Docker server has no screen. Install Xplogent on a desktop computer to use it.</p>
+            </div></div></div>
+          : <Operator />)}
         {tab === "browser" && <Browser />}
         {tab === "calls" && <Calls />}
         {tab === "contacts" && <Contacts />}

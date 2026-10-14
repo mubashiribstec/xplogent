@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { Check, Cpu, KeyRound, Sparkles } from "lucide-react";
-import { ollamaPull, patchConfig, putSecrets } from "../api";
+import { ollamaPull, patchConfig, putSecrets, saveOllama, testOllama } from "../api";
 import { useToast } from "./Toast";
 
 const PROVIDERS = [
   { id: "claude-cli", label: "Claude (subscription)", note: "No API key — uses the local `claude` CLI", model: "claude-cli:sonnet", keyEnv: "" },
-  { id: "ollama", label: "Ollama (local)", note: "Runs offline on your machine", model: "ollama:llama3.1", keyEnv: "" },
+  { id: "ollama", label: "Ollama", note: "Your own Ollama server (or this machine)", model: "ollama:llama3.1", keyEnv: "" },
   { id: "openai", label: "OpenAI", note: "GPT-4o and o-series", model: "openai:gpt-4o", keyEnv: "OPENAI_API_KEY" },
   { id: "anthropic", label: "Anthropic", note: "Claude via API key", model: "anthropic:claude-sonnet-4-6", keyEnv: "ANTHROPIC_API_KEY" },
-  { id: "gemini", label: "Google Gemini", note: "Gemini 1.5/2.x", model: "gemini:gemini-1.5-pro", keyEnv: "GOOGLE_API_KEY" },
+  { id: "gemini", label: "Google Gemini", note: "Gemini 1.5/2.x", model: "gemini:gemini-1.5-pro", keyEnv: "GEMINI_API_KEY" },
   { id: "openrouter", label: "OpenRouter", note: "200+ models, one key", model: "openrouter:meta-llama/llama-3.1-70b-instruct", keyEnv: "OPENROUTER_API_KEY" },
 ];
 
@@ -19,6 +19,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [model, setModel] = useState(PROVIDERS[0].model);
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
+  const [ollamaUrl, setOllamaUrl] = useState("");
+  const [ollamaToken, setOllamaToken] = useState("");
 
   const pick = (p: typeof PROVIDERS[number]) => { setProvider(p); setModel(p.model); };
 
@@ -26,11 +28,20 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     setBusy(true);
     try {
       if (provider.keyEnv && key.trim()) await putSecrets({ [provider.keyEnv]: key.trim() });
-      await patchConfig({ model });
       if (provider.id === "ollama") {
-        toast("Pulling the model in the background…", "info");
-        ollamaPull(model.split(":")[1]).catch(() => {});
+        if (ollamaUrl.trim()) {
+          const saved = await saveOllama(ollamaUrl.trim(), ollamaToken.trim());
+          if (!saved.ok) { toast(saved.error || "Could not save the Ollama server", "error"); return; }
+        }
+        const probe = await testOllama(ollamaUrl.trim(), ollamaToken.trim());
+        if (!probe.ok) { toast(`Ollama: ${probe.error}`, "error"); return; }
+        const name = model.split(":")[1];
+        if (!probe.models.some((m) => m === name || m === `${name}:latest`)) {
+          toast(`Downloading ${name} on the Ollama server in the background…`, "info");
+          ollamaPull(name).catch(() => {});
+        }
       }
+      await patchConfig({ model });
       localStorage.setItem("xplogent_onboarded", "1");
       toast("You're all set!", "success");
       onDone();
@@ -74,7 +85,15 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               ) : provider.id === "claude-cli" ? (
                 <p className="dim">Make sure Claude Code is installed and you've run <code>claude login</code>. No API key needed.</p>
               ) : (
-                <p className="dim">Make sure Ollama is running. We'll pull <code>{model.split(":")[1]}</code> for you.</p>
+                <>
+                  <label className="field-l">Ollama server URL <span className="dim">(blank = this machine)</span>
+                    <input value={ollamaUrl} placeholder="https://ai.example.com" onChange={(e) => setOllamaUrl(e.target.value)} />
+                  </label>
+                  <label className="field-l">Bearer token <span className="dim">(only if your server needs one)</span>
+                    <input type="password" value={ollamaToken} onChange={(e) => setOllamaToken(e.target.value)} />
+                  </label>
+                  <p className="dim">We'll check the connection and download <code>{model.split(":")[1]}</code> there if it's missing.</p>
+                </>
               )}
             </>
           )}

@@ -202,6 +202,8 @@ voip:
   greeting: "Hello, thanks for calling {company}. You're speaking with an AI assistant, and this call may be recorded. How can I help you?"
   model: ""                        # LLM for calls; blank = use `model`. Pick a small fast streaming model.
   transfer_number: ""              # human hand-off number (E.164), e.g. +15551234567
+  connection_id: ""                # Telnyx Voice API (Call Control) application ID
+  from_number: ""                  # your Telnyx number (E.164), caller ID for outbound calls
   max_call_seconds: 900
   cost_per_minute: 0.012           # your estimate: carrier + LLM (shown in the Calls view)
   knowledge_top_k: 3

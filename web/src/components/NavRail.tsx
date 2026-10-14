@@ -27,20 +27,24 @@ export const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "guide", label: "Guide", icon: BookOpen },
 ];
 
-export function NavRail({ tab, onSelect, online, theme, onTheme, className }: {
+export function NavRail({ tab, onSelect, online, theme, onTheme, className, unavailable }: {
   tab: Tab;
   onSelect: (t: Tab) => void;
   online: boolean;
   theme: "dark" | "light";
   onTheme: () => void;
   className?: string;
+  /** Tabs this install can't run, with the reason (shown greyed out, not removed). */
+  unavailable?: Partial<Record<Tab, string>>;
 }) {
   return (
     <nav className={`rail ${className ?? ""}`}>
       <div className="brand" title="Xplogent">X</div>
       {TABS.map(({ id, label, icon: Icon }) => (
         <button key={id} className={`rail-btn ${tab === id ? "active" : ""}`}
-                aria-label={label} onClick={() => onSelect(id)}>
+                aria-label={label} onClick={() => onSelect(id)}
+                title={unavailable?.[id] ? `${label}: ${unavailable[id]}` : undefined}
+                style={unavailable?.[id] ? { opacity: 0.4 } : undefined}>
           <Icon size={20} />
           <span className="lbl">{label}</span>
         </button>

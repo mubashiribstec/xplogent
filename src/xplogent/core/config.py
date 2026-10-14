@@ -157,7 +157,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 # ─── dotenv + writable config (used by the setup wizard and the GUI) ──────────
 _SECRET_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_API_KEY",
-                "GEMINI_API_KEY", "TELNYX_API_KEY"]
+                "GEMINI_API_KEY", "TELNYX_API_KEY", "OLLAMA_API_KEY"]
 # Non-secret settings the dashboard may also write to .env. Anything else is refused so
 # an API call can't plant e.g. LD_PRELOAD / PYTHONPATH into the process environment.
 _ENV_SETTINGS = ["XPLOGENT_MODEL", "XPLOGENT_REFLECTION_MODEL", "XPLOGENT_EMBEDDING_MODEL",
@@ -236,7 +236,9 @@ def load_dotenv() -> None:
     except Exception:  # noqa: BLE001
         pass
     for key, value in _read_env_file().items():
-        if key and key not in os.environ:
+        # An empty variable (e.g. `OLLAMA_HOST=` from a Docker .env) must not hide a
+        # value saved from the dashboard.
+        if key and not os.environ.get(key):
             os.environ[key] = value
     _migrate_plaintext_secrets()
 
@@ -293,15 +295,17 @@ def load_config(overrides: dict[str, Any] | None = None) -> Config:
     data = _load_yaml(_DEFAULT_CONFIG)
 
     user_cfg = xplogent_home() / "config.yaml"
-    data = _deep_merge(data, _load_yaml(user_cfg))
+    user = _load_yaml(user_cfg)
+    data = _deep_merge(data, user)
 
-    # Environment overrides
-    if model := os.environ.get("XPLOGENT_MODEL"):
-        data["model"] = model
-    if rmodel := os.environ.get("XPLOGENT_REFLECTION_MODEL"):
-        data["reflection_model"] = rmodel
-    if emodel := os.environ.get("XPLOGENT_EMBEDDING_MODEL"):
-        data["embedding_model"] = emodel
+    # Environment variables are defaults (e.g. set by the Docker installer); a model
+    # chosen in the dashboard (saved in the user config) wins over them.
+    for env, key in (("XPLOGENT_MODEL", "model"),
+                     ("XPLOGENT_REFLECTION_MODEL", "reflection_model"),
+                     ("XPLOGENT_EMBEDDING_MODEL", "embedding_model")):
+        value = os.environ.get(env)
+        if value and not user.get(key):
+            data[key] = value
 
     if overrides:
         data = _deep_merge(data, overrides)

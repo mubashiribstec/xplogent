@@ -64,6 +64,18 @@ class TelnyxClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_application(self, application_id: str) -> dict:
+        """The Voice API (Call Control) application, e.g. to compare its webhook URL."""
+        resp = await self._client.get(f"/call_control_applications/{application_id}")
+        resp.raise_for_status()
+        return resp.json().get("data", {})
+
+    async def balance(self) -> dict:
+        """Cheap authenticated call: validates the API key."""
+        resp = await self._client.get("/balance")
+        resp.raise_for_status()
+        return resp.json().get("data", {})
+
     async def aclose(self) -> None:
         await self._client.aclose()
 

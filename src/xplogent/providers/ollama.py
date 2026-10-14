@@ -40,13 +40,42 @@ def _to_ollama(messages: list[Message]) -> list[dict[str, Any]]:
     return out
 
 
+DEFAULT_HOST = "http://localhost:11434"
+
+
+def ollama_settings() -> tuple[str, str]:
+    """``(host, bearer_token)`` for the Ollama server.
+
+    The host set in the dashboard (config ``ollama.host``) wins, then ``OLLAMA_HOST``,
+    then localhost. The token (``OLLAMA_API_KEY``, kept in the encrypted key store) is
+    sent as ``Authorization: Bearer`` for servers behind an authenticating proxy.
+    """
+    host = ""
+    try:
+        from xplogent.core.config import load_config
+
+        host = str((load_config().raw.get("ollama") or {}).get("host") or "").strip()
+    except Exception:  # noqa: BLE001 - fall back to the environment
+        host = ""
+    host = host or os.environ.get("OLLAMA_HOST", "").strip() or DEFAULT_HOST
+    return host.rstrip("/"), os.environ.get("OLLAMA_API_KEY", "").strip()
+
+
+def ollama_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 class OllamaProvider(Provider):
     name = "ollama"
 
-    def __init__(self, model: str, host: str | None = None, **kwargs: Any) -> None:
+    def __init__(self, model: str, host: str | None = None, api_key: str | None = None,
+                 **kwargs: Any) -> None:
         super().__init__(model, **kwargs)
-        self.host = (host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
-        self._client = httpx.AsyncClient(base_url=self.host, timeout=httpx.Timeout(300.0))
+        cfg_host, cfg_token = ollama_settings()
+        self.host = (host or cfg_host).rstrip("/")
+        token = cfg_token if api_key is None else api_key
+        self._client = httpx.AsyncClient(base_url=self.host, timeout=httpx.Timeout(300.0),
+                                         headers=ollama_headers(token))
 
     async def stream(
         self,

@@ -11,6 +11,7 @@
 #   No domain / LAN     : COMPOSE_FILE=docker-compose.yml:compose.local.yml   (port 8765, no TLS)
 # Optional profiles (COMPOSE_PROFILES in .env, comma separated):
 #   ollama      local models on CPU          ollama-gpu  local models on an NVIDIA GPU
+#   speech      Kokoro text-to-speech on CPU for the phone agent
 #   gpu-speech  Whisper + Kokoro speech servers for the phone agent (NVIDIA GPU)
 #
 # The app refuses to start without an access token, in every mode.
@@ -77,7 +78,20 @@ services:
               count: all
               capabilities: [gpu]
 
-  # --- optional: local speech for the phone agent (OpenAI-compatible APIs) -------------
+  # --- optional: local text-to-speech on CPU for the phone agent (profile "speech") ----
+  # Speech-to-text runs inside the xplogent container (faster-whisper, CPU). In the Calls
+  # view choose Speech -> "Local on this server" (tts base_url http://kokoro:8880/v1).
+  kokoro-cpu:
+    profiles: ["speech"]
+    image: ${KOKORO_CPU_IMAGE:-ghcr.io/remsky/kokoro-fastapi-cpu:latest}
+    restart: unless-stopped
+    networks:
+      default:
+        aliases: [kokoro]
+    expose:
+      - "8880"
+
+  # --- optional: GPU speech for the phone agent (OpenAI-compatible APIs) -----------------
   # After starting, set in config (voip.stt / voip.tts):
   #   stt.provider: openai-compatible, base_url: http://whisper:8000/v1, model: Systran/faster-whisper-small.en
   #   tts.base_url: http://kokoro:8880/v1, model: kokoro, voice: af_heart

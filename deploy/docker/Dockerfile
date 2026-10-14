@@ -54,6 +54,7 @@ ENV XPLOGENT_HOME=/data \
     XPLOGENT_API_PORT=8765 \
     XPLOGENT_BEHIND_PROXY=1 \
     XPLOGENT_IN_DOCKER=1 \
+    HF_HOME=/data/.cache/huggingface \
     XPLOGENT_VERSION=${VERSION} \
     PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring
 

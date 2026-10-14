@@ -470,8 +470,30 @@ export interface StatusInfo {
   model: string;
   providers: string[];
   secrets: Record<string, boolean>;
-  ollama: { host: string; reachable: boolean };
+  ollama: { host: string; reachable: boolean; auth?: boolean; error?: string };
+  capabilities?: { display: boolean; docker: boolean; git: boolean };
 }
+
+async function postJSON<T>(url: string, body: unknown = {}): Promise<T> {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                               body: JSON.stringify(body) });
+  return r.json();
+}
+
+// ── Ollama server (remote, optional bearer token) ─────────────────────────────
+export interface OllamaProbe { ok: boolean; models: string[]; error?: string }
+export const testOllama = (host: string, token: string) =>
+  postJSON<OllamaProbe>("/providers/ollama/test", { host, token });
+export const saveOllama = (host: string, token: string) =>
+  postJSON<{ ok: boolean; host?: string; error?: string }>("/providers/ollama/settings", { host, token });
+
+// ── Phone agent setup ─────────────────────────────────────────────────────────
+export interface ReadinessItem { id: string; label: string; ok: boolean; detail: string; required: boolean }
+export async function getVoipReadiness(): Promise<{ ready: boolean; items: ReadinessItem[] }> {
+  return (await fetch("/voip/readiness")).json();
+}
+export const testTelnyx = () => postJSON<Record<string, any>>("/voip/telnyx/test");
+export const testSpeech = (stt = true) => postJSON<Record<string, any>>("/voip/speech/test", { stt });
 
 export async function getStatus(): Promise<StatusInfo> {
   return (await fetch("/status")).json();

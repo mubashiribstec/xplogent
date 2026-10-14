@@ -39,6 +39,9 @@ async def config_full() -> dict:
         "models": cfg.models,
         "providers": available_providers(),
         "secrets": secret_status(),
+        # Read back by the Calls view and the Ollama card (they used to show blank fields).
+        "voip": cfg.voip,
+        "ollama": {"host": str((cfg.raw.get("ollama") or {}).get("host") or "")},
     }
 
 

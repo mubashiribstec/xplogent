@@ -8,7 +8,7 @@ import os
 from fastapi import APIRouter, Request
 
 from xplogent.core import guide, updater
-from xplogent.core.config import load_config, save_user_config, secret_status
+from xplogent.core.config import load_config, save_env, save_user_config, secret_status
 from xplogent.core.events import EventBus
 from xplogent.interfaces.api import deps
 from xplogent.interfaces.api.models import (
@@ -41,45 +41,107 @@ async def auth_check(request: Request) -> dict:
 @router.get("/status")
 async def status() -> dict:
     """Aggregate health for the dashboard: providers, which keys are set, Ollama up."""
-    import os
 
-    import httpx
+    from xplogent.core.platform import has_display
+    from xplogent.providers.ollama import ollama_settings
+
     cfg = load_config()
-    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
-    ollama_up = False
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            ollama_up = (await client.get(f"{ollama_host}/api/tags")).status_code == 200
-    except httpx.HTTPError:
-        ollama_up = False
+    ollama_host, token = ollama_settings()
+    probe = await _probe_ollama(ollama_host, token, timeout=3.0)
     return {
         "status": "ok",
         "model": cfg.model,
         "providers": available_providers(),
         "secrets": secret_status(),
-        "ollama": {"host": ollama_host, "reachable": ollama_up},
+        "ollama": {"host": ollama_host, "reachable": probe["ok"], "auth": bool(token),
+                   "error": probe.get("error", "")},
+        # What this install can do, so the dashboard can disable what can't work here.
+        "capabilities": {"display": has_display(), "docker": updater.in_docker(),
+                         "git": updater.repo_root() is not None and not updater.in_docker()},
     }
+
+
+async def _probe_ollama(host: str, token: str, timeout: float = 8.0) -> dict:
+    """GET /api/tags on an Ollama server: ``{ok, models, error}`` (never raises)."""
+    import httpx
+
+    from xplogent.providers.ollama import ollama_headers
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, headers=ollama_headers(token),
+                                     follow_redirects=True) as client:
+            resp = await client.get(f"{host.rstrip('/')}/api/tags")
+    except httpx.HTTPError as exc:
+        return {"ok": False, "models": [], "error": f"cannot reach {host}: {type(exc).__name__}"}
+    if resp.status_code in (401, 403):
+        return {"ok": False, "models": [],
+                "error": "the server refused the token (401/403): check the bearer token"}
+    if resp.status_code != 200:
+        return {"ok": False, "models": [], "error": f"{host} answered HTTP {resp.status_code}"}
+    try:
+        models = sorted(m.get("name", "") for m in resp.json().get("models", []) if m.get("name"))
+    except ValueError:
+        return {"ok": False, "models": [],
+                "error": "that address answered, but not like an Ollama server (/api/tags)"}
+    return {"ok": True, "models": models}
+
+
+@router.post("/providers/ollama/test")
+async def ollama_test(body: dict) -> dict:
+    """Check an Ollama URL + bearer token before saving them (Settings → Ollama server).
+
+    Falls back to the saved values for anything not given, so the token never has to be
+    sent back to the browser.
+    """
+    from xplogent.providers.ollama import ollama_settings
+
+    saved_host, saved_token = ollama_settings()
+    host = str(body.get("host") or saved_host).strip()
+    token = str(body.get("token") or saved_token).strip()
+    if not host.startswith(("http://", "https://")):
+        return {"ok": False, "models": [], "error": "the URL must start with http:// or https://"}
+    return await _probe_ollama(host, token)
+
+
+@router.post("/providers/ollama/settings")
+async def ollama_save(body: dict) -> dict:
+    """Save the Ollama server URL (config) and bearer token (encrypted store)."""
+    host = str(body.get("host", "")).strip().rstrip("/")
+    if host and not host.startswith(("http://", "https://")):
+        return {"ok": False, "error": "the URL must start with http:// or https://"}
+    save_user_config({"ollama": {"host": host}})
+    token = str(body.get("token") or "").strip()
+    if token:
+        try:
+            save_env({"OLLAMA_API_KEY": token})
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+    deps.audit_event("ollama_settings", target=host, risk="medium")
+    return {"ok": True, "host": host}
 
 
 @router.post("/providers/ollama/pull")
 async def ollama_pull(body: dict) -> dict:
     """Pull a local Ollama model (used by onboarding). Best-effort, blocking."""
-    import shutil
-    import subprocess
+    import httpx
+
+    from xplogent.providers.ollama import ollama_headers, ollama_settings
 
     model = str(body.get("model", "")).strip()
     if not model:
         return {"ok": False, "error": "no model given"}
-    if shutil.which("ollama") is None:
-        return {"ok": False, "error": "the 'ollama' CLI isn't installed"}
-
-    def _pull() -> tuple[int, str]:
-        proc = subprocess.run(["ollama", "pull", model],
-                              capture_output=True, text=True, timeout=1800)
-        return proc.returncode, (proc.stdout + proc.stderr)[-2000:]
-
-    rc, out = await asyncio.to_thread(_pull)
-    return {"ok": rc == 0, "output": out}
+    # Through the configured server's API (works for a remote/authenticated Ollama and
+    # inside Docker, where there is no `ollama` CLI).
+    host, token = ollama_settings()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(1800.0, connect=10.0),
+                                     headers=ollama_headers(token)) as client:
+            resp = await client.post(f"{host}/api/pull", json={"model": model, "stream": False})
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"cannot reach {host}: {type(exc).__name__}"}
+    if resp.status_code != 200:
+        return {"ok": False, "error": f"pull failed: HTTP {resp.status_code} {resp.text[:300]}"}
+    return {"ok": True, "output": resp.text[-2000:]}
 
 
 @router.get("/providers/{name}/models")

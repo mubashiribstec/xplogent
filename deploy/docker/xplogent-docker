@@ -12,6 +12,7 @@
 #   xplogent-docker https DOMAIN        switch to HTTPS with your domain
 #   xplogent-docker local [--lan]       switch to no-domain mode (port 8765)
 #   xplogent-docker ollama on [--gpu] | off
+#   xplogent-docker speech on [--gpu] | off   local voices for the phone agent
 #   xplogent-docker pull-model NAME     download an Ollama model (e.g. llama3.1)
 #   xplogent-docker uninstall [--purge] remove containers (--purge: also all data!)
 #
@@ -242,13 +243,27 @@ case "$cmd" in
         apply ;;
       *) die "usage: xplogent-docker ollama on [--gpu] | off" ;;
     esac ;;
+  speech)
+    case "${1:-}" in
+      on)
+        # speech and gpu-speech are alternatives (both provide "kokoro").
+        add_profile -speech; add_profile -gpu-speech
+        if [ "${2:-}" = "--gpu" ]; then add_profile gpu-speech; else add_profile speech; fi
+        apply
+        ok "Local speech is on. In the dashboard: Calls -> Speech -> 'Local on this server'." ;;
+      off)
+        COMPOSE_PROFILES=speech,gpu-speech dc rm -sf kokoro-cpu kokoro whisper >/dev/null 2>&1 || true
+        add_profile -speech; add_profile -gpu-speech
+        apply ;;
+      *) die "usage: xplogent-docker speech on [--gpu] | off" ;;
+    esac ;;
   pull-model)
     [ -n "${1:-}" ] || die "usage: xplogent-docker pull-model <name>"
     dc exec ollama ollama pull "$1" ;;
   uninstall)
     # Address every service, whatever mode/profiles are currently enabled.
     export COMPOSE_FILE="docker-compose.yml:compose.https.yml:compose.local.yml"
-    export COMPOSE_PROFILES="ollama,ollama-gpu,gpu-speech"
+    export COMPOSE_PROFILES="ollama,ollama-gpu,speech,gpu-speech"
     if [ "${1:-}" = "--purge" ]; then
       printf 'This deletes ALL Xplogent data (memory, chats, keys) and backups in %s. Type "delete" to confirm: ' "$DIR"
       read -r confirm
@@ -261,6 +276,6 @@ case "$cmd" in
     fi
     rm -f /usr/local/bin/xplogent-docker 2>/dev/null || true ;;
   url) url ;;
-  help|-h|--help) sed -n '2,19p' "$0" ;;
+  help|-h|--help) sed -n '2,20p' "$0" ;;
   *) die "unknown command: $cmd (xplogent-docker help)" ;;
 esac

@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw } from "lucide-react";
 import {
-  CallRow, CallTurn, VoipStatus, getCall, getCalls, getFullConfig, getVoipStatus, patchConfig,
+  CallRow, CallTurn, ReadinessItem, VoipStatus, getCall, getCalls, getFullConfig, getVoipReadiness,
+  getVoipStatus, patchConfig, putSecrets, testSpeech, testTelnyx,
 } from "../api";
 import { useToast } from "../components/Toast";
 
@@ -21,13 +22,20 @@ export function Calls() {
   const [open, setOpen] = useState<number | null>(null);
   const [turns, setTurns] = useState<CallTurn[]>([]);
   const [cfg, setCfg] = useState<Record<string, any>>({});
+  const [loaded, setLoaded] = useState(false);
+  const [telnyxKeySet, setTelnyxKeySet] = useState(false);
+  const [ready, setReady] = useState<{ ready: boolean; items: ReadinessItem[] } | null>(null);
+  const loadCfg = () => getFullConfig().then((c) => {
+    setCfg(c.voip ?? {}); setTelnyxKeySet(!!c.secrets?.TELNYX_API_KEY); setLoaded(true);
+  }).catch(() => setLoaded(true));
+  const loadReady = () => getVoipReadiness().then(setReady).catch(() => {});
 
   const reload = () => {
     getVoipStatus().then(setStatus).catch(() => {});
     getCalls().then((r) => setCalls(r.calls)).catch(() => {});
     if (open !== null) getCall(open).then((r) => setTurns(r.call?.turns ?? [])).catch(() => {});
   };
-  useEffect(() => { getFullConfig().then((c) => setCfg(c.voip ?? {})).catch(() => {}); }, []);
+  useEffect(() => { loadCfg(); loadReady(); }, []);
   useEffect(() => {
     reload();
     const id = setInterval(reload, 3000);   // live transcript while a call is active
@@ -36,10 +44,10 @@ export function Calls() {
   }, [open]);
 
   const save = async (updates: Record<string, any>) => {
-    setCfg({ ...cfg, ...updates });
+    setCfg((c) => ({ ...c, ...updates }));
     await patchConfig({ voip: updates });
     toast("saved", "success");
-    reload();
+    reload(); loadReady();
   };
 
   const webhook = cfg.public_url && cfg.webhook_secret
@@ -59,6 +67,9 @@ export function Calls() {
         <p className="dim">Answers inbound calls using your scripts and knowledge base. Calls are transcribed live;
           the agent only answers from your knowledge and hands off to a person when it can't.</p>
 
+        {ready && <Readiness ready={ready.ready} items={ready.items} />}
+
+        {loaded && (<>
         <div className="card">
           <h3>Setup</h3>
           <div className="row wrap" style={{ gap: 10 }}>
@@ -67,9 +78,9 @@ export function Calls() {
                 <option value="off">off</option><option value="on">on</option></select></label>
             <label className="bud"><span className="lbl-sm">Company name</span>
               <input defaultValue={cfg.company ?? ""} onBlur={(e) => save({ company: e.target.value })} /></label>
-            <label className="bud"><span className="lbl-sm">Public URL of this server</span>
+            <label className="bud"><span className="lbl-sm">Public HTTPS address of this server</span>
               <input defaultValue={cfg.public_url ?? ""} placeholder="https://agent.example.com"
-                onBlur={(e) => save({ public_url: e.target.value.trim() })} style={{ width: 240 }} /></label>
+                onBlur={(e) => save({ public_url: e.target.value.trim().replace(/\/$/, "") })} style={{ width: 240 }} /></label>
             <label className="bud"><span className="lbl-sm">Human hand-off number</span>
               <input defaultValue={cfg.transfer_number ?? ""} placeholder="+15551234567"
                 onBlur={(e) => save({ transfer_number: e.target.value.trim() })} /></label>
@@ -85,11 +96,32 @@ export function Calls() {
               </span>
             )}
           </div>
-          <p className="dim" style={{ fontSize: 12, marginTop: 8 }}>
-            In Telnyx: create a Call Control application, set its webhook URL to the address above, attach your
-            phone number to it, and put <code>TELNYX_API_KEY</code> in Settings → secrets. Add your scripts under
-            Knowledge and your customer list under Contacts.</p>
         </div>
+
+        <TelnyxCard cfg={cfg} keySet={telnyxKeySet} save={save} toast={toast}
+          onKeySaved={() => { setTelnyxKeySet(true); loadReady(); }} />
+        <SpeechCard cfg={cfg} save={save} toast={toast} />
+
+        <div className="card">
+          <h3>Conversation</h3>
+          <label>Greeting <span className="dim">({"{company}"} is replaced by the company name)</span>
+            <textarea defaultValue={cfg.greeting ?? ""} rows={2} style={{ width: "100%" }}
+              onBlur={(e) => save({ greeting: e.target.value })} /></label>
+          <div className="row wrap" style={{ gap: 10 }}>
+            <label className="bud"><span className="lbl-sm">Model for calls (blank = main model)</span>
+              <input defaultValue={cfg.model ?? ""} placeholder="ollama:llama3.1"
+                onBlur={(e) => save({ model: e.target.value.trim() })} /></label>
+            <label className="bud"><span className="lbl-sm">Est. cost per minute ($)</span>
+              <input type="number" step="0.001" defaultValue={cfg.cost_per_minute ?? 0}
+                onBlur={(e) => save({ cost_per_minute: Number(e.target.value) || 0 })} style={{ width: 90 }} /></label>
+            <label className="bud"><span className="lbl-sm">Max call length (s)</span>
+              <input type="number" defaultValue={cfg.max_call_seconds ?? 900}
+                onBlur={(e) => save({ max_call_seconds: Number(e.target.value) || 900 })} style={{ width: 90 }} /></label>
+          </div>
+          <p className="dim" style={{ fontSize: 12 }}>Add your scripts and FAQs under Knowledge and your customers under
+            Contacts: the agent answers only from those.</p>
+        </div>
+        </>)}
 
         <div className="card">
           <h3>Recent calls ({calls.length})</h3>
@@ -127,6 +159,132 @@ export function Calls() {
           </table>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+function Readiness({ ready, items }: { ready: boolean; items: ReadinessItem[] }) {
+  return (
+    <div className="card">
+      <h3>{ready ? "✓ Ready for calls" : "Before calls can work"}</h3>
+      <ul className="list">
+        {items.map((i) => (
+          <li key={i.id}>
+            <span style={{ color: i.ok ? "var(--green, #2e7d32)" : i.required ? "var(--red, #c62828)" : "var(--amber, #b26a00)" }}>
+              {i.ok ? "✔" : i.required ? "✗" : "○"}</span>{" "}
+            <b>{i.label}</b>{i.detail && <span className="dim"> · {i.detail}</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+type Saver = (u: Record<string, any>) => Promise<void>;
+type Toaster = (m: string, kind?: any) => void;
+
+function TelnyxCard({ cfg, keySet, save, toast, onKeySaved }: {
+  cfg: Record<string, any>; keySet: boolean; save: Saver; toast: Toaster; onKeySaved: () => void;
+}) {
+  const [result, setResult] = useState<Record<string, any> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const test = async () => {
+    setBusy(true);
+    try { setResult(await testTelnyx()); } catch (e) { setResult({ ok: false, error: String(e) }); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="card">
+      <h3>Telnyx (Voice API)</h3>
+      <div className="row wrap" style={{ gap: 10 }}>
+        <label className="bud"><span className="lbl-sm">API key {keySet ? "✓ set" : "✗ not set"}</span>
+          <input type="password" placeholder={keySet ? "•••••• (type to replace)" : "KEY0123…"}
+            onBlur={async (e) => {
+              const v = e.target.value.trim();
+              if (!v) return;
+              await putSecrets({ TELNYX_API_KEY: v }); e.target.value = ""; onKeySaved(); toast("Telnyx key saved", "success");
+            }} /></label>
+        <label className="bud"><span className="lbl-sm">Voice API application ID</span>
+          <input defaultValue={cfg.connection_id ?? ""} placeholder="1234567890123456789"
+            onBlur={(e) => save({ connection_id: e.target.value.trim() })} /></label>
+        <label className="bud"><span className="lbl-sm">Your Telnyx number</span>
+          <input defaultValue={cfg.from_number ?? ""} placeholder="+15551234567"
+            onBlur={(e) => save({ from_number: e.target.value.trim() })} /></label>
+        <button className="btn" onClick={test} disabled={busy || !keySet}>{busy ? "Testing…" : "Test Telnyx"}</button>
+      </div>
+      {result && (result.ok
+        ? <p className="ok">✓ Key valid{result.application ? ` · application "${result.application}"` : ""}
+            {result.webhook_matches ? " · webhook URL matches" : ""}</p>
+        : <p className="warn">✗ {result.error}</p>)}
+      {result?.warning && <p className="warn">⚠ {result.warning} (Telnyx has: <code>{result.webhook_in_telnyx || "nothing"}</code>)</p>}
+      <details style={{ marginTop: 8 }}>
+        <summary className="dim">How to set this up in Telnyx (and with FreePBX)</summary>
+        <ol className="dim" style={{ fontSize: 13 }}>
+          <li>Telnyx portal → <b>Voice → Programmable Voice → Applications</b>: create an application (Call Control / Voice API).</li>
+          <li>Set its <b>webhook URL</b> to the address shown under Setup (needs a public <code>https://</code> address).</li>
+          <li>Copy the application's <b>ID</b> into "Voice API application ID" above.</li>
+          <li><b>Numbers</b>: assign your phone number to that application. Calls to it now reach the AI.</li>
+          <li><b>Auth → API Keys</b>: create a key and paste it above, then press "Test Telnyx".</li>
+          <li>FreePBX (optional): send calls to the AI with an inbound route / follow-me to the number above
+            through your Telnyx SIP trunk, and put a FreePBX extension's DID in "Human hand-off number" so
+            "talk to a person" rings your team. The SIP trunk itself needs no settings here.</li>
+        </ol>
+      </details>
+    </div>
+  );
+}
+
+const LOCAL_SPEECH = {
+  stt: { provider: "whisper-local", model: "small.en", base_url: "" },
+  tts: { base_url: "http://kokoro:8880/v1", model: "kokoro", voice: "af_heart", sample_rate: 24000 },
+};
+const OPENAI_SPEECH = {
+  stt: { provider: "openai-compatible", model: "whisper-1", base_url: "https://api.openai.com/v1" },
+  tts: { base_url: "https://api.openai.com/v1", model: "tts-1", voice: "alloy", sample_rate: 24000 },
+};
+
+function SpeechCard({ cfg, save, toast }: { cfg: Record<string, any>; save: Saver; toast: Toaster }) {
+  const [result, setResult] = useState<Record<string, any> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const tts = cfg.tts ?? {};
+  const preset = String(tts.base_url ?? "").includes("kokoro") ? "local"
+    : String(tts.base_url ?? "api.openai.com").includes("api.openai.com") ? "openai" : "custom";
+  const test = async () => {
+    setBusy(true); setResult(null);
+    try { setResult(await testSpeech(true)); } catch (e) { setResult({ ok: false, error: String(e) }); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="card">
+      <h3>Speech</h3>
+      <div className="row wrap" style={{ gap: 10, alignItems: "end" }}>
+        <label className="bud"><span className="lbl-sm">Voices</span>
+          <select value={preset} onChange={async (e) => {
+            if (e.target.value === "local") { await save(LOCAL_SPEECH); toast("local speech selected", "success"); }
+            if (e.target.value === "openai") { await save(OPENAI_SPEECH); toast("OpenAI speech selected (needs an OpenAI key)", "info"); }
+          }}>
+            <option value="local">Local on this server (free)</option>
+            <option value="openai">OpenAI (needs an OpenAI key)</option>
+            <option value="custom" disabled>Custom (edit URLs below)</option>
+          </select></label>
+        <label className="bud"><span className="lbl-sm">Text-to-speech URL</span>
+          <input defaultValue={tts.base_url ?? ""} key={tts.base_url} style={{ width: 230 }}
+            onBlur={(e) => save({ tts: { ...tts, base_url: e.target.value.trim() } })} /></label>
+        <label className="bud"><span className="lbl-sm">Voice</span>
+          <input defaultValue={tts.voice ?? ""} key={tts.voice} style={{ width: 100 }}
+            onBlur={(e) => save({ tts: { ...tts, voice: e.target.value.trim() } })} /></label>
+        <button className="btn" onClick={test} disabled={busy}>{busy ? "Testing… (first time downloads the speech model)" : "Test voice"}</button>
+      </div>
+      {result && (result.ok
+        ? <p className="ok">✓ Spoke {result.audio_seconds}s of audio in {result.tts_ms} ms
+            {result.transcript !== undefined ? ` · heard back: "${result.transcript}" (${result.stt_ms} ms)` : ""}</p>
+        : <p className="warn">✗ {result.error}</p>)}
+      {preset === "local" && (
+        <p className="dim" style={{ fontSize: 12 }}>Local voices run in a small extra container. On the server run
+          {" "}<code>xplogent-docker speech on</code> once (add <code>--gpu</code> on an NVIDIA server). Listening
+          (speech-to-text) runs inside Xplogent and downloads its model on first use.</p>
+      )}
     </div>
   );
 }
