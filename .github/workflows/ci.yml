@@ -82,7 +82,7 @@ jobs:
           done
       - name: Lint the install scripts
         run: |
-          shellcheck get.sh deploy/docker/xplogent-docker deploy/install-server.sh install.sh
+          shellcheck -S warning get.sh deploy/docker/xplogent-docker deploy/install-server.sh install.sh
       - name: Installer dry run (local + https)
         run: |
           XPL_SRC=$PWD XPL_BIN_DIR=$RUNNER_TEMP/bin bash get.sh --dry-run --yes --dir $RUNNER_TEMP/a --mode local

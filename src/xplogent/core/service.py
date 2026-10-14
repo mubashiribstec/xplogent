@@ -165,7 +165,7 @@ def stop(timeout: float = 15.0) -> dict:
     if not _wait_exit(pid, timeout):
         if not is_windows():
             try:
-                os.kill(pid, signal.SIGKILL)
+                os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))  # SIGKILL is POSIX-only
             except OSError:
                 pass
             _wait_exit(pid, 3.0)

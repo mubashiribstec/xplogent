@@ -40,6 +40,19 @@ _KEEP_BACKUPS = 10
 _SECRET_FILES = ("secrets.enc", "secret.key")
 
 
+def _keyring_only_key(data: Path) -> bytes | None:
+    """The key that decrypts ``secrets.enc`` when it is *not* in a key file (OS keyring)."""
+    if (data / "secret.key").exists() or not (data / "secrets.enc").exists():
+        return None
+    try:
+        from xplogent.core import secrets
+
+        _values, key, ok = secrets._decrypt_store()
+        return key if ok and key else None
+    except Exception:  # noqa: BLE001 - backup without the key rather than no backup
+        return None
+
+
 def create_backup(dest: Path | str | None = None, *, include_secrets: bool = False) -> dict[str, Any]:
     """Write a .tar.gz of DB + skills + config. Returns ``{ok, path, size}``.
 
@@ -77,6 +90,13 @@ def create_backup(dest: Path | str | None = None, *, include_secrets: bool = Fal
                 for name in _SECRET_FILES:
                     if (data / name).exists():
                         tar.add(data / name, arcname=name)
+                key = _keyring_only_key(data)
+                if key:
+                    # Windows / desktop keyrings hold the key outside the data dir: without
+                    # it in the archive, a restore on another machine can't read any key.
+                    key_tmp = Path(tmp) / "secret.key"
+                    key_tmp.write_bytes(key)
+                    tar.add(key_tmp, arcname="secret.key")
     try:
         dest.chmod(0o600)  # may contain secrets / the whole memory DB
     except OSError:

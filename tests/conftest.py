@@ -25,6 +25,16 @@ def _isolate_data(tmp_path_factory, monkeypatch):
     home = tmp_path_factory.mktemp("xph")
     monkeypatch.setenv("XPLOGENT_HOME", str(home))
     monkeypatch.setattr("xplogent.core.config._migrated", True, raising=False)
+    # Tests must not read or write the developer's real keyring (Windows Credential
+    # Manager, macOS Keychain, Secret Service): use a backend that always fails.
+    try:
+        import keyring
+        from keyring.backends.fail import Keyring as _NoKeyring
+
+        monkeypatch.setattr(keyring, "get_password", _NoKeyring().get_password)
+        monkeypatch.setattr(keyring, "set_password", _NoKeyring().set_password)
+    except ImportError:
+        pass
     # FastAPI's TestClient sends `Host: testserver`; the API's DNS-rebinding guard only
     # accepts localhost names unless told otherwise.
     monkeypatch.setenv("XPLOGENT_ALLOWED_HOSTS", "testserver")

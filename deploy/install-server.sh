@@ -37,8 +37,9 @@ say() { printf '• %s\n' "$*"; }
 die() { printf '✗ %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo $0)"
-[ -f "$SRC/pyproject.toml" ] && [ -f "$SRC/requirements/server.lock" ] \
-  || die "run this from a full Xplogent checkout (pyproject.toml / requirements/server.lock missing)"
+if [ ! -f "$SRC/pyproject.toml" ] || [ ! -f "$SRC/requirements/server.lock" ]; then
+  die "run this from a full Xplogent checkout (pyproject.toml / requirements/server.lock missing)"
+fi
 
 # --- Python 3.11+ -----------------------------------------------------------------
 PYTHON="${PYTHON:-}"

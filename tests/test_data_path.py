@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from xplogent.core import config
 
 
@@ -24,5 +27,8 @@ def test_default_data_dir_is_install_data(monkeypatch):
     monkeypatch.delenv("XPLOGENT_HOME", raising=False)
     monkeypatch.setattr(config, "_migrated", True)  # don't copy ~/.xplogent during tests
     d = config.data_dir()
+    if os.name == "nt":  # per-user folder on Windows, whatever the install location
+        assert d == Path.home() / ".xplogent"
+        return
     assert d.parent == config.install_root()
     assert d.name == "data"

@@ -163,6 +163,29 @@ def test_backup_with_secrets_round_trips_api_keys(tmp_path, monkeypatch):
     assert secrets.read_secrets().get("OPENAI_API_KEY") == "sk-keep-me"
 
 
+def test_backup_carries_a_key_that_lives_in_the_os_keyring(tmp_path, monkeypatch):
+    """Windows/desktop installs keep the key in the OS keyring, not a key file: the
+    backup must still contain it, or a restore on a new machine loses every API key."""
+    pytest.importorskip("cryptography")
+    from cryptography.fernet import Fernet
+
+    from xplogent.core import backup, secrets
+
+    if not secrets.available():
+        pytest.skip("cryptography unusable here")
+    keyring_key = Fernet.generate_key()
+    monkeypatch.setenv("XPLOGENT_HOME", str(tmp_path / "a"))
+    monkeypatch.setattr(secrets, "_keyring_key", lambda: keyring_key)
+    assert secrets.write_secrets({"OPENAI_API_KEY": "sk-from-keyring"})
+    assert not secrets._key_file().exists()                       # key only in the keyring
+    archive = backup.create_backup(tmp_path / "b.tar.gz", include_secrets=True)["path"]
+
+    monkeypatch.setenv("XPLOGENT_HOME", str(tmp_path / "b"))     # new machine, other keyring
+    monkeypatch.setattr(secrets, "_keyring_key", lambda: None)
+    backup.restore_backup(archive)
+    assert secrets.read_secrets().get("OPENAI_API_KEY") == "sk-from-keyring"
+
+
 def test_secrets_survive_a_keyring_appearing_later(tmp_path, monkeypatch):
     pytest.importorskip("cryptography")
     from cryptography.fernet import Fernet

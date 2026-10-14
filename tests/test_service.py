@@ -100,7 +100,7 @@ def test_stop_reports_a_server_that_will_not_exit(home, monkeypatch):
     monkeypatch.setattr(service.os, "kill", lambda pid, sig: signals.append(sig))
     res = service.stop(timeout=0.3)
     assert res["ok"] is False
-    assert service.signal.SIGKILL in signals  # escalated after SIGTERM
+    assert getattr(service.signal, "SIGKILL", service.signal.SIGTERM) in signals  # escalated
     assert service._state_path().exists()      # still tracked: it's still running
 
 
