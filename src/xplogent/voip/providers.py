@@ -14,6 +14,7 @@ and Kokoro-FastAPI expose — so a local GPU deployment needs no extra code.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import os
 import wave
@@ -21,6 +22,10 @@ from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
 import httpx
+
+from xplogent.core.logging import get_logger
+
+_log = get_logger("voip.speech")
 
 
 def pcm_to_wav(pcm16: bytes, rate: int = 16000) -> bytes:
@@ -156,3 +161,87 @@ def build_tts(cfg: dict[str, Any]) -> TTS:
     return OpenAICompatTTS(base_url=cfg.get("base_url") or "https://api.openai.com/v1",
                            model=cfg.get("model") or "tts-1", voice=cfg.get("voice") or "alloy",
                            api_key=key, sample_rate=int(cfg.get("sample_rate", 24000)))
+
+
+# ── resilience: one retry, then an optional fallback provider ────────────────────
+class ResilientSTT:
+    """Retry a failed transcription once, then use the fallback (if any)."""
+
+    def __init__(self, primary: STT, fallback: STT | None = None, retry_delay: float = 0.3) -> None:
+        self.primary, self.fallback, self.retry_delay = primary, fallback, retry_delay
+        self.used_fallback = 0
+
+    async def transcribe(self, pcm16_16k: bytes) -> str:
+        try:
+            return await self.primary.transcribe(pcm16_16k)
+        except Exception:  # noqa: BLE001 - retried below
+            await asyncio.sleep(self.retry_delay)
+        try:
+            return await self.primary.transcribe(pcm16_16k)
+        except Exception as exc:
+            if self.fallback is None:
+                raise
+            _log.warning("speech-to-text failed twice (%s); using the fallback", exc)
+            self.used_fallback += 1
+            return await self.fallback.transcribe(pcm16_16k)
+
+    async def aclose(self) -> None:
+        for p in (self.primary, self.fallback):
+            if p is not None:
+                with contextlib.suppress(Exception):
+                    await p.aclose()
+
+
+class ResilientTTS:
+    """Retry synthesis once if it fails before any audio, then use the fallback.
+
+    Once audio has started playing a failure is not retried (the caller would hear
+    the sentence twice). Fallback audio is resampled to the primary's sample rate,
+    which is what the call engine expects.
+    """
+
+    def __init__(self, primary: TTS, fallback: TTS | None = None, retry_delay: float = 0.3) -> None:
+        self.primary, self.fallback, self.retry_delay = primary, fallback, retry_delay
+        self.sample_rate = primary.sample_rate
+        self.used_fallback = 0
+
+    async def _attempt(self, tts: TTS, text: str, started: list[bool]) -> AsyncIterator[bytes]:
+        from xplogent.voip.audio import Resampler
+
+        rs = Resampler(tts.sample_rate, self.sample_rate) if tts.sample_rate != self.sample_rate else None
+        async for chunk in tts.synthesize(text):
+            started[0] = True
+            yield rs.feed(chunk) if rs else chunk
+
+    async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+        started = [False]
+        chain = [self.primary, self.primary] + ([self.fallback] if self.fallback else [])
+        for n, tts in enumerate(chain):
+            try:
+                async for chunk in self._attempt(tts, text, started):
+                    yield chunk
+                return
+            except Exception as exc:
+                if started[0] or n == len(chain) - 1:
+                    raise
+                if tts is self.primary and n == 1:
+                    _log.warning("text-to-speech failed twice (%s); using the fallback", exc)
+                    self.used_fallback += 1
+                await asyncio.sleep(self.retry_delay)
+
+    async def aclose(self) -> None:
+        for p in (self.primary, self.fallback):
+            if p is not None:
+                with contextlib.suppress(Exception):
+                    await p.aclose()
+
+
+def default_stt_fallback(stt_cfg: dict[str, Any]) -> dict[str, Any] | None:
+    """Remote speech-to-text falls back to the built-in Whisper when it is installed."""
+    import importlib.util
+
+    if str(stt_cfg.get("provider", "whisper-local")) == "whisper-local":
+        return None
+    if importlib.util.find_spec("faster_whisper") is None:
+        return None
+    return {"provider": "whisper-local", "model": "base.en", "language": stt_cfg.get("language", "en")}

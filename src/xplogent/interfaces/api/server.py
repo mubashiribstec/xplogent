@@ -14,7 +14,10 @@ import os
 
 from xplogent.core import updater
 from xplogent.core.config import load_config, save_user_config
+from xplogent.core.logging import get_logger
 from xplogent.interfaces.api import deps
+
+_startup_log = get_logger("startup")
 
 
 def create_app():
@@ -41,6 +44,9 @@ def create_app():
         await watcher.start()
         app.state.watcher = watcher
         sip_task = None
+        from xplogent.voip.config_check import check_voip
+        for problem in check_voip(cfg.voip or {}):
+            _startup_log.warning("settings: %s", problem)
         from xplogent.voip.telephony import sip as sip_mod
         if sip_mod.wants_sip(cfg.voip or {}):
             sip_task = asyncio.create_task(sip_mod.apply_settings(cfg))

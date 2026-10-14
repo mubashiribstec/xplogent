@@ -50,6 +50,24 @@ def customer_number(info: dict[str, str]) -> str:
     return info.get("to", "") if is_outbound(info) else info.get("from", "")
 
 
+def _speech_stt(v: dict[str, Any]):
+    """The call's speech-to-text: retried once, then the fallback (``voip.stt_fallback``,
+    or the built-in Whisper when the main one is a remote service)."""
+    from xplogent.voip.providers import ResilientSTT, default_stt_fallback
+
+    main_cfg = v.get("stt", {}) or {}
+    fb_cfg = v.get("stt_fallback") or default_stt_fallback(main_cfg)
+    return ResilientSTT(build_stt(main_cfg), build_stt(fb_cfg) if fb_cfg else None)
+
+
+def _speech_tts(v: dict[str, Any]):
+    """The call's text-to-speech: retried once, then ``voip.tts_fallback`` if set."""
+    from xplogent.voip.providers import ResilientTTS
+
+    fb_cfg = v.get("tts_fallback") or None
+    return ResilientTTS(build_tts(v.get("tts", {}) or {}), build_tts(fb_cfg) if fb_cfg else None)
+
+
 def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio, clear_audio=None,
                   hangup=None, transfer=None, stt=None, tts=None, provider=None,
                   retrieve=None, **session_kw: Any) -> tuple[CallSession, int, CallBrain]:
@@ -85,8 +103,7 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
     greeting = str(v.get("greeting", "")).replace("{company}", str(v.get("company", "our company")))
     vad_cfg = v.get("vad", {}) or {}
     session = CallSession(
-        brain=brain, stt=stt or build_stt(v.get("stt", {}) or {}),
-        tts=tts or build_tts(v.get("tts", {}) or {}),
+        brain=brain, stt=stt or _speech_stt(v), tts=tts or _speech_tts(v),
         send_audio=send_audio, clear_audio=clear_audio, hangup=hangup, transfer=transfer,
         on_turn=lambda speaker, text: store.add_call_turn(call_id, speaker, text),
         greeting=greeting,

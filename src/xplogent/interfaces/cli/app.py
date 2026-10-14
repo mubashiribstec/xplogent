@@ -484,6 +484,12 @@ app.add_typer(schedule_app, name="schedule")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(docs_app, name="docs")
 
+from xplogent.interfaces.cli.voip_cmds import dial as _dial  # noqa: E402
+from xplogent.interfaces.cli.voip_cmds import voip_app  # noqa: E402
+
+app.add_typer(voip_app, name="voip")
+app.command(name="dial")(_dial)
+
 
 @docs_app.command("ingest")
 def docs_ingest(path: str) -> None:

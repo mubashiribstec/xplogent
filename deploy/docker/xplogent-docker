@@ -16,6 +16,8 @@
 #   xplogent-docker backup-model on [model] | off   local Ollama answers if the main model can't
 #   xplogent-docker sip on [--ip ADDR] | off   open UDP ports for the built-in SIP trunk client
 #   xplogent-docker pull-model NAME     download an Ollama model (e.g. llama3.1)
+#   xplogent-docker cli ARGS...         run an xplogent command inside the container
+#                                       (e.g. cli voip status · cli dial +1555… --test)
 #   xplogent-docker uninstall [--purge] remove containers (--purge: also all data!)
 #
 # Install directory: $XPLOGENT_DOCKER_DIR, else the directory below (set by get.sh),
@@ -334,6 +336,9 @@ case "$cmd" in
         ok "SIP ports closed." ;;
       *) die "usage: xplogent-docker sip on [--ip ADDRESS] | off" ;;
     esac ;;
+  cli)
+    running || die "Xplogent is not running (xplogent-docker start)"
+    dc exec xplogent xplogent "$@" ;;
   pull-model)
     [ -n "${1:-}" ] || die "usage: xplogent-docker pull-model <name>"
     dc exec ollama ollama pull "$1" ;;
@@ -353,6 +358,6 @@ case "$cmd" in
     fi
     rm -f /usr/local/bin/xplogent-docker 2>/dev/null || true ;;
   url) url ;;
-  help|-h|--help) sed -n '2,22p' "$0" ;;
+  help|-h|--help) sed -n '2,24p' "$0" ;;
   *) die "unknown command: $cmd (xplogent-docker help)" ;;
 esac

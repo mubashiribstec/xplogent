@@ -44,7 +44,12 @@ def speech_status(v: dict[str, Any], env: dict[str, str]) -> tuple[bool, str]:
     stt = v.get("stt") or {}
     tts = v.get("tts") or {}
     problems = []
-    if str(stt.get("provider", "whisper-local")) != "whisper-local":
+    if str(stt.get("provider", "whisper-local")) == "whisper-local":
+        import importlib.util
+
+        if importlib.util.find_spec("faster_whisper") is None:
+            problems.append("built-in speech-to-text needs faster-whisper: pip install 'xplogent[voip]'")
+    else:
         if not stt.get("base_url") and not _key(env, str(stt.get("api_key_env", "OPENAI_API_KEY"))):
             problems.append("speech-to-text needs a URL or an OpenAI key")
     base = str(tts.get("base_url") or "https://api.openai.com/v1")
@@ -104,6 +109,11 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
         call_model if model_ok else f"{call_model} needs {needs}: add it in Settings or pick an Ollama model")
     ok, detail = speech_status(v, env)
     add("speech", "Speech (listen + speak)", ok, detail)
+    from xplogent.voip.config_check import check_voip
+
+    bad = check_voip(v)
+    add("settings", "Settings are valid", not bad,
+        "; ".join(bad[:3]) + (f" (+{len(bad) - 3} more)" if len(bad) > 3 else ""), required=False)
     add("enabled", "Phone agent switched on", bool(v.get("enabled")),
         "" if v.get("enabled") else "switch 'Phone agent' to on")
     return items
