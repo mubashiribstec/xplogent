@@ -6,7 +6,26 @@
     <title>Xplogent Dashboard</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Replaced as soon as the app starts. If it stays, the script didn't run. -->
+    <div id="root">
+      <div id="boot" style="font-family:system-ui,sans-serif;max-width:560px;margin:15vh auto;padding:0 16px;color:#555">
+        <p>Loading Xplogent…</p>
+        <p id="boot-error" style="color:#b00020;white-space:pre-wrap"></p>
+      </div>
+    </div>
+    <noscript>Xplogent needs JavaScript enabled.</noscript>
+    <script>
+      // Shown only if the app fails before it can render its own error screen.
+      (function () {
+        function show(msg) {
+          var el = document.getElementById("boot-error");
+          if (el) el.textContent = "The dashboard failed to start:\n" + msg +
+            "\n\nTry a hard refresh (Ctrl+Shift+R). If it persists, open the browser console (F12) and report the error.";
+        }
+        window.addEventListener("error", function (e) { show(e.message || String(e.error)); });
+        setTimeout(function () { if (document.getElementById("boot")) show("the app script did not load (blocked by an extension, proxy or antivirus web filter?)"); }, 8000);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

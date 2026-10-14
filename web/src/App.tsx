@@ -39,12 +39,14 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [onboard, setOnboard] = useState(false);
-  const [authed, setAuthed] = useState(true);
+  // null = still checking: render nothing that calls the API until we know (calls made
+  // without the token got 401s and crashed the first-run check).
+  const [authed, setAuthed] = useState<boolean | null>(null);
   const isMobile = useIsMobile();
 
   // Gate the app behind the access token when the backend requires one.
   useEffect(() => {
-    checkAuth().then((r) => setAuthed(!r.required || r.ok));
+    checkAuth().then((r) => setAuthed(!r.required || r.ok)).catch(() => setAuthed(true));
     // A 401 later on (token rotated / auth switched on): back to the login screen.
     const onUnauthorized = () => { setToken(""); setAuthed(false); };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
@@ -53,22 +55,24 @@ export function App() {
 
   // Health polling drives the rail status dot.
   useEffect(() => {
+    if (!authed) return;
     const poll = () => getStatus().then(() => setOnline(true)).catch(() => setOnline(false));
     poll();
     const id = setInterval(poll, 15000);
     return () => clearInterval(id);
-  }, []);
+  }, [authed]);
 
   // First-run onboarding: no API key set and no sessions yet.
   useEffect(() => {
-    if (localStorage.getItem("xplogent_onboarded")) return;
+    if (!authed) return;
+    try { if (localStorage.getItem("xplogent_onboarded")) return; } catch { return; }
     Promise.all([getStatus().catch(() => null), getSessions().catch(() => ({ sessions: [] }))])
       .then(([st, ss]) => {
-        const anyKey = st ? Object.values(st.secrets).some(Boolean) : false;
+        const anyKey = Object.values(st?.secrets ?? {}).some(Boolean);
         const usingLocal = st?.model?.startsWith("claude-cli") || st?.model?.startsWith("ollama");
         if (!anyKey && !usingLocal && (ss.sessions?.length ?? 0) === 0) setOnboard(true);
       });
-  }, []);
+  }, [authed]);
 
   // Cmd/Ctrl-K command palette.
   useEffect(() => {
@@ -89,6 +93,7 @@ export function App() {
 
   const go = (t: Tab) => { setTab(t); setNavOpen(false); };
 
+  if (authed === null) return null;  // the boot "Loading…" is replaced by an empty frame briefly
   if (!authed) return <Login onAuthed={() => { setAuthed(true); location.reload(); }} />;
 
   return (

@@ -4,8 +4,11 @@
 const TOKEN_KEY = "xplogent_token";
 const _origFetch = window.fetch.bind(window);
 
-export function getToken(): string { return localStorage.getItem(TOKEN_KEY) || ""; }
-export function setToken(t: string) { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); }
+// Storage may be blocked by browser privacy settings: degrade to "no saved token".
+export function getToken(): string { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; } }
+export function setToken(t: string) {
+  try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch { /* not persisted */ }
+}
 export function wsTokenParam(): string { const t = getToken(); return t ? `&token=${encodeURIComponent(t)}` : ""; }
 
 // Fired when the server rejects our token (rotated, or auth newly enabled): the app
