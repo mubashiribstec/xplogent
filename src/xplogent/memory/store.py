@@ -224,6 +224,22 @@ CREATE TABLE IF NOT EXISTS call_turns (
     created_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_call_turns_call ON call_turns(call_id);
+CREATE TABLE IF NOT EXISTS training_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT,
+    filename TEXT,
+    path TEXT,
+    size INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'queued',
+    progress REAL DEFAULT 0,
+    error TEXT DEFAULT '',
+    transcript TEXT DEFAULT '',
+    doc_id INTEGER,
+    chunks INTEGER DEFAULT 0,
+    options TEXT DEFAULT '{}',
+    created_at REAL,
+    updated_at REAL
+);
 CREATE TABLE IF NOT EXISTS dnc (
     phone TEXT PRIMARY KEY,
     reason TEXT,
@@ -1062,6 +1078,58 @@ class Store:
             return False
         rows = self._query("SELECT phone FROM dnc WHERE phone LIKE ?", (f"%{key}",))
         return any(self.phone_key(r["phone"]) == key for r in rows)
+
+    # -- phone agent training material ------------------------------------------
+    _TRAINING_FIELDS = {"status", "progress", "error", "transcript", "doc_id", "chunks", "path",
+                        "size", "options"}
+
+    def add_training_item(self, kind: str, filename: str, path: str = "", size: int = 0,
+                          options: dict[str, Any] | None = None) -> int:
+        now = time.time()
+        cur = self._write(
+            "INSERT INTO training_items (kind, filename, path, size, status, options, created_at, "
+            "updated_at) VALUES (?,?,?,?,'queued',?,?,?)",
+            (kind, filename, path, size, json.dumps(options or {}), now, now))
+        return int(cur.lastrowid)
+
+    def update_training_item(self, item_id: int, **fields: Any) -> None:
+        cols = {k: v for k, v in fields.items() if k in self._TRAINING_FIELDS}
+        if not cols:
+            return
+        if isinstance(cols.get("options"), dict):
+            cols["options"] = json.dumps(cols["options"])
+        sets = ", ".join(f"{k}=?" for k in cols)
+        self._write(f"UPDATE training_items SET {sets}, updated_at=? WHERE id=?",
+                    (*cols.values(), time.time(), item_id))
+
+    @staticmethod
+    def _training_row(r: Any, full: bool) -> dict[str, Any]:
+        d = dict(r)
+        d["options"] = json.loads(d.get("options") or "{}")
+        if not full:
+            d["has_transcript"] = bool(d.pop("transcript", ""))
+        return d
+
+    def list_training_items(self, status: str = "") -> list[dict[str, Any]]:
+        sql = "SELECT * FROM training_items"
+        args: tuple = ()
+        if status:
+            sql, args = sql + " WHERE status=?", (status,)
+        return [self._training_row(r, False) for r in self._query(sql + " ORDER BY id DESC", args)]
+
+    def get_training_item(self, item_id: int) -> dict[str, Any] | None:
+        rows = self._query("SELECT * FROM training_items WHERE id=?", (item_id,))
+        return self._training_row(rows[0], True) if rows else None
+
+    def training_transcripts(self, kinds: tuple[str, ...] = ("recording",)) -> list[dict[str, Any]]:
+        marks = ",".join("?" for _ in kinds)
+        rows = self._query(
+            f"SELECT id, kind, filename, transcript FROM training_items WHERE status='done' "
+            f"AND kind IN ({marks}) AND transcript<>'' ORDER BY id", kinds)
+        return [dict(r) for r in rows]
+
+    def delete_training_item(self, item_id: int) -> None:
+        self._write("DELETE FROM training_items WHERE id=?", (item_id,))
 
     def close(self) -> None:
         with self._lock:

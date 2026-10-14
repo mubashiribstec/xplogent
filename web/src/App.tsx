@@ -19,6 +19,7 @@ import { Operator } from "./views/Operator";
 import { Browser } from "./views/Browser";
 import { Calls } from "./views/Calls";
 import { Contacts } from "./views/Contacts";
+import { Training } from "./views/Training";
 import { Triggers } from "./views/Triggers";
 import { Council } from "./Council";
 import { MissionControl } from "./MissionControl";
@@ -129,6 +130,7 @@ export function App() {
         {tab === "browser" && <Browser />}
         {tab === "calls" && <Calls />}
         {tab === "contacts" && <Contacts />}
+        {tab === "training" && <Training />}
         {tab === "runs" && <Runs />}
         {tab === "knowledge" && <Knowledge />}
         {tab === "graph" && <Graph />}

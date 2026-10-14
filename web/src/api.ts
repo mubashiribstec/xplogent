@@ -679,3 +679,51 @@ export class MonitorSocket {
     this.ws.close();
   }
 }
+
+// ── Phone agent training ─────────────────────────────────────────────────────
+export interface TrainingItem {
+  id: number; kind: "recording" | "document" | "qa"; filename: string; size: number;
+  status: "queued" | "processing" | "done" | "error"; progress: number; error: string;
+  chunks: number; doc_id: number | null; options: { layout?: string }; has_transcript?: boolean;
+  transcript?: string; created_at: number;
+}
+export interface PlaybookJob { status: "idle" | "running" | "done" | "error"; progress: number; draft: string; error: string }
+export async function getTraining(): Promise<{ items: TrainingItem[]; busy: boolean }> {
+  return (await fetch("/voip/training")).json();
+}
+export async function getTrainingItem(id: number): Promise<{ item: TrainingItem | null }> {
+  return (await fetch(`/voip/training/${id}`)).json();
+}
+export async function deleteTrainingItem(id: number): Promise<{ ok: boolean; error?: string }> {
+  return (await fetch(`/voip/training/${id}`, { method: "DELETE" })).json();
+}
+export const retryTrainingItem = (id: number, layout?: string) =>
+  postJSON<{ ok: boolean; error?: string }>(`/voip/training/${id}/retry`, layout ? { layout } : {});
+/** Multipart upload with progress (XHR: fetch can't report upload progress). */
+export function uploadTraining(files: File[], layout: string, onProgress: (f: number) => void):
+    Promise<{ ok: boolean; added: { id: number; file: string; kind: string }[]; rejected: { file: string; error: string }[] }> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    files.forEach((f) => form.append("files", f, f.name));
+    form.append("layout", layout);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/voip/training/upload");
+    const tok = getToken();
+    if (tok) xhr.setRequestHeader("Authorization", `Bearer ${tok}`);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      if (xhr.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+      try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error(`upload failed (HTTP ${xhr.status})`)); }
+    };
+    xhr.onerror = () => reject(new Error("upload failed: network error"));
+    xhr.send(form);
+  });
+}
+export async function getPlaybook(): Promise<{ content: string; job: PlaybookJob }> {
+  return (await fetch("/voip/playbook")).json();
+}
+export async function savePlaybook(content: string): Promise<{ ok: boolean; error?: string }> {
+  return (await fetch("/voip/playbook", { method: "PUT", headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ content }) })).json();
+}
+export const buildPlaybook = () => postJSON<{ ok: boolean; job: PlaybookJob }>("/voip/playbook/build");

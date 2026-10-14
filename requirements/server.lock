@@ -183,7 +183,9 @@ python-dotenv==1.2.4
     #   pydantic-settings
     #   uvicorn
 python-multipart==0.0.32
-    # via mcp
+    # via
+    #   mcp
+    #   xplogent (pyproject.toml)
 pywin32==312 ; sys_platform == 'win32'
     # via mcp
 pywin32-ctypes==0.2.3 ; sys_platform == 'win32'

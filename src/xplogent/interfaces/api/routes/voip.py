@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from fastapi import APIRouter, Request, WebSocket
 from fastapi.responses import JSONResponse
@@ -193,3 +194,154 @@ async def voip_add_dnc(body: dict) -> dict:
     with Store(load_config().db_path) as store:
         store.add_dnc(str(body.get("phone", "")), str(body.get("reason", "manual")))
     return {"ok": True}
+
+
+# ── Training material (recordings, scripts, Q&A) + playbook ─────────────────
+def _kick_training() -> None:
+    from xplogent.voip import training
+
+    training.worker.process = lambda item_id, cfg=None: training.process_item(
+        item_id, cfg=cfg, make_provider=deps.build_provider)
+    training.worker.kick()
+
+
+@router.get("/voip/training")
+async def voip_training() -> dict:
+    from xplogent.voip import training
+
+    with Store(load_config().db_path) as store:
+        items = store.list_training_items()
+    if any(i["status"] in ("queued", "processing") for i in items):
+        _kick_training()            # resumes work cut off by a restart
+    return {"items": items, "busy": bool(training.worker.task and not training.worker.task.done())}
+
+
+@router.post("/voip/training/upload")
+async def voip_training_upload(request: Request) -> JSONResponse:
+    import secrets
+
+    from xplogent.core.rag import is_sensitive
+    from xplogent.voip import training
+
+    form = await request.form(max_files=50, max_part_size=training.MAX_UPLOAD_BYTES)
+    layout = str(form.get("layout") or "agent-left")
+    if layout not in training.LAYOUTS:
+        layout = "agent-left"
+    added, rejected = [], []
+    with Store(load_config().db_path) as store:
+        for upload in form.getlist("files"):
+            if isinstance(upload, str):
+                continue
+            name = training.safe_name(upload.filename or "upload")
+            kind = training.classify(name)
+            if not kind or is_sensitive(Path(name)):
+                rejected.append({"file": name, "error": "unsupported file type"})
+                continue
+            dest = training.training_dir() / f"{secrets.token_hex(4)}_{name}"
+            size = 0
+            too_big = False
+            with dest.open("wb") as fh:
+                while chunk := await upload.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > training.MAX_UPLOAD_BYTES:
+                        too_big = True
+                        break
+                    fh.write(chunk)
+            await upload.close()
+            if too_big or size == 0:
+                dest.unlink(missing_ok=True)
+                rejected.append({"file": name, "error": "larger than 200 MB" if too_big else "empty file"})
+                continue
+            item_id = store.add_training_item(kind, name, str(dest), size,
+                                              {"layout": layout} if kind == "recording" else {})
+            added.append({"id": item_id, "file": name, "kind": kind})
+    await form.close()
+    if added:
+        deps.audit_event("voip_training_upload", target=", ".join(a["file"] for a in added)[:300],
+                         risk="low")
+        _kick_training()
+    return JSONResponse({"ok": bool(added), "added": added, "rejected": rejected},
+                        status_code=200 if added or not rejected else 400)
+
+
+@router.get("/voip/training/{item_id}")
+async def voip_training_item(item_id: int) -> dict:
+    with Store(load_config().db_path) as store:
+        return {"item": store.get_training_item(item_id)}
+
+
+@router.post("/voip/training/{item_id}/retry")
+async def voip_training_retry(item_id: int, body: dict | None = None) -> dict:
+    from xplogent.voip import training
+
+    with Store(load_config().db_path) as store:
+        item = store.get_training_item(item_id)
+        if not item:
+            return {"ok": False, "error": "no such item"}
+        if item.get("doc_id"):                 # re-processing replaces the old knowledge
+            store.delete_document(int(item["doc_id"]))
+        opts = dict(item["options"] or {})
+        if (body or {}).get("layout") in training.LAYOUTS:
+            opts["layout"] = body["layout"]
+        store.update_training_item(item_id, status="queued", progress=0, error="", doc_id=None,
+                                   chunks=0, transcript="", options=opts)
+    _kick_training()
+    return {"ok": True}
+
+
+@router.delete("/voip/training/{item_id}")
+async def voip_training_delete(item_id: int) -> dict:
+    from xplogent.voip import training
+
+    with Store(load_config().db_path) as store:
+        item = store.get_training_item(item_id)
+        if item and item["status"] == "processing":
+            return {"ok": False, "error": "still processing; delete it when it's done"}
+        ok = training.delete_item(store, item_id)
+    return {"ok": ok}
+
+
+@router.get("/voip/playbook")
+async def voip_playbook() -> dict:
+    from xplogent.voip import training
+    from xplogent.voip.service import load_playbook
+
+    return {"content": load_playbook(), "job": training.playbook_job.snapshot()}
+
+
+@router.put("/voip/playbook")
+async def voip_playbook_save(body: dict) -> dict:
+    from xplogent.voip import training
+
+    text = str(body.get("content") or "")
+    if len(text) > 60_000:
+        return {"ok": False, "error": "the playbook is too long (max 60,000 characters)"}
+    training.save_playbook(text)
+    deps.audit_event("voip_playbook_saved", target=f"{len(text)} chars", risk="low")
+    return {"ok": True}
+
+
+@router.post("/voip/playbook/build")
+async def voip_playbook_build() -> dict:
+    from xplogent.voip import training
+
+    job = training.playbook_job
+    if job.task is not None and not job.task.done():
+        return {"ok": True, "job": job.snapshot()}
+    cfg = load_config()
+    spec = (cfg.voip or {}).get("model") or cfg.model
+
+    async def run() -> None:
+        provider = deps.build_provider(spec)
+        try:
+            job.draft = await training.build_playbook(cfg, provider, job=job)
+            job.status = "done"
+        except Exception as exc:  # noqa: BLE001 - shown in the UI
+            job.status, job.error = "error", str(exc)[:500]
+        finally:
+            await provider.aclose()
+
+    job.reset()
+    job.status = "running"
+    job.task = asyncio.create_task(run())
+    return {"ok": True, "job": job.snapshot()}

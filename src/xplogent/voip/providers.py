@@ -86,6 +86,7 @@ class WhisperLocalSTT:
                 raise RuntimeError("faster-whisper is not installed: pip install 'xplogent[voice]'") from exc
             WhisperLocalSTT._model = WhisperModel(
                 self.model_name, device=self.device, compute_type=self.compute_type)
+            WhisperLocalSTT._model._xpl_name = self.model_name   # lets training reuse it
         return WhisperLocalSTT._model
 
     def _run(self, pcm16_16k: bytes) -> str:
