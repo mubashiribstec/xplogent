@@ -75,7 +75,7 @@ jobs:
           XPLOGENT_AUTH_TOKEN: ci-token
         run: |
           cp .env.example .env
-          for files in docker-compose.yml:compose.https.yml docker-compose.yml:compose.local.yml; do
+          for files in docker-compose.yml:compose.https.yml docker-compose.yml:compose.local.yml docker-compose.yml:compose.local.yml:compose.sip.yml docker-compose.yml:compose.https.yml:compose.sip.yml; do
             for profiles in "" ollama ollama-gpu speech gpu-speech ollama,speech; do
               COMPOSE_FILE=$files COMPOSE_PROFILES=$profiles docker compose config -q
             done

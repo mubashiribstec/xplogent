@@ -2,10 +2,11 @@ import { Fragment, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw } from "lucide-react";
 import {
   CallRow, CallTurn, ReadinessItem, VoipStatus, getCall, getCalls, getContacts, getFullConfig, getVoipReadiness,
-  getVoipStatus, patchConfig, putSecrets, testSpeech, testTelnyx,
+  getVoipStatus, patchConfig, putSecrets, saveSip, testSpeech, testTelnyx,
 } from "../api";
 import { useToast } from "../components/Toast";
 import { CallNow, LiveCalls, TestCall } from "./CallControls";
+import { SipCard } from "./SipCard";
 
 const fmtTime = (t?: number | null) => (t ? new Date(t * 1000).toLocaleString() : "—");
 const fmtDur = (c: CallRow) => {
@@ -115,7 +116,7 @@ export function Calls() {
           </table>
         </div>
 
-        <h2 style={{ margin: "28px 0 10px", fontSize: 18 }}>Setup</h2>
+        <h2 style={{ margin: "28px 0 10px", fontSize: 18 }}>Settings</h2>
         {loaded && (<>
         <div className="card">
           <h3>Setup</h3>
@@ -123,16 +124,29 @@ export function Calls() {
             <label className="bud"><span className="lbl-sm">Phone agent</span>
               <select value={cfg.enabled ? "on" : "off"} onChange={(e) => save({ enabled: e.target.value === "on" })}>
                 <option value="off">off</option><option value="on">on</option></select></label>
+            <label className="bud"><span className="lbl-sm">Phone line</span>
+              <select value={cfg.telephony ?? "telnyx"} onChange={async (e) => {
+                const telephony = e.target.value;
+                setCfg((c) => ({ ...c, telephony }));
+                const r = await saveSip({ telephony });
+                toast(r.ok ? "phone line saved" : r.error ?? "could not save", r.ok ? "success" : "error");
+                loadReady();
+              }}>
+                <option value="telnyx">Telnyx Voice API</option>
+                <option value="sip">SIP trunk (FreePBX, Telnyx SIP…)</option>
+                <option value="both">Both</option>
+              </select></label>
             <label className="bud"><span className="lbl-sm">Company name</span>
               <input defaultValue={cfg.company ?? ""} onBlur={(e) => save({ company: e.target.value })} /></label>
+            {cfg.telephony !== "sip" && (
             <label className="bud"><span className="lbl-sm">Public HTTPS address of this server</span>
               <input defaultValue={cfg.public_url ?? ""} placeholder="https://agent.example.com"
-                onBlur={(e) => save({ public_url: e.target.value.trim().replace(/\/$/, "") })} style={{ width: 240 }} /></label>
+                onBlur={(e) => save({ public_url: e.target.value.trim().replace(/\/$/, "") })} style={{ width: 240 }} /></label>)}
             <label className="bud"><span className="lbl-sm">Human hand-off number</span>
               <input defaultValue={cfg.transfer_number ?? ""} placeholder="+15551234567"
                 onBlur={(e) => save({ transfer_number: e.target.value.trim() })} /></label>
           </div>
-          <div className="row wrap" style={{ gap: 8, marginTop: 10, alignItems: "center" }}>
+          {cfg.telephony !== "sip" && <div className="row wrap" style={{ gap: 8, marginTop: 10, alignItems: "center" }}>
             <button className="btn" onClick={() => save({ webhook_secret: randomSecret() })}>
               {cfg.webhook_secret ? "Regenerate webhook secret" : "Generate webhook secret"}</button>
             {webhook && (
@@ -142,11 +156,12 @@ export function Calls() {
                   <Copy size={12} /></button>
               </span>
             )}
-          </div>
+          </div>}
         </div>
 
-        <TelnyxCard cfg={cfg} keySet={telnyxKeySet} save={save} toast={toast}
-          onKeySaved={() => { setTelnyxKeySet(true); loadReady(); }} />
+        {cfg.telephony !== "sip" && <TelnyxCard cfg={cfg} keySet={telnyxKeySet} save={save} toast={toast}
+          onKeySaved={() => { setTelnyxKeySet(true); loadReady(); }} />}
+        {(cfg.telephony === "sip" || cfg.telephony === "both") && <SipCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} />}
         <SpeechCard cfg={cfg} save={save} toast={toast} />
 
         <div className="card">
@@ -240,7 +255,7 @@ function TelnyxCard({ cfg, keySet, save, toast, onKeySaved }: {
           <li><b>Auth → API Keys</b>: create a key and paste it above, then press "Test Telnyx".</li>
           <li>FreePBX (optional): send calls to the AI with an inbound route / follow-me to the number above
             through your Telnyx SIP trunk, and put a FreePBX extension's DID in "Human hand-off number" so
-            "talk to a person" rings your team. The SIP trunk itself needs no settings here.</li>
+            "talk to a person" rings your team. To connect FreePBX directly instead, choose "SIP trunk" as the phone line.</li>
         </ol>
       </details>
     </div>

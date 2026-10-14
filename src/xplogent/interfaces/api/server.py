@@ -9,6 +9,7 @@ This module only assembles the app: routes live in ``interfaces/api/routes/*``,
 shared auth/origin checks and run state in ``interfaces/api/deps.py``.
 """
 
+import asyncio
 import os
 
 from xplogent.core import updater
@@ -39,9 +40,16 @@ def create_app():
         watcher = FileWatcher(cfg, tick=float(cfg.scheduler.get("file_tick_seconds", 5)))
         await watcher.start()
         app.state.watcher = watcher
+        sip_task = None
+        from xplogent.voip.telephony import sip as sip_mod
+        if sip_mod.wants_sip(cfg.voip or {}):
+            sip_task = asyncio.create_task(sip_mod.apply_settings(cfg))
         try:
             yield
         finally:
+            if sip_task is not None:
+                sip_task.cancel()
+            await sip_mod.shutdown()
             if sched is not None:
                 await sched.stop()
             await watcher.stop()

@@ -210,3 +210,47 @@ class VAD:
         self._buf.clear()
         self._speech = self._silence = 0
         self._active = self._announced = False
+
+
+# ── G.711 A-law ⇄ μ-law (SIP trunks offer either) ─────────────────────────────
+def _alaw_decode(a: int) -> int:
+    a ^= 0x55
+    t = (a & 0x0F) << 4
+    seg = (a & 0x70) >> 4
+    if seg == 0:
+        t += 8
+    elif seg == 1:
+        t += 0x108
+    else:
+        t = (t + 0x108) << (seg - 1)
+    return t if a & 0x80 else -t
+
+
+_ALAW_SEG_END = (0x1F, 0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF)
+
+
+def _alaw_encode(sample: int) -> int:
+    pcm = sample >> 3
+    if pcm >= 0:
+        mask = 0xD5
+    else:
+        mask = 0x55
+        pcm = -pcm - 1
+    seg = next((i for i, end in enumerate(_ALAW_SEG_END) if pcm <= end), 8)
+    if seg >= 8:
+        return 0x7F ^ mask
+    aval = seg << 4
+    aval |= ((pcm >> 1) if seg < 2 else (pcm >> seg)) & 0x0F
+    return aval ^ mask
+
+
+_ALAW_TO_ULAW = bytes(_encode_sample(_alaw_decode(a)) for a in range(256))
+_ULAW_TO_ALAW = bytes(_alaw_encode(_DECODE[u]) for u in range(256))
+
+
+def alaw_to_mulaw(data: bytes) -> bytes:
+    return data.translate(_ALAW_TO_ULAW)
+
+
+def mulaw_to_alaw(data: bytes) -> bytes:
+    return data.translate(_ULAW_TO_ALAW)

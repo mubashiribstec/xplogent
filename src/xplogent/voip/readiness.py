@@ -1,4 +1,4 @@
-"""Phone-agent readiness: what is still missing before Telnyx calls can work.
+"""Phone-agent readiness: what is still missing before calls can work.
 
 Pure functions over the ``voip`` config + environment, so the Calls view can show a
 checklist (and tests can cover every case) without touching the network.
@@ -55,25 +55,42 @@ def speech_status(v: dict[str, Any], env: dict[str, str]) -> tuple[bool, str]:
         "local" if any(h in base for h in LOCAL_TTS_HINTS) else base)
 
 
-def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None) -> list[dict]:
-    """Ordered readiness items: ``{id, label, ok, detail, required}``."""
+def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
+              sip_status: dict[str, Any] | None = None) -> list[dict]:
+    """Ordered readiness items: ``{id, label, ok, detail, required}``.
+
+    Which telephony items appear depends on ``voip.telephony``: ``telnyx`` (Voice API,
+    needs a public HTTPS address), ``sip`` (built-in SIP trunk client) or ``both``.
+    """
     env = dict(os.environ) if env is None else env
     items: list[dict] = []
+    mode = str(v.get("telephony") or "telnyx")
 
     def add(id_: str, label: str, ok: bool, detail: str = "", required: bool = True) -> None:
         items.append({"id": id_, "label": label, "ok": bool(ok), "detail": detail,
                       "required": required})
 
-    url_problem = public_url_problem(str(v.get("public_url", "")))
-    add("public_url", "Public HTTPS address", not url_problem, url_problem or str(v.get("public_url")))
-    add("webhook_secret", "Webhook secret", bool(v.get("webhook_secret")),
-        "" if v.get("webhook_secret") else "click 'Generate webhook secret'")
-    key_env = str(v.get("api_key_env", "TELNYX_API_KEY"))
-    add("telnyx_key", "Telnyx API key", _key(env, key_env),
-        "" if _key(env, key_env) else "paste your Telnyx API v2 key")
-    add("connection_id", "Telnyx Voice API application ID", bool(v.get("connection_id")),
-        "" if v.get("connection_id") else "needed for outbound calls and the Telnyx test",
-        required=False)
+    if mode in ("telnyx", "both"):
+        url_problem = public_url_problem(str(v.get("public_url", "")))
+        add("public_url", "Public HTTPS address", not url_problem, url_problem or str(v.get("public_url")))
+        add("webhook_secret", "Webhook secret", bool(v.get("webhook_secret")),
+            "" if v.get("webhook_secret") else "click 'Generate webhook secret'")
+        key_env = str(v.get("api_key_env", "TELNYX_API_KEY"))
+        add("telnyx_key", "Telnyx API key", _key(env, key_env),
+            "" if _key(env, key_env) else "paste your Telnyx API v2 key")
+        add("connection_id", "Telnyx Voice API application ID", bool(v.get("connection_id")),
+            "" if v.get("connection_id") else "needed for outbound calls and the Telnyx test",
+            required=False)
+    if mode in ("sip", "both"):
+        sip = v.get("sip") or {}
+        configured = bool(sip.get("server") and sip.get("username"))
+        add("sip_account", "SIP trunk account", configured and _key(env, "SIP_PASSWORD"),
+            "" if configured and _key(env, "SIP_PASSWORD") else
+            "enter the SIP server, username and password under Telephony")
+        st = sip_status or {}
+        if sip.get("register", True):
+            add("sip_registered", "SIP registration", bool(st.get("registered")),
+                "registered" if st.get("registered") else (st.get("error") or "not registered yet"))
     call_model = str(v.get("model") or model)
     provider = call_model.split(":", 1)[0]
     needs = _PROVIDER_KEYS.get(provider)

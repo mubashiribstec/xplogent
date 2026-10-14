@@ -232,3 +232,26 @@ def test_installer_backup_model_runs_local_ollama_without_redirecting_main(tmp_p
     env = _env(tmp_path)
     assert env["COMPOSE_PROFILES"] in ("ollama", "ollama-gpu")
     assert env.get("OLLAMA_HOST", "") == ""                # main model stays where it was
+
+
+def test_sip_compose_file_publishes_udp_and_passes_settings():
+    yaml = pytest.importorskip("yaml")
+    sip = yaml.safe_load((REPO / "deploy" / "docker" / "compose.sip.yml").read_text())["services"]["xplogent"]
+    assert all(p.endswith("/udp") for p in sip["ports"])
+    assert {"XPLOGENT_SIP_PORT", "XPLOGENT_RTP_START", "XPLOGENT_RTP_END", "XPLOGENT_HOST_IP"} <= set(sip["environment"])
+
+
+@_bash
+def test_installer_keeps_sip_ports_when_switching_mode(tmp_path):
+    assert _get_sh(tmp_path, "--mode", "local", "--no-ollama").returncode == 0
+    assert (tmp_path / "x" / "deploy" / "docker" / "compose.sip.yml").exists()
+    env_file = tmp_path / "x" / "deploy" / "docker" / ".env"
+    env_file.write_text(env_file.read_text() + "XPLOGENT_SIP=1\n")
+    res = _get_sh(tmp_path, "--reconfigure", "--domain", "agent.example.com", "--no-ollama")
+    assert res.returncode == 0, res.stderr
+    assert _env(tmp_path)["COMPOSE_FILE"] == "docker-compose.yml:compose.https.yml:compose.sip.yml"
+
+
+def test_helper_has_sip_command():
+    helper = (REPO / "deploy" / "docker" / "xplogent-docker").read_text()
+    assert "sip on [--ip ADDR] | off" in helper and "compose.sip.yml" in helper

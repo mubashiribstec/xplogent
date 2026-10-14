@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Request, WebSocket
@@ -62,9 +64,11 @@ async def voip_status() -> dict:
 async def voip_readiness() -> dict:
     """Checklist of what's missing before Telnyx calls can work (Calls view)."""
     from xplogent.voip.readiness import checklist
+    from xplogent.voip.telephony.sip import current_trunk
 
     cfg = load_config()
-    items = checklist(cfg.voip or {}, cfg.model)
+    trunk = current_trunk()
+    items = checklist(cfg.voip or {}, cfg.model, sip_status=trunk.status() if trunk else None)
     return {"ready": all(i["ok"] for i in items if i["required"]), "items": items}
 
 
@@ -377,6 +381,9 @@ async def voip_call_transfer(call_id: int, body: dict | None = None):
         return _gone()
     raw = str((body or {}).get("to") or (load_config().voip or {}).get("transfer_number") or "")
     number = clean_number(raw) or (raw.strip() if raw.strip().lower().startswith("sip:") else "")
+    short = re.sub(r"[\s()-]", "", raw)
+    if not number and live.transport == "sip" and re.fullmatch(r"[0-9*#+]{2,15}", short):
+        number = short                              # a PBX extension
     if not number:
         return {"ok": False, "error": "no transfer number (set the hand-off number or enter one)"}
     try:
@@ -460,3 +467,116 @@ def _test_provider():
     """The call model, through deps so tests can script it (None: build_session decides)."""
     cfg = load_config()
     return deps.build_provider((cfg.voip or {}).get("model") or cfg.model)
+
+
+# ── SIP trunk (built-in client) ──────────────────────────────────────────────
+_SIP_FIELDS = {"server": str, "port": int, "username": str, "auth_username": str, "domain": str,
+               "caller_id": str, "public_ip": str, "local_port": int, "rtp_start": int, "rtp_end": int,
+               "register": bool, "expires": int, "max_calls": int, "strict_source": bool}
+
+
+def _sip_status() -> dict:
+    from xplogent.voip.telephony.sip import current_trunk, wants_sip
+
+    v = load_config().voip or {}
+    trunk = current_trunk()
+    base = {"telephony": v.get("telephony") or "telnyx", "configured": wants_sip(v),
+            "password_set": bool(os.environ.get("SIP_PASSWORD"))}
+    if trunk is None:
+        return {**base, "running": False, "registered": False,
+                "error": "" if base["configured"] else "not set up"}
+    return {**base, **trunk.status()}
+
+
+@router.get("/voip/sip/status")
+async def voip_sip_status() -> dict:
+    return _sip_status()
+
+
+@router.post("/voip/sip/settings")
+async def voip_sip_settings(body: dict) -> dict:
+    """Save the SIP account (password goes to the encrypted secrets) and restart the trunk."""
+    import re
+
+    from xplogent.core.config import save_env, save_user_config
+    from xplogent.voip.telephony import sip as sip_mod
+
+    updates: dict = {}
+    for key, kind in _SIP_FIELDS.items():
+        if key not in body:
+            continue
+        try:
+            updates[key] = kind(body[key]) if kind is not bool else bool(body[key])
+        except (TypeError, ValueError):
+            return {"ok": False, "error": f"{key} must be a {kind.__name__}"}
+        if kind is str:
+            updates[key] = updates[key].strip()
+    if "allow_from" in body:
+        raw = body["allow_from"]
+        updates["allow_from"] = [a.strip() for a in (raw if isinstance(raw, list) else str(raw).split(","))
+                                 if str(a).strip()]
+    host = updates.get("server", "")
+    if host and not re.fullmatch(r"[A-Za-z0-9.\-]+", host):
+        return {"ok": False, "error": "server must be a host name or IP (no sip:, no port)"}
+    for key in ("port", "local_port", "rtp_start", "rtp_end"):
+        if key in updates and not 1 <= updates[key] <= 65535:
+            return {"ok": False, "error": f"{key} must be a port number"}
+    if updates.get("rtp_start", 0) and updates.get("rtp_end", 0) and updates["rtp_end"] <= updates["rtp_start"]:
+        return {"ok": False, "error": "the RTP range end must be above its start"}
+    patch: dict = {"sip": updates}
+    if body.get("telephony") in ("telnyx", "sip", "both"):
+        patch["telephony"] = body["telephony"]
+    save_user_config({"voip": patch})
+    if body.get("password"):
+        save_env({"SIP_PASSWORD": str(body["password"])})
+    deps.audit_event("voip_sip_settings", target=f"{updates.get('username', '')}@{host}", risk="medium")
+    await sip_mod.apply_settings()
+    return {"ok": True, "status": _sip_status()}
+
+
+@router.post("/voip/sip/test")
+async def voip_sip_test() -> dict:
+    """Restart the trunk and wait for the registration result."""
+    from xplogent.voip.telephony import sip as sip_mod
+
+    trunk = await sip_mod.apply_settings()
+    if trunk is None:
+        return {"ok": False, "error": "choose SIP trunk (or both) and enter the server and username first",
+                "status": _sip_status()}
+    if not trunk.started:
+        return {"ok": False, "error": trunk.reg_error, "status": _sip_status()}
+    if not trunk.s.register:
+        return {"ok": True, "status": _sip_status(), "note": "registration is off: calls are accepted from the server"}
+    ok = await trunk.wait_registered(10.0)
+    st = _sip_status()
+    return {"ok": ok, "status": st, "error": "" if ok else (st.get("error") or "no answer from the server")}
+
+
+@router.get("/voip/sip/detect-ip")
+async def voip_sip_detect_ip() -> dict:
+    """This server's LAN address (for a PBX on the same network) and its internet address."""
+    import os
+    import socket
+
+    import httpx
+
+    lan = os.environ.get("XPLOGENT_HOST_IP", "")
+    if not lan:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("10.255.255.255", 9))
+                lan = s.getsockname()[0]
+        except OSError:
+            lan = ""
+    internet = ""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get("https://api.ipify.org")
+            if r.status_code == 200 and re.fullmatch(r"[0-9.]+", r.text.strip()):
+                internet = r.text.strip()
+    except httpx.HTTPError:
+        pass
+    in_docker = bool(os.environ.get("XPLOGENT_IN_DOCKER")) and not os.environ.get("XPLOGENT_HOST_IP")
+    return {"lan": lan, "internet": internet,
+            "note": "inside Docker the LAN address is the container's: run `xplogent-docker sip on` "
+                    "so the host address is known" if in_docker else ""}

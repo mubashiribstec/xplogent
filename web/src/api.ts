@@ -741,3 +741,16 @@ export const instructCall = (id: number, text: string) => postJSON<CallResult>(`
 export const pauseAI = (id: number, paused: boolean) => postJSON<CallResult>(`/voip/calls/${id}/pause-ai`, { paused });
 export const dialCall = (b: { number?: string; contact_id?: number; via?: string; test?: boolean; ignore_hours?: boolean }) =>
   postJSON<CallResult>("/voip/dial", b);
+
+// ── SIP trunk ────────────────────────────────────────────────────────────────
+export interface SipStatus {
+  telephony: string; configured: boolean; password_set: boolean; running: boolean; registered: boolean;
+  error: string; server?: string; username?: string; local_port?: number; contact_ip?: string; rtp?: string;
+  calls?: number; last_error?: string; expires?: number;
+}
+export async function getSipStatus(): Promise<SipStatus> { return (await fetch("/voip/sip/status")).json(); }
+export const saveSip = (b: Record<string, any>) => postJSON<{ ok: boolean; error?: string; status?: SipStatus }>("/voip/sip/settings", b);
+export const testSip = () => postJSON<{ ok: boolean; error?: string; note?: string; status: SipStatus }>("/voip/sip/test");
+export async function detectSipIp(): Promise<{ lan: string; internet: string; note: string }> {
+  return (await fetch("/voip/sip/detect-ip")).json();
+}

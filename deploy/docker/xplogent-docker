@@ -14,6 +14,7 @@
 #   xplogent-docker ollama on [--gpu] | off
 #   xplogent-docker speech on [--gpu] | off   local voices for the phone agent
 #   xplogent-docker backup-model on [model] | off   local Ollama answers if the main model can't
+#   xplogent-docker sip on [--ip ADDR] | off   open UDP ports for the built-in SIP trunk client
 #   xplogent-docker pull-model NAME     download an Ollama model (e.g. llama3.1)
 #   xplogent-docker uninstall [--purge] remove containers (--purge: also all data!)
 #
@@ -91,6 +92,12 @@ url() {
 
 apply() { dc up -d --remove-orphans; wait_healthy; }
 
+# COMPOSE_FILE for a mode, keeping the SIP ports file when SIP is on.
+compose_files() {
+  if [ "$(get_env XPLOGENT_SIP)" = "1" ]; then echo "docker-compose.yml:$1:compose.sip.yml"
+  else echo "docker-compose.yml:$1"; fi
+}
+
 add_profile() {  # add_profile NAME / remove with "-NAME"
   local cur new="" p want="$1"
   cur="$(get_env COMPOSE_PROFILES)"
@@ -121,7 +128,7 @@ cmd_backup() {
 }
 
 DEPLOY_FILES="deploy/docker/docker-compose.yml deploy/docker/compose.https.yml
-deploy/docker/compose.local.yml deploy/docker/.env.example deploy/caddy/Caddyfile"
+deploy/docker/compose.local.yml deploy/docker/compose.sip.yml deploy/docker/.env.example deploy/caddy/Caddyfile"
 
 rollback_files() {
   local f
@@ -220,13 +227,13 @@ case "$cmd" in
     [ -n "$domain" ] || die "usage: xplogent-docker https your.domain.com"
     case "$domain" in *[!A-Za-z0-9.-]*|.*|*.) die "not a valid hostname: $domain" ;; esac
     set_env "$ENV_FILE" DOMAIN "$domain"
-    set_env "$ENV_FILE" COMPOSE_FILE "docker-compose.yml:compose.https.yml"
+    set_env "$ENV_FILE" COMPOSE_FILE "$(compose_files compose.https.yml)"
     apply
     ok "HTTPS mode: https://$domain (the certificate is issued once DNS points here and ports 80/443 are open)" ;;
   local)
     bind=127.0.0.1; [ "${1:-}" = "--lan" ] && bind=0.0.0.0
     set_env "$ENV_FILE" XPLOGENT_BIND "$bind"
-    set_env "$ENV_FILE" COMPOSE_FILE "docker-compose.yml:compose.local.yml"
+    set_env "$ENV_FILE" COMPOSE_FILE "$(compose_files compose.local.yml)"
     apply
     ok "No-domain mode: $(url)" ;;
   ollama)
@@ -280,6 +287,32 @@ case "$cmd" in
         apply ;;
       *) die "usage: xplogent-docker speech on [--gpu] | off" ;;
     esac ;;
+  sip)
+    mode_file=compose.local.yml
+    case "$(get_env COMPOSE_FILE)" in *https*) mode_file=compose.https.yml ;; esac
+    case "${1:-}" in
+      on)
+        ip=""
+        if [ "${2:-}" = "--ip" ]; then ip="${3:-}"; [ -n "$ip" ] || die "usage: xplogent-docker sip on --ip ADDRESS"; fi
+        [ -n "$ip" ] || ip="$(get_env XPLOGENT_HOST_IP)"
+        [ -n "$ip" ] || ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+        case "$ip" in *[!0-9.]*) die "not an IPv4 address: $ip" ;; esac
+        set_env "$ENV_FILE" XPLOGENT_SIP 1
+        set_env "$ENV_FILE" XPLOGENT_HOST_IP "$ip"
+        set_env "$ENV_FILE" COMPOSE_FILE "$(compose_files "$mode_file")"
+        apply
+        sp="$(get_env XPLOGENT_SIP_PORT)"; rs="$(get_env XPLOGENT_RTP_START)"; re="$(get_env XPLOGENT_RTP_END)"
+        ok "SIP ports open: UDP ${sp:-5060} (signalling) and ${rs:-10000}-${re:-10100} (audio); this server is ${ip:-unknown}."
+        say "Firewall: sudo ufw allow ${sp:-5060}/udp && sudo ufw allow ${rs:-10000}:${re:-10100}/udp"
+        say "Behind a router with a SIP provider on the internet: forward those UDP ports here and"
+        say "use 'xplogent-docker sip on --ip <public IP>'. Then: dashboard -> Calls -> Phone line -> SIP trunk." ;;
+      off)
+        set_env "$ENV_FILE" XPLOGENT_SIP 0
+        set_env "$ENV_FILE" COMPOSE_FILE "$(compose_files "$mode_file")"
+        apply
+        ok "SIP ports closed." ;;
+      *) die "usage: xplogent-docker sip on [--ip ADDRESS] | off" ;;
+    esac ;;
   pull-model)
     [ -n "${1:-}" ] || die "usage: xplogent-docker pull-model <name>"
     dc exec ollama ollama pull "$1" ;;
@@ -299,6 +332,6 @@ case "$cmd" in
     fi
     rm -f /usr/local/bin/xplogent-docker 2>/dev/null || true ;;
   url) url ;;
-  help|-h|--help) sed -n '2,21p' "$0" ;;
+  help|-h|--help) sed -n '2,22p' "$0" ;;
   *) die "unknown command: $cmd (xplogent-docker help)" ;;
 esac

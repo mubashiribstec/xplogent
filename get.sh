@@ -142,6 +142,9 @@ get_env() {  # get_env FILE KEY
 
 run() { if [ "$DRY" -eq 1 ]; then say "(dry run) $*"; else "$@"; fi; }
 
+# Keep the SIP ports file when SIP was turned on (xplogent-docker sip on).
+sip_suffix() { [ "$(get_env "$ENV_FILE" XPLOGENT_SIP 2>/dev/null)" = "1" ] && echo ":compose.sip.yml" || true; }
+
 # ── checks ─────────────────────────────────────────────────────────────────────
 [ "$(uname -s)" = "Linux" ] || die "this installer is for Linux servers (on a desktop use install.sh / install.ps1)"
 if [ "$DRY" -eq 0 ] && [ "$(id -u)" -ne 0 ]; then
@@ -175,7 +178,7 @@ fi
 
 # ── files ─────────────────────────────────────────────────────────────────────
 FILES="deploy/docker/docker-compose.yml deploy/docker/compose.https.yml deploy/docker/compose.local.yml
-deploy/docker/.env.example deploy/docker/xplogent-docker deploy/caddy/Caddyfile"
+deploy/docker/compose.sip.yml deploy/docker/.env.example deploy/docker/xplogent-docker deploy/caddy/Caddyfile"
 umask 077
 mkdir -p "$DIR/deploy/docker" "$DIR/deploy/caddy" "$DIR/backups"
 chmod 755 "$DIR" "$DIR/deploy" "$DIR/deploy/docker" "$DIR/deploy/caddy"
@@ -229,7 +232,7 @@ if [ "$FRESH" -eq 1 ] || [ "$RECONFIGURE" -eq 1 ] || [ "$PARTIAL" -eq 1 ]; then
       [ -n "$DOMAIN" ] || DOMAIN="$(ask "Domain name:" "")"
       [ -n "$DOMAIN" ] || die "https mode needs a domain (--domain agent.example.com)"
       case "$DOMAIN" in *[!A-Za-z0-9.-]*|.*|*.) die "not a valid hostname: $DOMAIN" ;; esac
-      set_env "$ENV_FILE" COMPOSE_FILE "docker-compose.yml:compose.https.yml"
+      set_env "$ENV_FILE" COMPOSE_FILE "docker-compose.yml:compose.https.yml$(sip_suffix)"
       set_env "$ENV_FILE" DOMAIN "$DOMAIN"
       if [ "$DRY" -eq 0 ] && command -v getent >/dev/null 2>&1; then
         resolved="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}')"
@@ -247,7 +250,7 @@ if [ "$FRESH" -eq 1 ] || [ "$RECONFIGURE" -eq 1 ] || [ "$PARTIAL" -eq 1 ]; then
       elif [ -z "$BIND" ]; then
         if yes_no "Allow other machines on your network to open it (plain HTTP)? [y/N]" n; then BIND=0.0.0.0; else BIND=127.0.0.1; fi
       fi
-      set_env "$ENV_FILE" COMPOSE_FILE "docker-compose.yml:compose.local.yml"
+      set_env "$ENV_FILE" COMPOSE_FILE "docker-compose.yml:compose.local.yml$(sip_suffix)"
       set_env "$ENV_FILE" XPLOGENT_BIND "$BIND"
       ;;
     keep) ;;

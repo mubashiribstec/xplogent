@@ -201,6 +201,23 @@ mcp:
 voip:
   enabled: false
   provider: telnyx                 # telnyx (Twilio-compatible media protocol also parsed)
+  telephony: telnyx                # telnyx (Voice API) | sip (built-in SIP trunk client) | both
+  sip:                             # SIP trunk (FreePBX/Asterisk extension, Telnyx SIP connection…)
+    server: ""                     # PBX / registrar host or IP
+    port: 5060
+    username: ""                   # extension / SIP user (password: SIP_PASSWORD secret)
+    auth_username: ""              # if different from username
+    domain: ""                     # SIP domain/realm (blank = server)
+    caller_id: ""                  # outbound caller ID (E.164), if the trunk allows setting it
+    public_ip: ""                  # address the PBX should send audio to (blank = auto)
+    local_port: 5060               # UDP port this server listens on for SIP
+    rtp_start: 10000               # UDP ports for call audio
+    rtp_end: 10100
+    register: true
+    expires: 300
+    allow_from: []                 # extra IPs allowed to send calls (the server is always allowed)
+    strict_source: false           # true: refuse calls from other addresses even if addressed to us
+    max_calls: 4
   public_url: ""                   # e.g. https://agent.example.com  (no trailing slash)
   webhook_secret: ""               # random string; carrier webhook = {public_url}/telephony/webhook/<secret>
   api_key_env: TELNYX_API_KEY      # env var holding the carrier API key

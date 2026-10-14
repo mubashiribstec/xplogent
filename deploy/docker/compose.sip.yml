@@ -1,0 +1,16 @@
+# Built-in SIP trunk client: publish SIP signalling and RTP call audio (UDP).
+# Added by `xplogent-docker sip on`. The ports must be reachable from your PBX or
+# SIP provider (firewall / router port forwarding).
+#   XPLOGENT_SIP_PORT                 SIP port (default 5060)
+#   XPLOGENT_RTP_START/XPLOGENT_RTP_END  call audio ports (default 10000-10100, ~50 calls)
+#   XPLOGENT_HOST_IP                  this server's address, put in SIP/SDP so audio comes back here
+services:
+  xplogent:
+    ports:
+      - "${XPLOGENT_SIP_PORT:-5060}:${XPLOGENT_SIP_PORT:-5060}/udp"
+      - "${XPLOGENT_RTP_START:-10000}-${XPLOGENT_RTP_END:-10100}:${XPLOGENT_RTP_START:-10000}-${XPLOGENT_RTP_END:-10100}/udp"
+    environment:
+      XPLOGENT_SIP_PORT: ${XPLOGENT_SIP_PORT:-5060}
+      XPLOGENT_RTP_START: ${XPLOGENT_RTP_START:-10000}
+      XPLOGENT_RTP_END: ${XPLOGENT_RTP_END:-10100}
+      XPLOGENT_HOST_IP: ${XPLOGENT_HOST_IP:-}

@@ -53,8 +53,9 @@ curl -fsSL https://raw.githubusercontent.com/mubashiribstec/xplogent/main/get.sh
 ```
 
 Options: `--mode https|local`, `--domain NAME`, `--lan`, `--ollama` / `--no-ollama`,
-`--model SPEC`, `--reconfigure`, `--dir PATH`, `--ref BRANCH_OR_TAG`, `--no-docker-install`,
-`--dry-run`.
+`--model SPEC`, `--speech` / `--no-speech`, `--backup-model [MODEL]` (local Ollama that answers
+when the main model can't; default `llama3.2:3b`, fine on a CPU with 8 GB RAM), `--reconfigure`,
+`--dir PATH`, `--ref BRANCH_OR_TAG`, `--no-docker-install`, `--dry-run`.
 
 ### Managing it: `xplogent-docker`
 
@@ -70,6 +71,9 @@ Options: `--mode https|local`, `--domain NAME`, `--lan`, `--ollama` / `--no-olla
 | `xplogent-docker https DOMAIN` | switch to HTTPS with a domain |
 | `xplogent-docker local [--lan]` | switch to no-domain mode |
 | `xplogent-docker ollama on [--gpu] \| off` | run local models (then `pull-model llama3.1`) |
+| `xplogent-docker speech on [--gpu] \| off` | local voices for the phone agent (Kokoro) |
+| `xplogent-docker backup-model on [model] \| off` | small local model that answers when the main one can't (default `llama3.2:3b`) |
+| `xplogent-docker sip on [--ip ADDR] \| off` | open UDP 5060 + 10000-10100 for the built-in SIP trunk client |
 | `xplogent-docker restart \| stop \| start` | |
 | `xplogent-docker uninstall [--purge]` | remove containers; `--purge` also deletes all data |
 
@@ -161,32 +165,25 @@ sudo DOMAIN=agent.example.com caddy run --config /opt/xplogent/deploy/caddy/Cadd
 Useful: `journalctl -u xplogent -f`, `systemctl restart xplogent`, `systemctl status xplogent`.
 Provider keys go in Settings (stored encrypted in the data directory) or in `/etc/xplogent/xplogent.env`.
 
-## Phone agent (Telnyx)
+## Phone agent (Telnyx Voice API or SIP trunk)
 
 Everything is set in the dashboard's **Calls** view; its checklist shows what is still missing.
+Choose the **Phone line** under Setup:
 
-1. **HTTPS first.** Telnyx must reach the server at a public `https://` address (webhook + call
-   audio). Point a domain at the server, open ports 80/443, and run
-   `xplogent-docker https agent.example.com`. A LAN address like `http://10.0.0.5:8765` can't work.
-2. **Setup:** company name, the public HTTPS address, a human hand-off number, then
-   **Generate webhook secret** and copy the webhook URL it shows.
-3. **Telnyx (Voice API):** in the Telnyx portal create a Voice API (Call Control) application with
-   that webhook URL, assign your number to it, and create an API key. Paste the key, the
-   application ID and your number in the Telnyx card and press **Test Telnyx** (it also checks
-   the webhook URL configured in Telnyx matches).
-4. **Speech:** `xplogent-docker speech on` (add `--gpu` on an NVIDIA server; the CPU image is
-   about 5 GB), then choose **Local on this server** in the Speech card and press **Test voice**.
-   Listening uses the built-in Whisper, which downloads its model on first use.
-5. **Model:** any model works; with your own Ollama, set it in Settings → Ollama server and use
-   "use for calls".
-6. Switch the phone agent on.
+- **Telnyx Voice API** needs a public `https://` address (webhook + call audio): point a domain
+  at the server, open ports 80/443, run `xplogent-docker https agent.example.com`, then fill in
+  the Telnyx card (API key, application ID, number) and press **Test Telnyx**.
+- **SIP trunk** (FreePBX/Asterisk extension, Telnyx SIP connection, other providers) needs no
+  domain: run `sudo xplogent-docker sip on` (add `--ip <public IP>` if the provider reaches you
+  over the internet through a router, and forward the UDP ports), allow UDP 5060 and
+  10000-10100 in the firewall, then enter server, extension and password in the SIP trunk card
+  and press **Save & connect**.
 
-**FreePBX / SIP trunk:** Xplogent uses the Telnyx Voice API, not the SIP trunk. To use the AI
-from FreePBX, route calls (inbound route / follow-me) to your Telnyx Voice API number over the
-trunk, and set the hand-off number to a FreePBX extension's DID so "talk to a person" rings
-your team.
+Then: `xplogent-docker speech on` and **Local on this server** in the Speech card; pick the call
+model; switch the phone agent on. Use **Test call in the browser** before going live.
 
-See [voip.md](voip.md) for the call flow, cost notes and safety defaults.
+See [voip.md](voip.md) for both phone lines, training uploads, live call control, manual and test
+calls, cost notes and safety defaults.
 
 ## Your own Ollama server
 

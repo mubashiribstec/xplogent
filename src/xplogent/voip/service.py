@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import time
 import uuid
 from typing import Any
@@ -198,6 +199,9 @@ class VoipService:
         cfg = cfg or load_config()
         v = cfg.voip or {}
         number = clean_number(to_number)
+        if not number and via == "sip":         # PBX extensions are short: 100, *43, 2001
+            short = re.sub(r"[\s()-]", "", to_number or "")
+            number = short if re.fullmatch(r"[0-9*#+]{2,15}", short) else ""
         if not number:
             return {"ok": False, "error": "not a valid phone number (use +countrycode…)"}
         store = Store(cfg.db_path)
