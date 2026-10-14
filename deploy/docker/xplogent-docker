@@ -149,7 +149,7 @@ cmd_update() {
   say "Pulling new images…"
   if ! dc pull --quiet; then
     rollback_files
-    die "could not download the new images (network, or GHCR package not public?); nothing was changed"
+    die "could not download the new images (tag not published yet, package not public, or no network); the running version was not changed"
   fi
   for f in $DEPLOY_FILES; do rm -f "$DIR/$f.prev"; done
   apply
@@ -174,11 +174,23 @@ case "$cmd" in
   status)
     dc ps
     echo
-    if running && dc exec -T xplogent python -c \
+    running || die "not running (xplogent-docker start)"
+    cid="$(dc ps -q xplogent)"
+    health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null || true)"
+    if [ "$health" = "starting" ]; then
+      # Just (re)started: give it the healthcheck's start period before judging.
+      say "starting up…"
+      for _ in $(seq 1 30); do
+        sleep 2
+        health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null || true)"
+        [ "$health" = "starting" ] || break
+      done
+    fi
+    if dc exec -T xplogent python -c \
         "import urllib.request as u; u.urlopen('http://127.0.0.1:8765/health', timeout=3)" >/dev/null 2>&1; then
       ok "healthy: $(url)"
     else
-      warn "not healthy (xplogent-docker logs)"
+      warn "not healthy (state: ${health:-unknown}); see: xplogent-docker logs"
     fi ;;
   logs)
     follow=""; svc=xplogent
