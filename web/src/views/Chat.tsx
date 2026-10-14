@@ -98,6 +98,9 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
         }
         refreshSkills(); break;
       case "usage": setUsage(ev as unknown as Usage); break;
+      case "thinking":
+        if (ev.text) setLog((l) => [...l, { kind: "note", text: `⚠ ${ev.text}` }]);
+        break;
       case "budget":
         setLog((l) => [...l, { kind: "note", text: `💰 budget (${ev.scope}): ${ev.reason}${ev.action === "downgrade" ? ` → switched to ${ev.model}` : ev.action === "pause" ? " → run paused" : ""}` }]);
         toast(String(ev.reason ?? "budget cap reached"), ev.action === "pause" ? "error" : "info");

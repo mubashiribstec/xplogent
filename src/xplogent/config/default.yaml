@@ -52,6 +52,13 @@ server:
 # Cost guardrails. Caps are in USD; 0 disables a cap. When a cap is hit, on_exceed
 # is one of: "warn" (notify, keep going), "downgrade" (switch to downgrade_model),
 # or "pause" (stop the run). Estimates use the same per-model pricing as Analytics.
+# Backup model: answers when the main model/server can't (down, no key, rate limit).
+# Default: a small model on the local Ollama in Docker (xplogent-docker backup-model on).
+fallback:
+  enabled: false
+  model: llama3.2:3b               # on the local Ollama; or a full spec like openai:gpt-4o-mini
+  host: ""                         # local Ollama URL; blank = http://ollama:11434 (Docker)
+
 budget:
   daily_usd: 0
   session_usd: 0

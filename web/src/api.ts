@@ -487,6 +487,17 @@ export const testOllama = (host: string, token: string) =>
 export const saveOllama = (host: string, token: string) =>
   postJSON<{ ok: boolean; host?: string; error?: string }>("/providers/ollama/settings", { host, token });
 
+// ── Backup model (local Ollama in Docker) ─────────────────────────────────────
+export interface BackupStatus {
+  enabled: boolean; model: string; host: string; reachable: boolean; models: string[];
+  installed: boolean; error?: string;
+}
+export async function getBackupModel(): Promise<BackupStatus> { return (await fetch("/providers/backup")).json(); }
+export const saveBackupModel = (u: { enabled?: boolean; model?: string; host?: string }) =>
+  postJSON<Record<string, any>>("/providers/backup", u);
+export const pullBackupModel = (model: string) => postJSON<Record<string, any>>("/providers/backup/pull", { model });
+export const testBackupModel = () => postJSON<Record<string, any>>("/providers/backup/test");
+
 // ── Phone agent setup ─────────────────────────────────────────────────────────
 export interface ReadinessItem { id: string; label: string; ok: boolean; detail: string; required: boolean }
 export async function getVoipReadiness(): Promise<{ ready: boolean; items: ReadinessItem[] }> {

@@ -153,3 +153,29 @@ class OllamaProvider(Provider):
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+LOCAL_DEFAULT_HOST = "http://ollama:11434"  # the `ollama` service in the Docker compose file
+
+
+def local_ollama_host() -> str:
+    """Host of the local (backup) Ollama: config ``fallback.host`` or OLLAMA_LOCAL_HOST."""
+    host = ""
+    try:
+        from xplogent.core.config import load_config
+
+        host = str((load_config().raw.get("fallback") or {}).get("host") or "").strip()
+    except Exception:  # noqa: BLE001
+        host = ""
+    return (host or os.environ.get("OLLAMA_LOCAL_HOST", "").strip() or LOCAL_DEFAULT_HOST).rstrip("/")
+
+
+class LocalOllamaProvider(OllamaProvider):
+    """The Ollama running next to Xplogent (Docker ``ollama`` profile), used as the
+    backup model. Spec ``ollama-local:<model>``; no token, independent of the main
+    Ollama server configured in Settings."""
+
+    name = "ollama-local"
+
+    def __init__(self, model: str, host: str | None = None, **kwargs: Any) -> None:
+        super().__init__(model, host=host or local_ollama_host(), api_key="", **kwargs)

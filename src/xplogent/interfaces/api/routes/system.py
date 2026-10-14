@@ -120,6 +120,86 @@ async def ollama_save(body: dict) -> dict:
     return {"ok": True, "host": host}
 
 
+# ── Backup model (local Ollama in Docker) ─────────────────────────────────────
+@router.get("/providers/backup")
+async def backup_model_status() -> dict:
+    from xplogent.providers.ollama import local_ollama_host
+
+    fb = load_config().raw.get("fallback") or {}
+    host = local_ollama_host()
+    probe = await _probe_ollama(host, "", timeout=4.0)
+    model = str(fb.get("model") or "llama3.2:3b")
+    installed = any(m == model or m == f"{model}:latest" or m.split(":")[0] == model
+                    for m in probe["models"])
+    return {"enabled": bool(fb.get("enabled")), "model": model, "host": host,
+            "reachable": probe["ok"], "models": probe["models"], "installed": installed,
+            "error": probe.get("error", "")}
+
+
+@router.post("/providers/backup")
+async def backup_model_save(body: dict) -> dict:
+    updates: dict = {}
+    if "enabled" in body:
+        updates["enabled"] = bool(body["enabled"])
+    if str(body.get("model") or "").strip():
+        updates["model"] = str(body["model"]).strip()
+    if "host" in body:
+        host = str(body.get("host") or "").strip().rstrip("/")
+        if host and not host.startswith(("http://", "https://")):
+            return {"ok": False, "error": "the URL must start with http:// or https://"}
+        updates["host"] = host
+    save_user_config({"fallback": updates})
+    deps.audit_event("backup_model", target=str(updates), risk="low")
+    return {"ok": True, **(load_config().raw.get("fallback") or {})}
+
+
+@router.post("/providers/backup/pull")
+async def backup_model_pull(body: dict) -> dict:
+    """Download the backup model onto the local Ollama (can take several minutes)."""
+    import httpx
+
+    from xplogent.providers.ollama import local_ollama_host
+
+    model = str(body.get("model") or (load_config().raw.get("fallback") or {}).get("model")
+                or "llama3.2:3b").strip()
+    host = local_ollama_host()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3600.0, connect=10.0)) as client:
+            resp = await client.post(f"{host}/api/pull", json={"model": model, "stream": False})
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"local Ollama not reachable at {host} ({type(exc).__name__}): "
+                                      "on the server run `xplogent-docker backup-model on`"}
+    if resp.status_code != 200:
+        return {"ok": False, "error": f"pull failed: HTTP {resp.status_code} {resp.text[:300]}"}
+    return {"ok": True, "model": model}
+
+
+@router.post("/providers/backup/test")
+async def backup_model_test() -> dict:
+    """One short reply straight from the backup model (bypasses the main model)."""
+    import time
+
+    from xplogent.providers.base import Message, Role
+    from xplogent.providers.registry import build_provider
+
+    fb = load_config().raw.get("fallback") or {}
+    model = str(fb.get("model") or "llama3.2:3b")
+    spec = model if ":" in model and model.split(":", 1)[0] in available_providers() \
+        else f"ollama-local:{model}"
+    provider = build_provider(spec, fallback=False)
+    started = time.monotonic()
+    try:
+        reply = await asyncio.wait_for(provider.complete(
+            [Message(role=Role.USER, content="Reply with one short friendly sentence.")],
+            temperature=0.2), timeout=180)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]}
+    finally:
+        await provider.aclose()
+    return {"ok": bool(reply.content.strip()), "reply": reply.content.strip()[:300],
+            "seconds": round(time.monotonic() - started, 1), "model": spec}
+
+
 @router.post("/providers/ollama/pull")
 async def ollama_pull(body: dict) -> dict:
     """Pull a local Ollama model (used by onboarding). Best-effort, blocking."""

@@ -3,6 +3,7 @@ import {
   addFact, deleteFact, deleteSkill, enableLocalVision, exportKnowledge, getFacts, getFullConfig,
   getProviderModels, getRoles, getSkills, getStatus, getTools, importKnowledge, patchConfig, putRole,
   putSecrets, restoreBackup, saveOllama, StatusInfo, testOllama, testVision,
+  BackupStatus, getBackupModel, pullBackupModel, saveBackupModel, testBackupModel,
 } from "./api";
 import { UpdatePanel } from "./UpdatePanel";
 
@@ -47,6 +48,7 @@ export function Settings() {
       <HealthCard />
       <OllamaCard host={cfg.ollama?.host ?? ""} hasToken={!!cfg.secrets?.OLLAMA_API_KEY}
         onUse={async (u) => { await save(u); reload(); }} onSaved={reload} flash={flash} />
+      <BackupModelCard flash={flash} />
       <McpCard mcp={cfg.mcp ?? {}} onSave={save} />
 
       <div className="card">
@@ -234,6 +236,65 @@ function OllamaCard({ host, hasToken, onUse, onSaved, flash }: {
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+const BACKUP_SUGGESTIONS = [
+  { model: "llama3.2:3b", note: "~2 GB, good default for 8-16 GB RAM" },
+  { model: "qwen2.5:3b", note: "~2 GB, strong at following instructions" },
+  { model: "llama3.2:1b", note: "~1.3 GB, fastest, weakest" },
+  { model: "llama3.1:8b", note: "~4.7 GB, needs 16 GB+ RAM or a GPU" },
+];
+
+function BackupModelCard({ flash }: { flash: (m: string) => void }) {
+  const [st, setSt] = useState<BackupStatus | null>(null);
+  const [model, setModel] = useState("");
+  const [busy, setBusy] = useState("");
+  const [result, setResult] = useState<string>("");
+  const load = () => getBackupModel().then((s) => { setSt(s); setModel((m) => m || s.model); }).catch(() => {});
+  useEffect(() => { load(); }, []);
+  if (!st) return null;
+
+  const run = async (label: string, fn: () => Promise<void>) => {
+    setBusy(label); setResult("");
+    try { await fn(); } catch (e) { setResult(`✗ ${String(e)}`); } finally { setBusy(""); load(); }
+  };
+  return (
+    <div className="card">
+      <h3>Backup model (local)</h3>
+      <p className="dim">If your main model or server can't answer (down, no key, rate limit), a small model on
+        this server's own Ollama answers instead, for chat and phone calls. On the server, run
+        {" "}<code>xplogent-docker backup-model on</code> once to start the local Ollama.</p>
+      <div className="row wrap" style={{ gap: 8 }}>
+        <span className={`badge ${st.reachable ? "ok" : "bad"}`} title={st.error || st.host}>
+          local Ollama {st.reachable ? "running" : "not running"}</span>
+        <span className={`badge ${st.installed ? "ok" : "warn"}`}>{st.model} {st.installed ? "downloaded" : "not downloaded"}</span>
+        <span className={`badge ${st.enabled ? "ok" : ""}`}>{st.enabled ? "backup on" : "backup off"}</span>
+      </div>
+      <label>Backup model
+        <input list="backup-models" value={model} onChange={(e) => setModel(e.target.value)} />
+        <datalist id="backup-models">
+          {BACKUP_SUGGESTIONS.map((b) => <option key={b.model} value={b.model}>{b.note}</option>)}
+        </datalist>
+      </label>
+      <div className="row wrap" style={{ gap: 8 }}>
+        <button disabled={!!busy || !st.reachable} onClick={() => run("pull", async () => {
+          const r = await pullBackupModel(model.trim());
+          setResult(r.ok ? `✓ ${r.model} downloaded` : `✗ ${r.error}`);
+          if (r.ok) await saveBackupModel({ model: model.trim() });
+        })}>{busy === "pull" ? "Downloading… (a few minutes)" : "Download model"}</button>
+        <button className="primary" disabled={!!busy} onClick={() => run("save", async () => {
+          await saveBackupModel({ model: model.trim(), enabled: !st.enabled });
+          flash(st.enabled ? "backup model off" : "backup model on");
+        })}>{st.enabled ? "Turn backup off" : "Turn backup on"}</button>
+        <button disabled={!!busy || !st.reachable} onClick={() => run("test", async () => {
+          const r = await testBackupModel();
+          setResult(r.ok ? `✓ ${r.model} answered in ${r.seconds}s: "${r.reply}"` : `✗ ${r.error}`);
+        })}>{busy === "test" ? "Testing…" : "Test backup"}</button>
+      </div>
+      {result && <p className={result.startsWith("✓") ? "ok" : "warn"}>{result}</p>}
+      {st.reachable && st.models.length > 0 && <p className="dim">On the local Ollama: {st.models.join(", ")}</p>}
     </div>
   );
 }

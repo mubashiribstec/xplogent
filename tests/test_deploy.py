@@ -223,3 +223,12 @@ def test_installer_flags_apply_to_an_existing_install(tmp_path):
     # No flags at all: nothing changes.
     assert _get_sh(tmp_path).returncode == 0
     assert _env(tmp_path) == lan
+
+
+@_bash
+def test_installer_backup_model_runs_local_ollama_without_redirecting_main(tmp_path):
+    res = _get_sh(tmp_path, "--mode", "local", "--no-ollama", "--backup-model")
+    assert res.returncode == 0, res.stderr
+    env = _env(tmp_path)
+    assert env["COMPOSE_PROFILES"] in ("ollama", "ollama-gpu")
+    assert env.get("OLLAMA_HOST", "") == ""                # main model stays where it was

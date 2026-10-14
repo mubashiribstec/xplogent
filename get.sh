@@ -18,6 +18,8 @@
 #   --ollama | --no-ollama run local models with Ollama (GPU used when available)    [XPL_OLLAMA]
 #   --model SPEC           default model, e.g. openai:gpt-4o-mini                   [XPL_MODEL]
 #   --speech | --no-speech local voices for the phone agent (Kokoro; GPU if present) [XPL_SPEECH]
+#   --backup-model [MODEL] local Ollama backup used when the main model can't answer
+#                          (default llama3.2:3b)                                   [XPL_BACKUP_MODEL]
 #   --reconfigure          ask the questions again for an existing install (token kept)
 #   --dir PATH             install directory (default /opt/xplogent-docker)          [XPL_DIR]
 #   --ref REF              git branch/tag to take the deploy files from (default main) [XPL_REF]
@@ -36,11 +38,12 @@ DOMAIN="${XPL_DOMAIN:-}"
 OLLAMA="${XPL_OLLAMA:-}"
 MODEL="${XPL_MODEL:-}"
 SPEECH="${XPL_SPEECH:-}"
+BACKUP_MODEL="${XPL_BACKUP_MODEL:-}"
 BIND=""
 YES=0; DRY=0; INSTALL_DOCKER=1; RECONFIGURE=0
 # Settings given explicitly (flags or XPL_* env) are applied even to an existing install.
 EXPLICIT=0
-[ -z "$MODE$DOMAIN$OLLAMA$MODEL$SPEECH" ] || EXPLICIT=1
+[ -z "$MODE$DOMAIN$OLLAMA$MODEL$SPEECH$BACKUP_MODEL" ] || EXPLICIT=1
 BIN_DIR="${XPL_BIN_DIR:-/usr/local/bin}"
 
 while [ $# -gt 0 ]; do
@@ -53,6 +56,9 @@ while [ $# -gt 0 ]; do
     --no-ollama) OLLAMA=0; EXPLICIT=1 ;;
     --model) MODEL="${2:?--model needs a value}"; EXPLICIT=1; shift ;;
     --speech) SPEECH=1; EXPLICIT=1 ;;
+    --backup-model)
+      BACKUP_MODEL="llama3.2:3b"; EXPLICIT=1
+      case "${2:-}" in ""|-*) ;; *) BACKUP_MODEL="$2"; shift ;; esac ;;
     --no-speech) SPEECH=0; EXPLICIT=1 ;;
     --reconfigure) RECONFIGURE=1 ;;
     --dir) DIR="${2:?--dir needs a path}"; shift ;;
@@ -283,6 +289,9 @@ if [ "$FRESH" -eq 1 ] || [ "$RECONFIGURE" -eq 1 ] || [ "$PARTIAL" -eq 1 ]; then
     set_profile "$ENV_FILE" speech off
   fi
 
+  # Backup model: the local Ollama container must run even when the main model is remote.
+  [ -z "$BACKUP_MODEL" ] || set_profile "$ENV_FILE" ollama on
+
   if [ -z "$MODEL" ] && [ "$PARTIAL" -eq 1 ]; then
     :  # keep the current model
   elif [ -z "$MODEL" ]; then
@@ -360,6 +369,18 @@ if [ "$DRY" -eq 0 ]; then
   [ "$healthy" -eq 1 ] || die "Xplogent did not become healthy; see: xplogent-docker logs"
   ok "Xplogent is running"
   profiles="$(get_env "$ENV_FILE" COMPOSE_PROFILES)"
+  if [ -n "$BACKUP_MODEL" ]; then
+    say "Downloading the backup model $BACKUP_MODEL (first time only; ~2 GB for llama3.2:3b)…"
+    if docker compose exec -T ollama ollama pull "$BACKUP_MODEL"; then
+      docker compose exec -T -e XPL_FB_MODEL="$BACKUP_MODEL" xplogent python -c \
+        "import os; from xplogent.core.config import save_user_config; save_user_config({'fallback': {'enabled': True, 'model': os.environ['XPL_FB_MODEL']}})" \
+        && ok "Backup model on: $BACKUP_MODEL answers when the main model is unavailable"
+    else
+      warn "could not download $BACKUP_MODEL; later: xplogent-docker backup-model on $BACKUP_MODEL"
+    fi
+  fi
+  # Local Ollama as the *main* model (--ollama): fetch the chat + embedding models.
+  [ "$(get_env "$ENV_FILE" OLLAMA_HOST)" = "http://ollama:11434" ] || profiles=""
   case ",$profiles," in
     *,ollama*)
       say "Downloading the local models (first time only; this can take a while)…"

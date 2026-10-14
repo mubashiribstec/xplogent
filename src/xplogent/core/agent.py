@@ -333,6 +333,10 @@ class Agent:
                         await self._emit(EventType.TOKEN, text=ev.text)
                     elif ev.kind == StreamKind.DONE:
                         assistant = ev.message
+                if getattr(self.provider, "used_backup", False):
+                    await self._emit(EventType.THINKING, text=(
+                        f"main model unavailable: answered by the backup model "
+                        f"({getattr(self.provider, 'backup_spec', 'backup')})"))
                 return assistant or Message(role=Role.ASSISTANT, content="")
             except Exception as exc:  # noqa: BLE001 - one agent's failure must not crash others
                 kind = classify_error(exc)
