@@ -44,7 +44,7 @@ function parseFrame(data: unknown): XplogentEvent | null {
   }
 }
 
-function wsUrl(path: string): string {
+export function wsUrl(path: string): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   return `${proto}://${location.host}${path}`;
 }
@@ -358,7 +358,7 @@ export async function getExtensionStatus(): Promise<ExtensionStatus> {
 export interface CallRow {
   id: number; direction: string; contact_name?: string | null; from_number: string; to_number: string;
   status: string; outcome?: string | null; summary?: string | null; cost: number;
-  started_at: number; ended_at?: number | null;
+  started_at: number; ended_at?: number | null; test?: number; transport?: string;
 }
 export interface CallTurn { speaker: string; text: string; created_at: number; }
 export interface Contact {
@@ -367,7 +367,11 @@ export interface Contact {
 }
 export interface VoipStatus {
   enabled: boolean; public_url: string; has_secret: boolean; contacts: number; calls: number;
-  active: { call_id: number; from: string; started: number }[];
+  active: LiveCallInfo[];
+}
+export interface LiveCallInfo {
+  call_id: number; number: string; from: string; direction: string; transport: string; test: boolean;
+  contact_name: string; started: number; paused: boolean; notes: string[]; can_transfer: boolean;
 }
 export async function getVoipStatus(): Promise<VoipStatus> { return (await fetch("/voip/status")).json(); }
 export async function getCalls(): Promise<{ calls: CallRow[] }> { return (await fetch("/voip/calls")).json(); }
@@ -727,3 +731,13 @@ export async function savePlaybook(content: string): Promise<{ ok: boolean; erro
                                           body: JSON.stringify({ content }) })).json();
 }
 export const buildPlaybook = () => postJSON<{ ok: boolean; job: PlaybookJob }>("/voip/playbook/build");
+
+// ── Live call control, manual + test calls ──────────────────────────────────
+export type CallResult = { ok: boolean; error?: string; hours?: boolean; [k: string]: any };
+export const hangupCall = (id: number) => postJSON<CallResult>(`/voip/calls/${id}/hangup`);
+export const transferCall = (id: number, to = "") => postJSON<CallResult>(`/voip/calls/${id}/transfer`, to ? { to } : {});
+export const sayOnCall = (id: number, text: string) => postJSON<CallResult>(`/voip/calls/${id}/say`, { text });
+export const instructCall = (id: number, text: string) => postJSON<CallResult>(`/voip/calls/${id}/instruct`, { text });
+export const pauseAI = (id: number, paused: boolean) => postJSON<CallResult>(`/voip/calls/${id}/pause-ai`, { paused });
+export const dialCall = (b: { number?: string; contact_id?: number; via?: string; test?: boolean; ignore_hours?: boolean }) =>
+  postJSON<CallResult>("/voip/dial", b);

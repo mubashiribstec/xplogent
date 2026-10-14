@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw } from "lucide-react";
 import {
-  CallRow, CallTurn, ReadinessItem, VoipStatus, getCall, getCalls, getFullConfig, getVoipReadiness,
+  CallRow, CallTurn, ReadinessItem, VoipStatus, getCall, getCalls, getContacts, getFullConfig, getVoipReadiness,
   getVoipStatus, patchConfig, putSecrets, testSpeech, testTelnyx,
 } from "../api";
 import { useToast } from "../components/Toast";
+import { CallNow, LiveCalls, TestCall } from "./CallControls";
 
 const fmtTime = (t?: number | null) => (t ? new Date(t * 1000).toLocaleString() : "—");
 const fmtDur = (c: CallRow) => {
@@ -29,6 +30,8 @@ export function Calls() {
     setCfg(c.voip ?? {}); setTelnyxKeySet(!!c.secrets?.TELNYX_API_KEY); setLoaded(true);
   }).catch(() => setLoaded(true));
   const loadReady = () => getVoipReadiness().then(setReady).catch(() => {});
+  const [contacts, setContacts] = useState<{ id: number; name: string }[]>([]);
+  useEffect(() => { getContacts("").then((r) => setContacts(r.contacts.slice(0, 200))).catch(() => {}); }, []);
 
   const reload = () => {
     getVoipStatus().then(setStatus).catch(() => {});
@@ -69,6 +72,50 @@ export function Calls() {
 
         {ready && <Readiness ready={ready.ready} items={ready.items} />}
 
+        <LiveCalls active={status?.active ?? []} toast={toast} onChange={reload} />
+
+        {loaded && <CallNow toast={toast} onCalled={reload}
+          via={cfg.telephony === "sip" ? ["sip"] : cfg.telephony === "both" ? ["telnyx", "sip"] : ["telnyx"]} />}
+        <TestCall contacts={contacts} />
+
+        <div className="card">
+          <h3>Recent calls ({calls.length})</h3>
+          <table className="data-table">
+            <thead><tr><th></th><th>When</th><th>Caller</th><th>Duration</th><th>Outcome</th><th>Est. cost</th></tr></thead>
+            <tbody>
+              {calls.map((c) => (
+                <Fragment key={c.id}>
+                  <tr style={{ cursor: "pointer" }}
+                    onClick={() => { const next = open === c.id ? null : c.id; setOpen(next); setTurns([]); }}>
+                    <td>{open === c.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      {c.direction === "inbound" ? <PhoneIncoming size={14} /> : <PhoneOutgoing size={14} />}</td>
+                    <td className="dim">{fmtTime(c.started_at)}</td>
+                    <td>{c.contact_name || (c.direction === "outbound" ? c.to_number : c.from_number) || "unknown"}
+                      {!!c.test && <span className="badge" style={{ marginLeft: 6 }}>test</span>}</td>
+                    <td>{fmtDur(c)}{c.status === "active" && <span className="badge warn" style={{ marginLeft: 6 }}>live</span>}</td>
+                    <td>{c.outcome ? <span className="badge">{c.outcome}</span> : <span className="dim">—</span>}</td>
+                    <td className="dim">${(c.cost ?? 0).toFixed(3)}</td>
+                  </tr>
+                  {open === c.id && (
+                    <tr><td colSpan={6}>
+                      {c.summary && <p className="dim" style={{ marginBottom: 6 }}><b>Summary:</b> {c.summary}</p>}
+                      {turns.length === 0 && <p className="dim">no transcript yet</p>}
+                      {turns.map((t, i) => (
+                        <div key={i} style={{ margin: "3px 0" }}>
+                          <b style={{ color: t.speaker === "agent" ? "var(--accent)" : "var(--amber)" }}>
+                            {t.speaker === "agent" ? "Agent" : "Caller"}:</b> {t.text}
+                        </div>
+                      ))}
+                    </td></tr>
+                  )}
+                </Fragment>
+              ))}
+              {calls.length === 0 && <tr><td colSpan={6} className="dim">no calls yet</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        <h2 style={{ margin: "28px 0 10px", fontSize: 18 }}>Setup</h2>
         {loaded && (<>
         <div className="card">
           <h3>Setup</h3>
@@ -123,41 +170,6 @@ export function Calls() {
         </div>
         </>)}
 
-        <div className="card">
-          <h3>Recent calls ({calls.length})</h3>
-          <table className="data-table">
-            <thead><tr><th></th><th>When</th><th>Caller</th><th>Duration</th><th>Outcome</th><th>Est. cost</th></tr></thead>
-            <tbody>
-              {calls.map((c) => (
-                <Fragment key={c.id}>
-                  <tr style={{ cursor: "pointer" }}
-                    onClick={() => { const next = open === c.id ? null : c.id; setOpen(next); setTurns([]); }}>
-                    <td>{open === c.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      {c.direction === "inbound" ? <PhoneIncoming size={14} /> : <PhoneOutgoing size={14} />}</td>
-                    <td className="dim">{fmtTime(c.started_at)}</td>
-                    <td>{c.contact_name || (c.direction === "outbound" ? c.to_number : c.from_number) || "unknown"}</td>
-                    <td>{fmtDur(c)}{c.status === "active" && <span className="badge warn" style={{ marginLeft: 6 }}>live</span>}</td>
-                    <td>{c.outcome ? <span className="badge">{c.outcome}</span> : <span className="dim">—</span>}</td>
-                    <td className="dim">${(c.cost ?? 0).toFixed(3)}</td>
-                  </tr>
-                  {open === c.id && (
-                    <tr><td colSpan={6}>
-                      {c.summary && <p className="dim" style={{ marginBottom: 6 }}><b>Summary:</b> {c.summary}</p>}
-                      {turns.length === 0 && <p className="dim">no transcript yet</p>}
-                      {turns.map((t, i) => (
-                        <div key={i} style={{ margin: "3px 0" }}>
-                          <b style={{ color: t.speaker === "agent" ? "var(--accent)" : "var(--amber)" }}>
-                            {t.speaker === "agent" ? "Agent" : "Caller"}:</b> {t.text}
-                        </div>
-                      ))}
-                    </td></tr>
-                  )}
-                </Fragment>
-              ))}
-              {calls.length === 0 && <tr><td colSpan={6} className="dim">no calls yet</td></tr>}
-            </tbody>
-          </table>
-        </div>
       </div>
     </div>
   );

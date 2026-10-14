@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { BanIcon, FileUp, Trash2, Users } from "lucide-react";
+import { BanIcon, FileUp, Phone, Trash2, Users } from "lucide-react";
 import { Contact, addDnc, deleteContact, getContacts, importContactsCsv } from "../api";
 import { useToast } from "../components/Toast";
+import { placeCall } from "./CallControls";
 
 export function Contacts() {
   const toast = useToast();
@@ -64,6 +65,9 @@ export function Contacts() {
                   <td className="dim" style={{ fontSize: 12 }}>
                     {[c.email, ...Object.entries(c.fields || {}).map(([k, v]) => `${k}: ${v}`)].filter(Boolean).join(" · ")}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
+                    <button className="icon-btn" title={`call ${c.name || c.phone} now (the AI agent calls)`} aria-label="call"
+                      onClick={() => confirm(`Have the AI agent call ${c.name || c.phone} now?`) && placeCall({ contact_id: c.id }, toast)}>
+                      <Phone size={14} /></button>
                     <button className="icon-btn" title="add to do-not-call"
                       onClick={() => addDnc(c.phone).then(() => toast("added to do-not-call", "success"))}><BanIcon size={14} /></button>
                     <button className="x" onClick={() => deleteContact(c.id).then(() => reload())}><Trash2 size={14} /></button>

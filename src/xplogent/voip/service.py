@@ -19,6 +19,7 @@ from xplogent.core.logging import get_logger
 from xplogent.memory.store import Store
 from xplogent.voip.audio import VAD
 from xplogent.voip.brain import CallBrain
+from xplogent.voip.control import LiveCall, calling_hours_problem, clean_number
 from xplogent.voip.engine import CallSession
 from xplogent.voip.providers import build_stt, build_tts
 from xplogent.voip.telephony.telnyx import (
@@ -54,19 +55,26 @@ def customer_number(info: dict[str, str]) -> str:
     return info.get("to", "") if is_outbound(info) else info.get("from", "")
 
 
-def build_session(cfg: Config, store: Store, info: dict[str, str], *, send_audio, clear_audio=None,
+def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio, clear_audio=None,
                   hangup=None, transfer=None, stt=None, tts=None, provider=None,
-                  retrieve=None) -> tuple[CallSession, int, CallBrain]:
-    """Create a CallSession + its call row. Injected parts make this unit-testable."""
+                  retrieve=None, **session_kw: Any) -> tuple[CallSession, int, CallBrain]:
+    """Create a CallSession + its call row. Injected parts make this unit-testable.
+
+    ``info`` may carry ``contact_id`` (a manual call to a chosen contact), ``test``
+    (a test call: not counted, never changes the contact) and ``transport``.
+    """
     v = cfg.voip or {}
     customer = customer_number(info)
-    contact = store.find_contact_by_phone(customer) if customer else None
-    if contact is not None and store.is_dnc(customer):
+    contact = store.get_contact(int(info["contact_id"])) if info.get("contact_id") else None
+    if contact is None and customer:
+        contact = store.find_contact_by_phone(customer)
+    if contact is not None and store.is_dnc(contact.get("phone") or customer):
         contact = {**contact, "do_not_call": True}
-    direction = "outbound" if is_outbound(info) else "inbound"
+    direction = str(info.get("direction_label") or ("outbound" if is_outbound(info) else "inbound"))
     call_id = store.start_call(direction, info.get("from", ""), info.get("to", ""),
                                provider_call_id=info.get("call_control_id", ""),
-                               contact_id=contact["id"] if contact else None)
+                               contact_id=contact["id"] if contact else None,
+                               test=bool(info.get("test")), transport=str(info.get("transport", "")))
 
     if provider is None:
         from xplogent.providers.registry import build_provider
@@ -87,7 +95,7 @@ def build_session(cfg: Config, store: Store, info: dict[str, str], *, send_audio
         greeting=greeting,
         vad=VAD(threshold=float(vad_cfg.get("threshold", 500)),
                 silence_ms=int(vad_cfg.get("silence_ms", 700))),
-        max_call_s=float(v.get("max_call_seconds", 900)))
+        max_call_s=float(v.get("max_call_seconds", 900)), **session_kw)
     return session, call_id, brain
 
 
@@ -125,6 +133,9 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
     summary = st.summary or (f"Callback requested: {st.callback}" if st.callback else "")
     store.end_call(call_id, outcome=outcome, summary=summary, cost=cost)
     call = store.get_call(call_id) or {}
+    if call.get("test"):        # a test call never changes customer records
+        return {"call_id": call_id, "outcome": outcome, "cost": cost, "test": True,
+                "latency_ms": session.latencies_ms}
     if st.do_not_call and contact_phone:
         store.add_dnc(contact_phone, "asked on call")
     if call.get("contact_id"):
@@ -142,8 +153,11 @@ class VoipService:
     def __init__(self) -> None:
         self.pending: dict[str, dict[str, str]] = {}      # stream token -> call info
         self.by_call: dict[str, dict[str, str]] = {}      # call_control_id -> info
-        self.active: dict[int, dict[str, Any]] = {}       # call row id -> live info
+        self.active: dict[int, LiveCall] = {}             # call row id -> live call controls
+        self.outbound: dict[str, dict[str, Any]] = {}     # call_control_id -> {contact_id, test}
         self._tasks: set[asyncio.Task] = set()
+        # Set by the SIP trunk when it is running: async (number, meta) -> result.
+        self.sip_dialer: Any = None
         self._seen_at: dict[str, float] = {}              # token / call id -> created
 
     def _remember(self, table: dict, key: str, value: dict[str, str]) -> None:
@@ -152,7 +166,8 @@ class VoipService:
 
     def _expire(self) -> None:
         now = time.monotonic()
-        for table, ttl in ((self.pending, self.PENDING_TTL), (self.by_call, self.CALL_TTL)):
+        for table, ttl in ((self.pending, self.PENDING_TTL), (self.by_call, self.CALL_TTL),
+                           (self.outbound, self.CALL_TTL)):
             for key in [k for k in table if now - self._seen_at.get(k, now) > ttl]:
                 table.pop(key, None)
                 self._seen_at.pop(key, None)
@@ -174,26 +189,55 @@ class VoipService:
         task.add_done_callback(self._tasks.discard)
 
     # -- outbound ---------------------------------------------------------------------
-    async def dial(self, to_number: str, cfg: Config | None = None) -> dict[str, Any]:
+    async def dial(self, to_number: str, cfg: Config | None = None, *, contact_id: int | None = None,
+                   test: bool = False, via: str = "telnyx",
+                   ignore_hours: bool = False) -> dict[str, Any]:
         """Place an outbound call. The do-not-call list is checked *before* dialing:
-        ringing a number that opted out is already the violation."""
+        ringing a number that opted out is already the violation. Calling hours are
+        checked too (in the contact's time zone) unless overridden or a test call."""
         cfg = cfg or load_config()
         v = cfg.voip or {}
+        number = clean_number(to_number)
+        if not number:
+            return {"ok": False, "error": "not a valid phone number (use +countrycode…)"}
         store = Store(cfg.db_path)
         try:
-            if store.is_dnc(to_number):
+            if store.is_dnc(number):
                 return {"ok": False, "error": "number is on the do-not-call list"}
+            contact = store.get_contact(contact_id) if contact_id else store.find_contact_by_phone(number)
         finally:
             store.close()
+        if not test and not ignore_hours:
+            problem = calling_hours_problem(v, contact)
+            if problem:
+                return {"ok": False, "error": problem, "hours": True}
+        meta = {"contact_id": contact["id"] if contact else None, "test": test, "transport": via}
+        if via == "sip":
+            dialer = self.sip_dialer
+            if dialer is None:
+                return {"ok": False, "error": "the SIP trunk is not set up (Calls → Telephony)"}
+            return await dialer(number, meta)
         from_number, connection = str(v.get("from_number", "")), str(v.get("connection_id", ""))
         if not (from_number and connection):
-            return {"ok": False, "error": "voip.from_number and voip.connection_id are required"}
+            return {"ok": False, "error": "set your Telnyx number and Voice API application ID first"}
         client = TelnyxClient(api_key_env=str(v.get("api_key_env", "TELNYX_API_KEY")))
         try:
-            res = await client.dial(to_number, from_number, connection)
+            res = await client.dial(number, from_number, connection)
+        except Exception as exc:  # noqa: BLE001 - shown in the dashboard
+            return {"ok": False, "error": f"Telnyx refused the call: {exc}"[:300]}
         finally:
             await client.aclose()
-        return {"ok": True, "call": res.get("data", res)}
+        data = res.get("data", res) if isinstance(res, dict) else {}
+        ccid = str(data.get("call_control_id", ""))
+        if ccid:
+            self._remember(self.outbound, ccid, meta)
+        return {"ok": True, "call": data, "via": "telnyx"}
+
+    def register(self, live: LiveCall) -> None:
+        self.active[live.call_id] = live
+
+    def unregister(self, call_id: int) -> None:
+        self.active.pop(call_id, None)
 
     # -- carrier webhook -------------------------------------------------------------
     async def handle_webhook(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -214,7 +258,8 @@ class VoipService:
                 c = client()
                 self._spawn(self._act(c, c.answer(ccid)))
         elif ev["event"] == "call.answered":
-            info = {**self.by_call.get(ccid, ev), "call_control_id": ccid}
+            info = {**self.by_call.get(ccid, ev), "call_control_id": ccid, "transport": "telnyx",
+                    **self.outbound.pop(ccid, {})}
             if self._blocked(cfg, info):
                 _log.warning("outbound call to a do-not-call number: hanging up")
                 c = client()
@@ -275,7 +320,11 @@ class VoipService:
         session, call_id, brain = build_session(
             cfg, store, info, send_audio=send_audio, clear_audio=clear_audio,
             hangup=hangup, transfer=transfer)
-        self.active[call_id] = {"from": customer_number(info), "started": session.started}
+        self.register(LiveCall(
+            call_id=call_id, session=session, brain=brain, number=customer_number(info),
+            direction="outbound" if is_outbound(info) else "inbound", transport="telnyx",
+            test=bool(info.get("test")), contact_name=str((brain.contact or {}).get("name") or ""),
+            transfer_to=lambda number: client.transfer(ccid, number)))
         started = False
         try:
             while not session.finished.is_set():
@@ -298,7 +347,7 @@ class VoipService:
         except Exception:  # noqa: BLE001 - socket closed / carrier hung up
             pass
         finally:
-            self.active.pop(call_id, None)
+            self.unregister(call_id)
             await session.stop()
             result = finalize_call(cfg, store, call_id, session, brain, customer_number(info))
             _log.info("call %s finished: %s", call_id, result)

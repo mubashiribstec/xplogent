@@ -131,7 +131,8 @@ def telnyx(monkeypatch):
     from xplogent.core.config import save_user_config
 
     save_user_config({"voip": {"enabled": True, "public_url": "https://agent.test",
-                               "from_number": OUR_NUMBER, "connection_id": "conn"}})
+                               "from_number": OUR_NUMBER, "connection_id": "conn",
+                               "calling_hours": {"enabled": False}}})
     _FakeTelnyx.actions = []
     monkeypatch.setattr(service_mod, "TelnyxClient", _FakeTelnyx)
     return _FakeTelnyx

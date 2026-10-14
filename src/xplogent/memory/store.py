@@ -271,6 +271,8 @@ _MIGRATIONS = [
     ("skills", "tools", "TEXT DEFAULT ''"),     # JSON list of required tools
     ("skills", "trigger", "TEXT DEFAULT ''"),   # when to use this skill
     ("skills", "source", "TEXT DEFAULT ''"),    # learned | installed | pack id
+    ("calls", "test", "INTEGER DEFAULT 0"),     # test calls: not counted, no contact updates
+    ("calls", "transport", "TEXT DEFAULT ''"),  # telnyx | sip | browser
 ]
 # Stored in the database (PRAGMA user_version): changes whenever the schema text or
 # the migration list changes, so existing databases get upgraded automatically.
@@ -1016,6 +1018,14 @@ class Store:
             return d
         return None
 
+    def get_contact(self, contact_id: int) -> dict[str, Any] | None:
+        rows = self._query("SELECT * FROM contacts WHERE id=?", (contact_id,))
+        if not rows:
+            return None
+        d = dict(rows[0])
+        d["fields"] = json.loads(d.get("fields") or "{}")
+        return d
+
     def count_contacts(self) -> int:
         return int(self._query("SELECT COUNT(*) FROM contacts")[0][0])
 
@@ -1027,11 +1037,13 @@ class Store:
                     "WHERE id=?", (status, notes, notes, contact_id))
 
     def start_call(self, direction: str, from_number: str, to_number: str,
-                   provider_call_id: str = "", contact_id: int | None = None) -> int:
+                   provider_call_id: str = "", contact_id: int | None = None, *,
+                   test: bool = False, transport: str = "") -> int:
         cur = self._write(
             "INSERT INTO calls (direction, contact_id, from_number, to_number, provider_call_id, "
-            "status, started_at) VALUES (?,?,?,?,?,'active',?)",
-            (direction, contact_id, from_number, to_number, provider_call_id, time.time()))
+            "status, started_at, test, transport) VALUES (?,?,?,?,?,'active',?,?,?)",
+            (direction, contact_id, from_number, to_number, provider_call_id, time.time(),
+             int(test), transport))
         return int(cur.lastrowid)
 
     def add_call_turn(self, call_id: int, speaker: str, text: str) -> None:

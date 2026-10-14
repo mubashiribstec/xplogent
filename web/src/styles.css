@@ -580,3 +580,6 @@ label.check { display: flex; flex-direction: row; align-items: center; gap: var(
 .linkish:not(:disabled):hover { color: var(--accent); text-decoration: underline; }
 .linkish:disabled { cursor: default; }
 .card.drop-active { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
+.live-call { border: 1px solid var(--border); border-radius: var(--r2, 8px); padding: 10px 12px; margin-bottom: 10px; }
+.live-transcript { max-height: 260px; overflow: auto; margin: 8px 0; padding: 8px 10px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; line-height: 1.5; }

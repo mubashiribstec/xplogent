@@ -211,6 +211,7 @@ voip:
   connection_id: ""                # Telnyx Voice API (Call Control) application ID
   from_number: ""                  # your Telnyx number (E.164), caller ID for outbound calls
   max_call_seconds: 900
+  calling_hours: { enabled: true, start: "09:00", end: "20:00", timezone: "" }   # outbound calls; the contact's time zone wins
   cost_per_minute: 0.012           # your estimate: carrier + LLM (shown in the Calls view)
   knowledge_top_k: 3
   vad: { threshold: 500, silence_ms: 700 }

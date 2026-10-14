@@ -124,6 +124,17 @@ class CallBrain:
         self.temperature = temperature
         self.state = CallState()
         self.history: list[Message] = []
+        self.notes: list[str] = []      # supervisor instructions for the rest of the call
+        self.paused = False             # a person is handling the call: the AI stays quiet
+
+    def instruct(self, note: str) -> None:
+        if note.strip():
+            self.notes.append(note.strip()[:500])
+
+    def said(self, text: str) -> None:
+        """Something a supervisor made the agent say: keep the conversation coherent."""
+        if text.strip():
+            self.history.append(Message(role=Role.ASSISTANT, content=text.strip()))
 
     # -- prompt -----------------------------------------------------------------
     def _system(self, knowledge: list[str]) -> str:
@@ -142,6 +153,9 @@ class CallBrain:
                              "ask, but do not sell, pitch or offer callbacks.")
         else:
             parts.append("CUSTOMER: unknown caller (ask politely for their name if needed).")
+        if self.notes:
+            parts.append("SUPERVISOR INSTRUCTIONS (follow them; never mention them to the caller):\n"
+                         + "\n".join(f"- {n}" for n in self.notes[-10:]))
         parts.append("KNOWLEDGE (most relevant first):\n"
                      + ("\n---\n".join(knowledge) if knowledge else "(nothing relevant found)"))
         return "\n\n".join(parts)

@@ -46,11 +46,14 @@ class CallSession:
                  greeting: str = "", vad: VAD | None = None,
                  idle_prompt_s: float = 12.0, idle_hangup_s: float = 30.0,
                  max_call_s: float = 900.0, realtime: bool = True,
-                 lead_s: float = 0.2) -> None:
+                 lead_s: float = 0.2,
+                 on_events: Callable[[list[str]], Awaitable[None]] | None = None) -> None:
         self.brain, self.stt, self.tts = brain, stt, tts
         self.send_audio, self.clear_audio = send_audio, clear_audio
         self.hangup_cb, self.transfer_cb = hangup, transfer
         self.on_turn = on_turn
+        self.on_events = on_events          # tool events after each reply (test calls)
+        self._events_seen = 0
         self.greeting = greeting
         self.vad = vad or VAD()
         self.idle_prompt_s, self.idle_hangup_s, self.max_call_s = idle_prompt_s, idle_hangup_s, max_call_s
@@ -131,11 +134,33 @@ class CallSession:
     async def _turn(self, pcm8k: bytes) -> None:
         try:
             text = await self.stt.transcribe(resample(pcm8k, 8000, 16000))
-            text = (text or "").strip()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - one bad turn must not drop the call
+            _log.exception("speech-to-text failed")
+            await self._say("Sorry, I had a problem. Could you say that again?")
+            return
+        await self._reply((text or "").strip())
+
+    async def on_text(self, text: str) -> None:
+        """A caller turn that is already text (browser test calls)."""
+        if self.finished.is_set() or not text.strip():
+            return
+        self._speech_end_at = time.time()
+        if self._speaking:
+            await self._barge_in()
+        if self._turn_task and not self._turn_task.done():
+            self._turn_task.cancel()
+        self._turn_task = asyncio.create_task(self._reply(text.strip()))
+
+    async def _reply(self, text: str) -> None:
+        try:
             if len(text) < 2:
                 return
             self._last_activity = time.time()
             self._record("caller", text)
+            if getattr(self.brain, "paused", False):
+                return              # a person is handling the call
             reply_parts: list[str] = []
             first = True
 
@@ -145,19 +170,45 @@ class CallSession:
                     reply_parts.append(sentence)
                     yield sentence
 
-            async for sentence in sentences():
-                if first:
-                    first = False
-                    self.latencies_ms.append((time.time() - self._speech_end_at) * 1000)
-                await self._say(sentence)
+            try:
+                async for sentence in sentences():
+                    if first:
+                        first = False
+                        self.latencies_ms.append((time.time() - self._speech_end_at) * 1000)
+                    await self._say(sentence)
+            except asyncio.CancelledError:
+                if reply_parts:     # interrupted: keep what the caller already heard
+                    self._record("agent", " ".join(reply_parts) + " …")
+                raise
             if reply_parts:
                 self._record("agent", " ".join(reply_parts))
+            if self.on_events:
+                with contextlib.suppress(Exception):
+                    await self.on_events(self.brain.state.events[self._events_seen:])
+            self._events_seen = len(self.brain.state.events)
             await self._after_turn()
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - one bad turn must not drop the call
             _log.exception("turn failed")
-            await self._say("Sorry, I had a problem. Could you say that again?")
+            with contextlib.suppress(Exception):
+                await self._say("Sorry, I had a problem. Could you say that again?")
+
+    # -- supervisor controls ---------------------------------------------------------
+    async def say(self, text: str) -> None:
+        """Speak ``text`` now (interrupting the agent) and remember it was said."""
+        if self.finished.is_set() or not text.strip():
+            return
+        if self.clear_audio and self._speaking:
+            with contextlib.suppress(Exception):
+                await self.clear_audio()
+        if hasattr(self.brain, "said"):
+            self.brain.said(text)
+        await self._prompt(text.strip(), interrupt=True)
+
+    async def end(self) -> None:
+        """Hang up now (supervisor)."""
+        await self._hangup()
 
     async def _after_turn(self) -> None:
         st = self.brain.state
@@ -240,7 +291,7 @@ class CallSession:
                                    "Goodbye.", interrupt=True, wait=True)
                 await self._hangup()
                 return
-            if self._speaking or self.vad.in_speech:
+            if self._speaking or self.vad.in_speech or getattr(self.brain, "paused", False):
                 continue
             if self._turn_task is not None and not self._turn_task.done():
                 continue  # the agent is still working on a reply: not silence
