@@ -169,7 +169,9 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
     refreshSkills(); refreshSessions(); loadSession(sessionId.current);
     return () => { sock.current?.close(); voice.stopListening(); voice.cancelSpeak(); };
   }, []);
-  useEffect(() => bottom.current?.scrollIntoView({ behavior: "smooth" }), [log]);
+  // Braces matter: newer Chrome returns a Promise from scrollIntoView, and an effect's
+  // return value is treated as its cleanup; calling that Promise crashed the whole app.
+  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [log]);
   useEffect(() => { busyRef.current = busy; }, [busy]);
 
   const newChat = async () => {
