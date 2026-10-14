@@ -163,7 +163,28 @@ cmd_update() {
   for f in $DEPLOY_FILES; do rm -f "$DIR/$f.prev"; done
   apply
   docker image prune -f >/dev/null 2>&1 || true
+  update_helper
   ok "Updated. Open $(url)"
+}
+
+# Replace this helper with the latest one (new commands), keeping the install dir.
+# mv swaps the file atomically, so the running copy finishes undisturbed.
+update_helper() {
+  [ -f "$DIR/.install-info" ] && command -v curl >/dev/null 2>&1 || return 0
+  # shellcheck disable=SC1091
+  . "$DIR/.install-info"
+  local self tmp
+  self="$(readlink -f "${BASH_SOURCE[0]}")"
+  tmp="$(mktemp "$self.XXXXXX")" || return 0
+  if curl -fsSL "https://raw.githubusercontent.com/$REPO/$REF/deploy/docker/xplogent-docker" -o "$tmp.src" \
+      && XPL_D="$DIR" awk 'BEGIN { d = ENVIRON["XPL_D"] }
+           /^DEFAULT_DIR=/ { print "DEFAULT_DIR=\"" d "\""; next } { print }' "$tmp.src" >"$tmp" \
+      && bash -n "$tmp"; then
+    chmod 755 "$tmp"; mv "$tmp" "$self"; cp "$tmp.src" "$COMPOSE_DIR/xplogent-docker" 2>/dev/null || true
+  else
+    rm -f "$tmp"; warn "could not refresh the xplogent-docker helper; keeping this one"
+  fi
+  rm -f "$tmp.src"
 }
 
 cmd_restore() {
