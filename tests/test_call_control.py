@@ -156,6 +156,10 @@ class _FakeSession:
     async def hush(self):
         pass
 
+    async def start_transfer(self, attempt, reason=""):
+        self.transfer_reason = reason
+        await attempt()
+
     async def stop(self):
         self.stopped = True
 
@@ -182,7 +186,7 @@ def test_control_routes():
         assert c.post("/voip/calls/77/pause-ai", json={"paused": True}).json()["paused"] and brain.paused
         assert c.post("/voip/calls/77/transfer", json={}).json()["ok"] is False     # no number anywhere
         assert c.post("/voip/calls/77/transfer", json={"to": "+1 555 010 4444"}).json()["to"] == "+15550104444"
-        assert moved == ["+15550104444"] and sess.stopped and brain.state.outcome == "transferred"
+        assert moved == ["+15550104444"] and sess.transfer_reason == "transferred from the dashboard"
         assert c.post("/voip/calls/77/hangup").json()["ok"] and sess.ended
         assert c.post("/voip/calls/99/hangup").status_code == 404
     finally:

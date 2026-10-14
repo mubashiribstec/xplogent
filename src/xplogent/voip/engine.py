@@ -34,6 +34,11 @@ _log = get_logger("voip.engine")
 FRAME_BYTES = 320  # 20 ms of 8 kHz 16-bit mono
 MULAW_FRAME = 160  # 20 ms of 8 kHz μ-law
 SendAudio = Callable[[bytes], Awaitable[None]]
+
+TRANSFER_FAILED_LINE = ("I'm sorry, I couldn't connect you to a colleague just now. "
+                        "I can keep helping you, or arrange a call back.")
+NO_TRANSFER_LINE = ("I'm sorry, I can't transfer this call right now, but I can arrange "
+                    "for someone to call you back.")
 Hook = Callable[..., Awaitable[None]]
 
 
@@ -47,12 +52,14 @@ class CallSession:
                  idle_prompt_s: float = 12.0, idle_hangup_s: float = 30.0,
                  max_call_s: float = 900.0, realtime: bool = True,
                  lead_s: float = 0.2,
-                 on_events: Callable[[list[str]], Awaitable[None]] | None = None) -> None:
+                 on_events: Callable[[list[str]], Awaitable[None]] | None = None,
+                 transfer_timeout_s: float = 60.0) -> None:
         self.brain, self.stt, self.tts = brain, stt, tts
         self.send_audio, self.clear_audio = send_audio, clear_audio
         self.hangup_cb, self.transfer_cb = hangup, transfer
         self.on_turn = on_turn
         self.on_events = on_events          # tool events after each reply (test calls)
+        self.transfer_timeout_s = transfer_timeout_s
         self._events_seen = 0
         self.greeting = greeting
         self.vad = vad or VAD()
@@ -67,7 +74,10 @@ class CallSession:
         self._pending = bytearray()
         self._turn_task: asyncio.Task | None = None
         self._speaking = False
+        self._speak_gen = 0                 # which _say owns the _speaking flag
         self._last_activity = time.time()
+        self.transfer_pending = False
+        self._transfer_timer: asyncio.Task | None = None
         self._idle_prompted = False
         self._speech_end_at = 0.0
         self._watchdog: asyncio.Task | None = None
@@ -81,7 +91,7 @@ class CallSession:
 
     async def stop(self) -> None:
         self.finished.set()
-        for task in (self._turn_task, self._watchdog):
+        for task in (self._turn_task, self._watchdog, self._transfer_timer):
             if task and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -223,11 +233,69 @@ class CallSession:
 
     async def _after_turn(self) -> None:
         st = self.brain.state
-        if st.transfer and self.transfer_cb:
-            await self.transfer_cb(st.transfer_reason)
-            self.finished.set()
+        if st.transfer and not self.transfer_pending:
+            if self.transfer_cb is None:
+                # Promised a hand-off we can't make: say so and keep helping.
+                st.transfer = False
+                if st.outcome == "transferred":
+                    st.outcome = ""
+                await self._say(NO_TRANSFER_LINE)
+                self._record("agent", NO_TRANSFER_LINE)
+                return
+            with contextlib.suppress(Exception):   # failure is handled by start_transfer
+                await self.start_transfer(lambda: self.transfer_cb(st.transfer_reason),
+                                          st.transfer_reason)
         elif st.end:
             await self._hangup()
+
+    # -- transfers -------------------------------------------------------------------
+    async def start_transfer(self, attempt: Callable[[], Awaitable[None]], reason: str = "") -> None:
+        """Hand the caller over. The agent stays quiet while it is pending; the
+        transport then calls :meth:`transfer_done` (the caller left us) or
+        :meth:`transfer_failed` (the caller is still here). No answer within
+        ``transfer_timeout_s`` counts as failed. ``attempt`` raising = failed now."""
+        st = self.brain.state
+        self.brain.paused = True
+        self.transfer_pending = True
+        st.transfer, st.outcome = True, st.outcome or "transferred"
+        st.transfer_reason = st.transfer_reason or reason
+        try:
+            await attempt()
+        except Exception as exc:
+            _log.warning("transfer failed: %s", exc)
+            await self.transfer_failed(str(exc))
+            raise
+        if self.transfer_pending:
+            self._transfer_timer = asyncio.create_task(self._transfer_watchdog())
+
+    async def _transfer_watchdog(self) -> None:
+        await asyncio.sleep(self.transfer_timeout_s)
+        if self.transfer_pending and not self.finished.is_set():
+            await self.transfer_failed("no answer from the transfer")
+
+    def transfer_done(self) -> None:
+        """The caller is now connected elsewhere: this session is over."""
+        self.transfer_pending = False
+        self.finished.set()
+
+    async def transfer_failed(self, why: str = "") -> None:
+        """The caller is still with us: resume the agent and say so."""
+        if not self.transfer_pending or self.finished.is_set():
+            return
+        self.transfer_pending = False
+        st = self.brain.state
+        st.transfer, st.transfer_failed = False, True
+        if st.outcome == "transferred":
+            st.outcome = ""
+        st.events.append(f"transfer failed: {why}" if why else "transfer failed")
+        self.brain.paused = False
+        if hasattr(self.brain, "said"):
+            self.brain.said(TRANSFER_FAILED_LINE)
+        if asyncio.current_task() is self._turn_task:   # called from the agent's own turn
+            self._record("agent", TRANSFER_FAILED_LINE)
+            await self._say(TRANSFER_FAILED_LINE)
+        else:
+            await self._prompt(TRANSFER_FAILED_LINE, interrupt=True)
 
     async def _hangup(self) -> None:
         self.finished.set()
@@ -243,6 +311,8 @@ class CallSession:
         than real time) left ``_speaking`` False while the carrier was still playing
         seconds of buffered audio, so barge-in never triggered.
         """
+        self._speak_gen += 1
+        gen = self._speak_gen
         self._speaking = True
         loop = asyncio.get_running_loop()
         play_end = loop.time()  # when the carrier will have played everything sent
@@ -272,7 +342,9 @@ class CallSession:
                 if remaining > 0:
                     await asyncio.sleep(remaining)
         finally:
-            self._speaking = False
+            # A cancelled _say must not clear the flag of a newer one (missed barge-in).
+            if self._speak_gen == gen:
+                self._speaking = False
             self._last_activity = time.time()
 
     async def _prompt(self, text: str, *, interrupt: bool = False,

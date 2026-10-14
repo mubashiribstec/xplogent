@@ -16,10 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from xplogent.voip.brain import CallBrain
-from xplogent.voip.engine import CallSession
-
-TRANSFER_FAILED_LINE = ("I'm sorry, I couldn't connect you to a colleague just now. "
-                        "I can keep helping you, or arrange a call back.")
+from xplogent.voip.engine import TRANSFER_FAILED_LINE, CallSession  # noqa: F401 - re-exported
 
 
 @dataclass
@@ -34,10 +31,11 @@ class LiveCall:
     contact_name: str = ""
     # Transport-level transfer to a given number (None: this line can't transfer).
     transfer_to: Callable[[str], Awaitable[None]] | None = None
+    ref: str = ""                       # carrier call id (Telnyx call_control_id / SIP Call-ID)
     started: float = field(default_factory=time.time)
 
     def summary(self) -> dict[str, Any]:
-        return {"call_id": self.call_id, "from": self.number, "number": self.number,
+        return {"call_id": self.call_id, "number": self.number,
                 "direction": self.direction, "transport": self.transport, "test": self.test,
                 "contact_name": self.contact_name, "started": self.started,
                 "paused": self.brain.paused, "notes": list(self.brain.notes),
@@ -47,23 +45,13 @@ class LiveCall:
         await self.session.end()
 
     async def transfer(self, number: str) -> None:
+        """Hand the caller to ``number``. Raises if it fails at once (the agent then
+        resumes and apologises); a later failure is reported by the transport."""
         if self.transfer_to is None:
             raise ValueError("this call can't be transferred")
-        # Quiet the agent, *then* try: if the transfer fails the caller must not be left
-        # in dead air with a silenced agent.
-        was_paused = self.brain.paused
-        self.brain.paused = True
         await self.session.hush()
-        try:
-            await self.transfer_to(number)
-        except Exception:
-            self.brain.paused = was_paused
-            await self.session.say(TRANSFER_FAILED_LINE)
-            raise
-        st = self.brain.state
-        st.transfer, st.outcome = True, st.outcome or "transferred"
-        st.transfer_reason = st.transfer_reason or "transferred from the dashboard"
-        await self.session.stop()
+        await self.session.start_transfer(lambda: self.transfer_to(number),
+                                          "transferred from the dashboard")
 
     async def say(self, text: str) -> None:
         await self.session.say(text)
@@ -115,3 +103,21 @@ def calling_hours_problem(v: dict[str, Any], contact: dict[str, Any] | None = No
         return ""
     where = f" in {tz_name}" if tz else ""
     return f"outside calling hours ({start}–{end}{where}; it's {hhmm} there)"
+
+
+def resolve_transfer_number(v: dict[str, Any], requested: str = "", *, transport: str = "") -> str:
+    """The number (or SIP URI / PBX extension) a transfer goes to; "" if there is none.
+
+    One rule for every path (agent, dashboard, Telnyx, SIP): the requested number, else
+    the configured hand-off number. Short extensions only make sense on a SIP trunk.
+    """
+    raw = str(requested or v.get("transfer_number") or "").strip()
+    if not raw:
+        return ""
+    if raw.lower().startswith("sip:"):
+        return raw if transport in ("sip", "") else ""
+    number = clean_number(raw)
+    if number:
+        return number
+    short = re.sub(r"[\s()-]", "", raw)
+    return short if transport == "sip" and re.fullmatch(r"[0-9*#+]{2,15}", short) else ""

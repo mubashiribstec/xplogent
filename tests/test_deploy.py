@@ -12,7 +12,7 @@ def test_defaults_ship_inside_the_package():
     path = cfgmod._DEFAULT_CONFIG
     assert path.exists(), path
     assert path.parent.name == "config" and path.parent.parent.name == "xplogent"
-    assert cfgmod.load_config().voip["provider"] == "telnyx"   # a section from the packaged file
+    assert cfgmod.load_config().voip["telephony"] == "telnyx"   # a section from the packaged file
 
 
 def _client(monkeypatch, tmp_path):

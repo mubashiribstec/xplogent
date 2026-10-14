@@ -76,6 +76,7 @@ export function SipCard({ cfg, toast, onChange }: { cfg: Record<string, any>; to
           {input("rtp_start", "RTP ports from", "10000", 90, "number")}
           {input("rtp_end", "to", "10100", 90, "number")}
           {input("domain", "SIP domain (blank = server)", "", 150)}
+          {input("ring_timeout", "Ring time for outbound calls (s)", "45", 90, "number")}
           {input("allow_from", "Also accept calls from (IPs)", "", 170)}
           <label className="row" style={{ gap: 6 }}>
             <input type="checkbox" checked={!!val("strict_source", false)} onChange={(e) => set("strict_source", e.target.checked)} />

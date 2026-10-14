@@ -314,7 +314,7 @@ export interface VoipStatus {
   active: LiveCallInfo[];
 }
 export interface LiveCallInfo {
-  call_id: number; number: string; from: string; direction: string; transport: string; test: boolean;
+  call_id: number; number: string; direction: string; transport: string; test: boolean;
   contact_name: string; started: number; paused: boolean; notes: string[]; can_transfer: boolean;
 }
 export async function getVoipStatus(): Promise<VoipStatus> { return (await fetch("/voip/status")).json(); }

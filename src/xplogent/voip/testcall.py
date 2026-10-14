@@ -83,9 +83,15 @@ async def run_test_call(websocket, cfg: Config | None = None, *, stt=None, tts=N
     async def hangup() -> None:
         outbox.put_nowait({"type": "hangup"})
 
+    def simulate_transfer(number: str, reason: str) -> None:
+        # No real phone line: report where the call would go, and end like a
+        # successful transfer does.
+        outbox.put_nowait({"type": "transfer", "to": number, "reason": reason})
+        if session is not None:
+            session.transfer_done()
+
     async def transfer(reason: str) -> None:
-        outbox.put_nowait({"type": "transfer", "to": str(v.get("transfer_number", "")),
-                           "reason": reason})
+        simulate_transfer(str(v.get("transfer_number", "")), reason)
 
     async def on_events(events: list[str]) -> None:
         if events:
@@ -115,7 +121,7 @@ async def run_test_call(websocket, cfg: Config | None = None, *, stt=None, tts=N
                            "contact": (brain.contact or {}).get("name") or ""})
 
         async def transfer_to(number: str) -> None:
-            outbox.put_nowait({"type": "transfer", "to": number, "reason": "from the dashboard"})
+            simulate_transfer(number, "from the dashboard")
 
         service.register(LiveCall(call_id=call_id, session=session, brain=brain, number="browser test",
                                   direction="test", transport="browser", test=True,

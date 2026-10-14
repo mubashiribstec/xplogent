@@ -269,6 +269,8 @@ def parse_sdp(body: bytes) -> dict[str, Any]:
             parts = line[2:].split()
             in_audio = parts[0] == "audio"
             if in_audio and not port:
+                if len(parts) < 2 or not parts[1].isdigit():
+                    raise ValueError(f"bad m= line: {line}")
                 port = int(parts[1])
                 payloads = [int(p) for p in parts[3:] if p.isdigit()]
         elif line.startswith("c=") and "IN IP4" in line:
@@ -490,7 +492,8 @@ class SipSettings:
                    rtp_end=num("rtp_end", "XPLOGENT_RTP_END", 10100),
                    register=bool(s.get("register", True)), expires=int(s.get("expires") or 300),
                    allow_from=list(allow), max_calls=int(s.get("max_calls") or 4),
-                   strict_source=bool(s.get("strict_source", False)))
+                   strict_source=bool(s.get("strict_source", False)),
+                   ring_timeout=float(s.get("ring_timeout") or 45))
 
 
 # ── calls ────────────────────────────────────────────────────────────────────
@@ -552,6 +555,7 @@ class SipTrunk(asyncio.DatagramProtocol):
         self.started = False
         self._reg_changed = asyncio.Event()
         self.trusted: set[str] = set()
+        self.ack_timeout = 64 * T1          # RFC 3261 §13.3.1.4: then confirm and BYE
 
     # -- lifecycle ---------------------------------------------------------------------
     @property
@@ -898,7 +902,11 @@ class SipTrunk(asyncio.DatagramProtocol):
             self._reply(req, addr, 486, "Busy Here")
             return
         self._reply(req, addr, 100, "Trying")
-        sdp = parse_sdp(req.body)
+        try:
+            sdp = parse_sdp(req.body)
+        except Exception:  # noqa: BLE001 - malformed offer: answer, don't go silent
+            self._reply(req, addr, 400, "Bad Request")
+            return
         codec = choose_codec(sdp)
         if codec is None or not sdp.get("port"):
             self._reply(req, addr, 488, "Not Acceptable Here")
@@ -924,7 +932,7 @@ class SipTrunk(asyncio.DatagramProtocol):
                 "call_control_id": call.call_id, "transport": "sip"}
         # Retransmit the 200 OK until the ACK arrives (UDP may drop it).
         data, wait = ok.encode(), T1
-        deadline = time.monotonic() + 32
+        deadline = time.monotonic() + self.ack_timeout
         while not call.acked.is_set() and time.monotonic() < deadline and call.state != "ended":
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(call.acked.wait(), timeout=wait)
@@ -1104,30 +1112,28 @@ class SipTrunk(asyncio.DatagramProtocol):
             timeout=8)
         if resp.status not in (200, 202):
             raise RuntimeError(f"transfer refused: {resp.status} {resp.reason}")
-        # The far end normally hangs up on us once the transfer connects.
-        self._spawn(self._bye_later(call, 30))
+        # The result arrives as NOTIFY (see _transfer_progress); the session's transfer
+        # watchdog resumes the agent if it never does.
 
     def _transfer_progress(self, call: SipCall, sipfrag: str) -> None:
-        """NOTIFY after our REFER: ``SIP/2.0 200 OK`` = connected, 4xx-6xx = failed."""
+        """NOTIFY after our REFER: 2xx = the caller is connected elsewhere (we leave the
+        call); 4xx-6xx = it failed and the caller is still with us (the agent resumes)."""
         m = re.search(r"SIP/2\.0\s+(\d{3})\s*([^\r\n]*)", sipfrag)
-        if not m or int(m.group(1)) < 200:
+        if not m or int(m.group(1)) < 200 or call.session is None:
             return
         code = int(m.group(1))
-        if code >= 300:
-            self.last_error = f"transfer to the PBX reported {code} {m.group(2).strip()}"
-            _log.warning("SIP %s", self.last_error)
-        self._spawn(self.hangup(call))          # done either way: leave the call
-
-    async def _bye_later(self, call: SipCall, delay: float) -> None:
-        await asyncio.sleep(delay)
-        if call.state != "ended":
-            await self.hangup(call)
+        if code < 300:
+            call.session.transfer_done()        # supervise() then sends our BYE
+            return
+        self.last_error = f"transfer failed: {code} {m.group(2).strip()}"
+        _log.warning("SIP %s; the agent resumes", self.last_error)
+        self._spawn(call.session.transfer_failed(f"{code} {m.group(2).strip()}"))
 
     # -- session wiring -------------------------------------------------------------------------
     async def _start_session(self, call: SipCall, info: dict[str, Any]) -> None:
         from xplogent.core.config import load_config
         from xplogent.memory.store import Store
-        from xplogent.voip.control import LiveCall
+        from xplogent.voip.control import LiveCall, resolve_transfer_number
         from xplogent.voip.service import build_session, finalize_call
 
         cfg = self.cfg or load_config()
@@ -1138,15 +1144,14 @@ class SipTrunk(asyncio.DatagramProtocol):
             # Don't wait on the BYE here: stopping the session would cancel it mid-way.
             self._spawn(self.hangup(call))
 
-        async def ai_transfer(reason: str) -> None:
-            number = str(v.get("transfer_number", ""))
-            try:
-                if not number:
-                    raise RuntimeError("no hand-off number")
-                await self.refer(call, number)
-            except Exception:  # noqa: BLE001
-                _log.exception("SIP transfer failed; hanging up")
-                await self.hangup(call)
+        async def transfer_to(number: str) -> None:
+            target = resolve_transfer_number(v, number, transport="sip")
+            if not target:
+                raise ValueError("no valid transfer number or extension")
+            await self.refer(call, target)
+
+        async def ai_transfer(reason: str) -> None:     # failures: the session resumes
+            await transfer_to("")
 
         try:
             session, row_id, brain = build_session(
@@ -1166,7 +1171,7 @@ class SipTrunk(asyncio.DatagramProtocol):
                 call_id=row_id, session=session, brain=brain, number=call.number,
                 direction="outbound" if call.outbound else "inbound", transport="sip",
                 test=bool(info.get("test")), contact_name=str((brain.contact or {}).get("name") or ""),
-                transfer_to=lambda number: self.refer(call, number)))
+                transfer_to=transfer_to, ref=call.call_id))
         await session.start()
 
         async def supervise() -> None:
@@ -1176,10 +1181,10 @@ class SipTrunk(asyncio.DatagramProtocol):
                 if self.service is not None:
                     self.service.unregister(row_id)
                 await session.stop()
-                if not brain.state.transfer:        # after a transfer the far end hangs up
-                    if not call.remote_ended and not call.bye_sent:
-                        await self.hangup(call)
-                    await self._end(call)
+                # After a completed transfer too: the transferor leaves with a BYE.
+                if not call.remote_ended and not call.bye_sent:
+                    await self.hangup(call)
+                await self._end(call)
                 result = finalize_call(cfg, store, row_id, session, brain, call.number)
                 _log.info("SIP call %s finished: %s", row_id, result)
                 closers = [session.stt.aclose, session.tts.aclose, brain.provider.aclose]

@@ -37,6 +37,9 @@ Rules:
 - Confirm important details (name, number, date) by repeating them back.
 - When the conversation is finished, call log_outcome then end_call."""
 
+OUTCOMES = {"resolved", "callback", "transferred", "interested", "not_interested",
+            "do_not_call", "other"}
+
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|(?<=[.!?])$")
 
 TOOLS = [
@@ -71,6 +74,7 @@ class CallState:
     transfer_reason: str = ""
     end: bool = False
     do_not_call: bool = False
+    transfer_failed: bool = False
     events: list[str] = field(default_factory=list)
 
 
@@ -113,7 +117,8 @@ def trim_history(history: list[Message], limit: int) -> list[Message]:
 class CallBrain:
     def __init__(self, provider: Provider, *, persona: str = "", playbook: str = "",
                  contact: dict[str, Any] | None = None, retrieve: Retriever | None = None,
-                 store: Any = None, max_turns: int = 16, temperature: float = 0.3) -> None:
+                 store: Any = None, max_turns: int = 16, temperature: float = 0.3,
+                 can_transfer: bool = True) -> None:
         self.provider = provider
         self.persona = persona or "You are a friendly, professional customer-service agent."
         self.playbook = playbook
@@ -124,6 +129,9 @@ class CallBrain:
         self.temperature = temperature
         self.state = CallState()
         self.history: list[Message] = []
+        # Only offer a hand-off that can actually happen (a number is configured).
+        self.can_transfer = can_transfer
+        self.tools = TOOLS if can_transfer else [t for t in TOOLS if t.name != "transfer_to_human"]
         self.notes: list[str] = []      # supervisor instructions for the rest of the call
         self.paused = False             # a person is handling the call: the AI stays quiet
 
@@ -139,6 +147,9 @@ class CallBrain:
     # -- prompt -----------------------------------------------------------------
     def _system(self, knowledge: list[str]) -> str:
         parts = [self.persona, GUARDRAILS]
+        if not self.can_transfer:
+            parts.append("No colleague can take calls right now: never offer a transfer. When a "
+                         "person is needed, offer a callback and use book_callback.")
         if self.playbook:
             parts.append("SCRIPT / PLAYBOOK:\n" + self.playbook[:4000])
         if self.contact:
@@ -164,7 +175,8 @@ class CallBrain:
     def _run_tool(self, name: str, args: dict[str, Any]) -> str:
         st = self.state
         if name == "log_outcome":
-            st.outcome = str(args.get("outcome", "other"))
+            outcome = str(args.get("outcome", "other")).strip().lower()
+            st.outcome = outcome if outcome in OUTCOMES else "other"
             st.summary = str(args.get("summary", ""))
             if st.outcome == "do_not_call":
                 st.do_not_call = True
@@ -173,6 +185,8 @@ class CallBrain:
             st.callback = f"{args.get('when', '')} {args.get('note', '')}".strip()
             st.outcome = st.outcome or "callback"
             return "callback booked"
+        if name == "transfer_to_human" and not self.can_transfer:
+            return "no colleague can take calls now: offer a callback with book_callback"
         if name == "transfer_to_human":
             st.transfer = True
             st.transfer_reason = str(args.get("reason", ""))
@@ -207,7 +221,7 @@ class CallBrain:
         for _round in range(3):  # tool round-trips within one turn
             buffer = ""
             final_msg: Message | None = None
-            async for ev in self.provider.stream([system, *self.history], TOOLS,
+            async for ev in self.provider.stream([system, *self.history], self.tools,
                                                  temperature=self.temperature):
                 if ev.kind == StreamKind.TOKEN and ev.text:
                     buffer += ev.text

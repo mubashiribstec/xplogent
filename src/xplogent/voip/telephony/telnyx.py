@@ -51,8 +51,13 @@ class TelnyxClient:
     async def hangup(self, call_control_id: str) -> dict:
         return await self._action(call_control_id, "hangup")
 
-    async def transfer(self, call_control_id: str, to_number: str) -> dict:
-        return await self._action(call_control_id, "transfer", {"to": to_number})
+    async def transfer(self, call_control_id: str, to_number: str, client_state: str = "") -> dict:
+        """Blind transfer. ``client_state`` comes back on the new leg's webhooks, which
+        is how a failed transfer (that leg hangs up unbridged) is recognised."""
+        body: dict[str, Any] = {"to": to_number}
+        if client_state:
+            body["client_state"] = base64.b64encode(client_state.encode()).decode()
+        return await self._action(call_control_id, "transfer", body)
 
     async def dial(self, to_number: str, from_number: str, connection_id: str,
                    webhook_url: str = "") -> dict:
@@ -81,15 +86,23 @@ class TelnyxClient:
 
 
 def parse_webhook(payload: dict[str, Any]) -> dict[str, str]:
-    """Normalise a Telnyx webhook into ``{event, call_control_id, from, to, direction}``."""
+    """Normalise a Telnyx webhook: event, call_control_id, from, to, direction, client_state, digit."""
     data = payload.get("data", payload)
     p = data.get("payload", {})
+    state = ""
+    if p.get("client_state"):
+        try:
+            state = base64.b64decode(str(p["client_state"])).decode("utf-8", "replace")
+        except ValueError:
+            state = ""
     return {
         "event": str(data.get("event_type", "")),
         "call_control_id": str(p.get("call_control_id", "")),
         "from": str(p.get("from", "")),
         "to": str(p.get("to", "")),
         "direction": str(p.get("direction", "incoming")),
+        "client_state": state,
+        "digit": str(p.get("digit", "")),
     }
 
 

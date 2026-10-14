@@ -20,7 +20,12 @@ from xplogent.core.logging import get_logger
 from xplogent.memory.store import Store
 from xplogent.voip.audio import VAD
 from xplogent.voip.brain import CallBrain
-from xplogent.voip.control import LiveCall, calling_hours_problem, clean_number
+from xplogent.voip.control import (
+    LiveCall,
+    calling_hours_problem,
+    clean_number,
+    resolve_transfer_number,
+)
 from xplogent.voip.engine import CallSession
 from xplogent.voip.providers import build_stt, build_tts
 from xplogent.voip.telephony.telnyx import (
@@ -84,8 +89,10 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         retrieve = _make_retriever(cfg, store, int(v.get("knowledge_top_k", 3)))
 
     persona = f"You work for {v.get('company', 'our company')}."
+    can_transfer = transfer is not None and bool(
+        resolve_transfer_number(v, transport=str(info.get("transport", ""))))
     brain = CallBrain(provider, persona=persona, playbook=load_playbook(),
-                      contact=contact, retrieve=retrieve, store=store)
+                      contact=contact, retrieve=retrieve, store=store, can_transfer=can_transfer)
     greeting = str(v.get("greeting", "")).replace("{company}", str(v.get("company", "our company")))
     vad_cfg = v.get("vad", {}) or {}
     session = CallSession(
@@ -130,7 +137,8 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
     st = brain.state
     minutes = session.duration_s / 60.0
     cost = round(minutes * float((cfg.voip or {}).get("cost_per_minute", 0.0)), 4)
-    outcome = st.outcome or ("callback" if st.callback else "abandoned")
+    outcome = st.outcome or ("callback" if st.callback else
+                             "transfer_failed" if st.transfer_failed else "abandoned")
     summary = st.summary or (f"Callback requested: {st.callback}" if st.callback else "")
     store.end_call(call_id, outcome=outcome, summary=summary, cost=cost)
     call = store.get_call(call_id) or {}
@@ -198,6 +206,9 @@ class VoipService:
         checked too (in the contact's time zone) unless overridden or a test call."""
         cfg = cfg or load_config()
         v = cfg.voip or {}
+        if not v.get("enabled") and not test:
+            return {"ok": False, "error": "the phone agent is switched off (Calls → Setup); "
+                                          "test calls still work"}
         number = clean_number(to_number)
         if not number and via == "sip":         # PBX extensions are short: 100, *43, 2001
             short = re.sub(r"[\s()-]", "", to_number or "")
@@ -237,6 +248,11 @@ class VoipService:
             self._remember(self.outbound, ccid, meta)
         return {"ok": True, "call": data, "via": "telnyx"}
 
+    def live_by_ref(self, ref: str) -> LiveCall | None:
+        if not ref:
+            return None
+        return next((c for c in self.active.values() if c.ref == ref), None)
+
     def register(self, live: LiveCall) -> None:
         self.active[live.call_id] = live
 
@@ -247,11 +263,27 @@ class VoipService:
     async def handle_webhook(self, payload: dict[str, Any]) -> dict[str, Any]:
         cfg = load_config()
         v = cfg.voip or {}
-        if not v.get("enabled"):
-            return {"ok": False, "error": "voip is disabled"}
         ev = parse_webhook(payload)
         self._expire()
         ccid = ev["call_control_id"]
+        xfer_of = ev["client_state"][5:] if ev["client_state"].startswith("xfer:") else ""
+        ours = ccid in self.outbound or bool(xfer_of) or self.live_by_ref(ccid) is not None
+        # Switched off: answer nothing new — but calls we placed (test calls) and calls
+        # already in progress still get their events.
+        if not v.get("enabled") and not ours:
+            return {"ok": False, "error": "voip is disabled"}
+        if xfer_of:                  # an event on the new leg of one of our transfers
+            live = self.live_by_ref(xfer_of)
+            if live is not None and ev["event"] == "call.bridged":
+                live.session.transfer_done()
+            elif live is not None and ev["event"] == "call.hangup":
+                self._spawn(live.session.transfer_failed("the other side didn't answer"))
+            return {"ok": True}
+        if ev["event"] == "call.bridged":
+            live = self.live_by_ref(ccid)
+            if live is not None and live.session.transfer_pending:
+                live.session.transfer_done()
+            return {"ok": True}
 
         def client() -> TelnyxClient:
             return TelnyxClient(api_key_env=str(v.get("api_key_env", "TELNYX_API_KEY")))
@@ -314,12 +346,14 @@ class VoipService:
         async def hangup() -> None:
             await client.hangup(ccid)
 
-        async def transfer(reason: str) -> None:
-            number = str(v.get("transfer_number", ""))
-            if number:
-                await client.transfer(ccid, number)
-            else:
-                await client.hangup(ccid)
+        async def transfer_to(number: str) -> None:
+            target = resolve_transfer_number(v, number, transport="telnyx")
+            if not target:
+                raise ValueError("no valid transfer number")
+            await client.transfer(ccid, target, client_state=f"xfer:{ccid}")
+
+        async def transfer(reason: str) -> None:      # the agent decided to hand over
+            await transfer_to("")
 
         session = brain = None
         call_id = 0
@@ -333,7 +367,7 @@ class VoipService:
                 call_id=call_id, session=session, brain=brain, number=customer_number(info),
                 direction="outbound" if is_outbound(info) else "inbound", transport="telnyx",
                 test=bool(info.get("test")), contact_name=str((brain.contact or {}).get("name") or ""),
-                transfer_to=lambda number: client.transfer(ccid, number)))
+                transfer_to=transfer_to, ref=ccid))
             started = False
             while not session.finished.is_set():
                 try:

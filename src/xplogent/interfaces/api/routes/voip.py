@@ -386,18 +386,15 @@ async def voip_call_hangup(call_id: int):
 
 @router.post("/voip/calls/{call_id}/transfer")
 async def voip_call_transfer(call_id: int, body: dict | None = None):
-    from xplogent.voip.control import clean_number
+    from xplogent.voip.control import resolve_transfer_number
 
     live = _live(call_id)
     if live is None:
         return _gone()
-    raw = str((body or {}).get("to") or (load_config().voip or {}).get("transfer_number") or "")
-    number = clean_number(raw) or (raw.strip() if raw.strip().lower().startswith("sip:") else "")
-    short = re.sub(r"[\s()-]", "", raw)
-    if not number and live.transport == "sip" and re.fullmatch(r"[0-9*#+]{2,15}", short):
-        number = short                              # a PBX extension
+    number = resolve_transfer_number(load_config().voip or {}, str((body or {}).get("to") or ""),
+                                     transport=live.transport)
     if not number:
-        return {"ok": False, "error": "no transfer number (set the hand-off number or enter one)"}
+        return {"ok": False, "error": "no valid transfer number (set the hand-off number or enter one)"}
     try:
         await live.transfer(number)
     except Exception as exc:  # noqa: BLE001
@@ -442,7 +439,7 @@ async def voip_call_pause(call_id: int, body: dict | None = None):
 
 
 @router.post("/voip/dial")
-async def voip_dial(body: dict) -> dict:
+async def voip_dial(body: dict):
     """Manual call (or "call me" test call) to a number or a contact."""
     from xplogent.voip.service import get_service
 
@@ -451,6 +448,11 @@ async def voip_dial(body: dict) -> dict:
     if via not in ("telnyx", "sip"):
         return {"ok": False, "error": "via must be telnyx or sip"}
     contact_id = body.get("contact_id")
+    if contact_id not in (None, ""):
+        try:
+            contact_id = int(contact_id)
+        except (TypeError, ValueError):
+            return JSONResponse({"ok": False, "error": "contact_id must be a number"}, status_code=400)
     number = str(body.get("number") or "")
     if contact_id and not number:
         with Store(load_config().db_path) as store:
@@ -484,7 +486,8 @@ def _test_provider():
 # ── SIP trunk (built-in client) ──────────────────────────────────────────────
 _SIP_FIELDS = {"server": str, "port": int, "username": str, "auth_username": str, "domain": str,
                "caller_id": str, "public_ip": str, "local_port": int, "rtp_start": int, "rtp_end": int,
-               "register": bool, "expires": int, "max_calls": int, "strict_source": bool}
+               "register": bool, "expires": int, "max_calls": int, "strict_source": bool,
+               "ring_timeout": int}
 
 
 def _sip_status() -> dict:

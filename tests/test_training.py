@@ -5,7 +5,6 @@ from __future__ import annotations
 import wave
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from tests.conftest import ScriptedProvider
@@ -13,6 +12,8 @@ from xplogent.core.config import load_config
 from xplogent.memory.store import Store
 from xplogent.providers.base import Message, Role
 from xplogent.voip import training
+
+np = pytest.importorskip("numpy")
 
 
 def _stereo_wav(path: Path, left: np.ndarray, right: np.ndarray, rate: int = 16000) -> Path:

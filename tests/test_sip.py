@@ -429,3 +429,60 @@ async def test_record_route_order_follows_rfc3261(rig):
     assert ack.get_all("Route") == ["<sip:p1.test;lr>", "<sip:p2.test;lr>"]
     assert ack.uri == "sip:+15550102222@10.8.8.8"
     assert (await dialing)["ok"]
+
+
+async def test_failed_refer_resumes_the_agent_and_bad_sdp_gets_400(rig):
+    trunk, pbx, rtp, rtp_port, service = rig
+    save_user_config({"voip": {"transfer_number": "+15550109999"}})
+    await _register(trunk, pbx)
+    # A malformed offer is answered with 400, not silence.
+    bad = SipMessage(method="INVITE", uri="sip:2000@127.0.0.1", headers=[
+        ("Via", "SIP/2.0/UDP 127.0.0.1;branch=z9hG4bKbad1"), ("From", "<sip:+1555@127.0.0.1>;tag=b"),
+        ("To", "<sip:2000@127.0.0.1>"), ("Call-ID", "bad-sdp"), ("CSeq", "1 INVITE")],
+        body=b"v=0\r\nm=audio notaport RTP/AVP 0\r\n")
+    pbx.send(bad, ("127.0.0.1", trunk.s.local_port))
+    codes = []
+    while not codes or codes[-1] < 200:
+        codes.append((await pbx.expect(lambda m: m.call_id == "bad-sdp"))[0].status)
+    assert codes[-1] == 400 and "bad-sdp" not in trunk.calls
+
+    # Outbound call, transfer accepted (202) but the PBX reports it failed (NOTIFY 486).
+    dialing = asyncio.create_task(trunk.dial("+15550101111"))
+    inv, addr = await pbx.expect(lambda m: m.method == "INVITE")
+    sdp = (f"v=0\r\nc=IN IP4 127.0.0.1\r\nm=audio {rtp_port} RTP/AVP 0\r\n").encode()
+    pbx.send(pbx.reply(inv, 200, "OK", to_tag="far", body=sdp,
+                       extra=[("Contact", "<sip:+15550101111@127.0.0.1>")]), addr)
+    await pbx.expect(lambda m: m.method == "ACK")
+    await dialing
+    await _until(lambda: service.active)
+    live = next(iter(service.active.values()))
+    transfer = asyncio.create_task(live.transfer("+15550109999"))
+    refer, addr = await pbx.expect(lambda m: m.method == "REFER")
+    pbx.send(pbx.reply(refer, 202, "Accepted"), addr)
+    await transfer
+    assert live.session.transfer_pending and live.brain.paused
+    notify = SipMessage(method="NOTIFY", uri="sip:2000@127.0.0.1", headers=[
+        ("Via", "SIP/2.0/UDP 127.0.0.1;branch=z9hG4bKntf9"), ("From", refer.get("To")),
+        ("To", refer.get("From")), ("Call-ID", refer.call_id), ("CSeq", "2 NOTIFY"), ("Event", "refer")],
+        body=b"SIP/2.0 486 Busy Here\r\n")
+    pbx.send(notify, addr)
+    await _until(lambda: not live.session.transfer_pending)
+    assert not live.brain.paused and refer.call_id in trunk.calls      # still on the call
+    assert "486" in trunk.last_error
+    with pytest.raises(asyncio.TimeoutError):
+        await pbx.expect(lambda m: m.method == "BYE", timeout=0.6)    # we did not hang up
+
+
+async def test_unacknowledged_answer_is_ended_with_bye(rig):
+    """RFC 3261 §13.3.1.4: no ACK → the dialog is confirmed and the session ends with BYE."""
+    trunk, pbx, rtp, rtp_port, service = rig
+    trunk.ack_timeout = 1.0
+    await _register(trunk, pbx)
+    sdp = (f"v=0\r\nc=IN IP4 127.0.0.1\r\nm=audio {rtp_port} RTP/AVP 0\r\n").encode()
+    pbx.send(SipMessage(method="INVITE", uri="sip:2000@127.0.0.1", headers=[
+        ("Via", "SIP/2.0/UDP 127.0.0.1;branch=z9hG4bKna1"), ("From", "<sip:+1555@127.0.0.1>;tag=n"),
+        ("To", "<sip:2000@127.0.0.1>"), ("Call-ID", "no-ack"), ("CSeq", "1 INVITE"),
+        ("Contact", "<sip:+1555@127.0.0.1>")], body=sdp), ("127.0.0.1", trunk.s.local_port))
+    bye, addr = await pbx.expect(lambda m: m.method == "BYE" and m.call_id == "no-ack", timeout=5)
+    pbx.send(pbx.reply(bye, 200, "OK"), addr)
+    await _until(lambda: "no-ack" not in trunk.calls and not service.active)

@@ -12,7 +12,6 @@ import pytest
 from tests.conftest import ScriptedProvider
 from xplogent.core.config import save_user_config
 from xplogent.voip import service as service_mod
-from xplogent.voip.brain import CallBrain
 from xplogent.voip.control import TRANSFER_FAILED_LINE, LiveCall
 from xplogent.voip.telephony.sip import SipMessage, record_routes, split_header_values
 from xplogent.voip.telephony.telnyx import clear_message, media_message, verify_signature
@@ -27,30 +26,20 @@ def test_telnyx_outbound_frames_have_no_extra_keys():
 
 
 # ── 2. failed dashboard transfer keeps the agent talking ─────────────────────────
-class _Session:
-    def __init__(self):
-        self.said, self.hushed, self.stopped = [], 0, False
-
-    async def hush(self):
-        self.hushed += 1
-
-    async def say(self, text):
-        self.said.append(text)
-
-    async def stop(self):
-        self.stopped = True
-
-
 async def test_failed_transfer_resumes_the_agent():
+    """Real CallSession: a transfer that fails at once leaves the agent talking."""
+    from tests.test_voip import FakeTTS, make_session, settle
+
     async def broken(number):
         raise RuntimeError("carrier said no")
 
-    brain, sess = CallBrain(ScriptedProvider([])), _Session()
-    live = LiveCall(call_id=1, session=sess, brain=brain, transfer_to=broken)
+    session, sent, cleared, turns, hung = make_session(ScriptedProvider([]), tts=FakeTTS(), realtime=False)
+    live = LiveCall(call_id=1, session=session, brain=session.brain, transfer_to=broken)
     with pytest.raises(RuntimeError):
         await live.transfer("+15550100000")
-    assert sess.hushed == 1 and not sess.stopped and not brain.paused
-    assert sess.said == [TRANSFER_FAILED_LINE] and not brain.state.transfer
+    await settle(session)
+    assert not session.brain.paused and not session.transfer_pending and not session.finished.is_set()
+    assert turns[-1] == ("agent", TRANSFER_FAILED_LINE) and session.brain.state.transfer_failed
 
     moved = []
 
@@ -59,7 +48,10 @@ async def test_failed_transfer_resumes_the_agent():
 
     live.transfer_to = ok
     await live.transfer("+15550100000")
-    assert moved and sess.stopped and brain.state.outcome == "transferred"
+    assert moved and session.transfer_pending and session.brain.paused     # waiting for the carrier
+    session.transfer_done()
+    assert session.finished.is_set() and session.brain.state.outcome == "transferred"
+    await session.stop()
 
 
 # ── 3. Record-Route: multi-value headers, RFC 3261 order ──────────────────────────
