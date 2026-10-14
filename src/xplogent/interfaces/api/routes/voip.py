@@ -24,14 +24,26 @@ router = APIRouter()
 @router.post("/telephony/webhook/{secret}")
 async def telephony_webhook(secret: str, request: Request):
 
-    from xplogent.voip.service import get_service
+    import json
 
-    expected = str((load_config().voip or {}).get("webhook_secret", ""))
+    from xplogent.voip.service import get_service
+    from xplogent.voip.telephony.telnyx import verify_signature
+
+    v = load_config().voip or {}
+    expected = str(v.get("webhook_secret", ""))
     if not expected or not token_matches(secret, expected):
         return JSONResponse({"error": "forbidden"}, status_code=403)
+    body = await request.body()
+    public_key = str(v.get("telnyx_public_key") or "").strip()
+    if public_key:   # with the account key set, the path secret alone is not enough
+        problem = verify_signature(public_key, request.headers.get("telnyx-signature-ed25519", ""),
+                                   request.headers.get("telnyx-timestamp", ""), body)
+        if problem:
+            deps.audit_event("voip_webhook_rejected", target=problem, risk="high", allowed=False)
+            return JSONResponse({"error": "bad signature"}, status_code=403)
     try:
-        payload = await request.json()
-    except Exception:  # noqa: BLE001
+        payload = json.loads(body)
+    except ValueError:
         return JSONResponse({"error": "bad json"}, status_code=400)
     return await get_service().handle_webhook(payload)
 

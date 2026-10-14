@@ -306,10 +306,10 @@ class VoipService:
         stream_id = {"id": ""}
 
         async def send_audio(chunk: bytes) -> None:
-            await websocket.send_text(media_message(chunk, stream_id["id"]))
+            await websocket.send_text(media_message(chunk))
 
         async def clear_audio() -> None:
-            await websocket.send_text(clear_message(stream_id["id"]))
+            await websocket.send_text(clear_message())
 
         async def hangup() -> None:
             await client.hangup(ccid)
@@ -321,16 +321,20 @@ class VoipService:
             else:
                 await client.hangup(ccid)
 
-        session, call_id, brain = build_session(
-            cfg, store, info, send_audio=send_audio, clear_audio=clear_audio,
-            hangup=hangup, transfer=transfer)
-        self.register(LiveCall(
-            call_id=call_id, session=session, brain=brain, number=customer_number(info),
-            direction="outbound" if is_outbound(info) else "inbound", transport="telnyx",
-            test=bool(info.get("test")), contact_name=str((brain.contact or {}).get("name") or ""),
-            transfer_to=lambda number: client.transfer(ccid, number)))
-        started = False
+        session = brain = None
+        call_id = 0
         try:
+            # Inside the try: if building the session fails, the store, the Telnyx client
+            # and the socket are still closed below.
+            session, call_id, brain = build_session(
+                cfg, store, info, send_audio=send_audio, clear_audio=clear_audio,
+                hangup=hangup, transfer=transfer)
+            self.register(LiveCall(
+                call_id=call_id, session=session, brain=brain, number=customer_number(info),
+                direction="outbound" if is_outbound(info) else "inbound", transport="telnyx",
+                test=bool(info.get("test")), contact_name=str((brain.contact or {}).get("name") or ""),
+                transfer_to=lambda number: client.transfer(ccid, number)))
+            started = False
             while not session.finished.is_set():
                 try:
                     raw = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
@@ -339,8 +343,8 @@ class VoipService:
                 msg = parse_stream_message(raw)
                 if msg["event"] == "start":
                     stream_id["id"] = msg["stream_id"]
-                # Speak only once the carrier has told us the stream id (needed to
-                # address outbound audio); some carriers skip `start`, so media works too.
+                # Speak once the stream has started; some carriers skip `start`, so the
+                # first media frame counts too.
                 if not started and msg["event"] in ("start", "media"):
                     started = True
                     await session.start()
@@ -348,17 +352,22 @@ class VoipService:
                     await session.on_audio(msg["audio"])
                 elif msg["event"] == "stop":
                     break
-        except Exception:  # noqa: BLE001 - socket closed / carrier hung up
-            pass
+        except Exception as exc:  # noqa: BLE001 - classify, log, then clean up below
+            if type(exc).__name__ in ("WebSocketDisconnect", "ClientDisconnected"):
+                _log.info("call %s: media stream closed by the carrier", call_id or ccid)
+            else:
+                _log.exception("call %s: media stream failed", call_id or ccid)
         finally:
-            self.unregister(call_id)
-            await session.stop()
-            result = finalize_call(cfg, store, call_id, session, brain, customer_number(info))
-            _log.info("call %s finished: %s", call_id, result)
-            closers = [session.stt.aclose, session.tts.aclose, client.aclose,
-                       brain.provider.aclose]
-            if hasattr(brain.retrieve, "aclose"):
-                closers.append(brain.retrieve.aclose)
+            if call_id:
+                self.unregister(call_id)
+            closers = [client.aclose]
+            if session is not None and brain is not None:
+                await session.stop()
+                result = finalize_call(cfg, store, call_id, session, brain, customer_number(info))
+                _log.info("call %s finished: %s", call_id, result)
+                closers += [session.stt.aclose, session.tts.aclose, brain.provider.aclose]
+                if hasattr(brain.retrieve, "aclose"):
+                    closers.append(brain.retrieve.aclose)
             for closer in closers:
                 with contextlib.suppress(Exception):
                     await closer()

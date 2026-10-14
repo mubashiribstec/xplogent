@@ -365,7 +365,7 @@ def test_webhook_to_media_socket_end_to_end(monkeypatch):
     with c.websocket_connect(f"/ws/telephony/{token}") as ws:
         ws.send_text(json.dumps({"event": "start", "start": {"streamSid": "S1"}}))
         greeting = json.loads(ws.receive_text())               # agent speaks first
-        assert greeting["event"] == "media" and greeting["streamSid"] == "S1"
+        assert set(greeting) == {"event", "media"} and set(greeting["media"]) == {"payload"}
         for ms_audio in (tone_mulaw(300), silence_mulaw(300)):
             ws.send_text(json.dumps({"event": "media", "media": {
                 "payload": base64.b64encode(ms_audio).decode(), "track": "inbound"}}))

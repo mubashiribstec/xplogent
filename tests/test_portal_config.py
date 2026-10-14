@@ -132,10 +132,14 @@ def test_checklist_explains_what_is_missing():
     assert not items["speech"]["ok"] and "Local on this server" in items["speech"]["detail"]
     assert items["connection_id"]["required"] is False
 
-    good = {"public_url": "https://agent.example.com", "webhook_secret": "x", "enabled": True,
+    good = {"public_url": "https://agent.example.com", "webhook_secret": "x" * 24, "enabled": True,
             "connection_id": "123", "model": "ollama:llama3.1",
             "stt": {"provider": "whisper-local"}, "tts": {"base_url": "http://kokoro:8880/v1"}}
-    assert all(i["ok"] for i in checklist(good, "openai:x", env={"TELNYX_API_KEY": "k"}))
+    items = checklist(good, "openai:x", env={"TELNYX_API_KEY": "k"})
+    assert all(i["ok"] for i in items if i["required"])
+    assert not {i["id"]: i for i in items}["telnyx_signature"]["ok"]       # recommended, not required
+    weak = {i["id"]: i for i in checklist({**good, "webhook_secret": "123"}, "openai:x", env={})}
+    assert not weak["webhook_secret"]["ok"] and "short" in weak["webhook_secret"]["detail"]
 
 
 def test_telnyx_test_route(monkeypatch):

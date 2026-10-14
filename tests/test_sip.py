@@ -394,3 +394,38 @@ async def test_sip_dial_accepts_pbx_extensions():
     assert (await svc.dial("*43", via="sip", test=True))["ok"]
     assert not (await svc.dial("100", via="telnyx", test=True))["ok"]     # not a phone number
     assert [d[0] for d in dialed] == ["100", "*43"] and dialed[0][1]["transport"] == "sip"
+
+
+async def test_record_route_order_follows_rfc3261(rig):
+    """Two proxies in the path: in-dialog requests must carry the right Route set."""
+    trunk, pbx, rtp, rtp_port, service = rig
+    ua = await _register(trunk, pbx)
+    sdp = (f"v=0\r\nc=IN IP4 127.0.0.1\r\nm=audio {rtp_port} RTP/AVP 0\r\n").encode()
+    # Inbound (we are the UAS): Route = Record-Route in the order received (§12.1.1).
+    invite = SipMessage(method="INVITE", uri="sip:2000@127.0.0.1", headers=[
+        ("Via", "SIP/2.0/UDP 127.0.0.1;branch=z9hG4bKrr1"), ("Record-Route", "<sip:p1.test;lr>, <sip:p2.test;lr>"),
+        ("From", "<sip:+15550101111@127.0.0.1>;tag=c"), ("To", "<sip:2000@127.0.0.1>"),
+        ("Call-ID", "rr-in"), ("CSeq", "1 INVITE"), ("Contact", "<sip:+15550101111@10.9.9.9>")], body=sdp)
+    pbx.send(invite, ua)
+    ok, _ = await pbx.expect(lambda m: m.call_id == "rr-in" and m.status == 200)
+    pbx.send(SipMessage(method="ACK", uri="sip:2000@127.0.0.1", headers=[
+        ("Via", "SIP/2.0/UDP 127.0.0.1;branch=z9hG4bKrr2"), ("From", invite.get("From")),
+        ("To", ok.get("To")), ("Call-ID", "rr-in"), ("CSeq", "1 ACK")]), ua)
+    await _until(lambda: "rr-in" in trunk.calls and trunk.calls["rr-in"].acked.is_set())
+    hang = asyncio.create_task(trunk.hangup(trunk.calls["rr-in"]))
+    bye, addr = await pbx.expect(lambda m: m.method == "BYE" and m.call_id == "rr-in")
+    assert bye.get_all("Route") == ["<sip:p1.test;lr>", "<sip:p2.test;lr>"]
+    assert bye.uri == "sip:+15550101111@10.9.9.9"                 # the caller's Contact
+    pbx.send(pbx.reply(bye, 200, "OK"), addr)
+    await hang
+
+    # Outbound (we are the UAC): Route = Record-Route reversed (§12.1.2).
+    dialing = asyncio.create_task(trunk.dial("+15550102222"))
+    inv, addr = await pbx.expect(lambda m: m.method == "INVITE")
+    pbx.send(pbx.reply(inv, 200, "OK", to_tag="far", body=sdp, extra=[
+        ("Record-Route", "<sip:p2.test;lr>"), ("Record-Route", "<sip:p1.test;lr>"),
+        ("Contact", "<sip:+15550102222@10.8.8.8>")]), addr)
+    ack, _ = await pbx.expect(lambda m: m.method == "ACK")
+    assert ack.get_all("Route") == ["<sip:p1.test;lr>", "<sip:p2.test;lr>"]
+    assert ack.uri == "sip:+15550102222@10.8.8.8"
+    assert (await dialing)["ok"]

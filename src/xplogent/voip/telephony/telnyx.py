@@ -122,16 +122,51 @@ def parse_stream_message(raw: str | bytes) -> dict[str, Any]:
     return {"event": "other", "audio": b"", "stream_id": stream_id, "meta": {}}
 
 
-def media_message(mulaw: bytes, stream_id: str = "") -> str:
-    """Build an outbound media message (works for Telnyx; Twilio needs ``streamSid``)."""
-    msg: dict[str, Any] = {"event": "media", "media": {"payload": base64.b64encode(mulaw).decode()}}
-    if stream_id:
-        msg["streamSid"] = stream_id
-    return json.dumps(msg)
+def media_message(mulaw: bytes) -> str:
+    """Outbound audio frame, exactly as Telnyx's stream schema defines it.
+
+    The schema sets ``additionalProperties: false``: extra keys (such as Twilio's
+    ``streamSid``) can get the frame rejected, i.e. a silent call.
+    """
+    return json.dumps({"event": "media", "media": {"payload": base64.b64encode(mulaw).decode()}})
 
 
-def clear_message(stream_id: str = "") -> str:
-    msg: dict[str, Any] = {"event": "clear"}
-    if stream_id:
-        msg["streamSid"] = stream_id
-    return json.dumps(msg)
+def clear_message() -> str:
+    """Stop current playback and drop queued audio (barge-in)."""
+    return json.dumps({"event": "clear"})
+
+
+# ── webhook signatures (Ed25519) ──────────────────────────────────────────────
+SIGNATURE_TOLERANCE_S = 300
+
+
+def verify_signature(public_key_b64: str, signature_b64: str, timestamp: str, body: bytes,
+                     now: float | None = None) -> str:
+    """Check a Telnyx webhook signature. Returns "" when valid, else the reason.
+
+    Telnyx signs ``"{telnyx-timestamp}|{raw body}"`` with Ed25519; the account's public
+    key (base64) is shown in the Telnyx portal (Keys & Credentials → Public Key).
+    """
+    import time
+
+    if not signature_b64 or not timestamp:
+        return "missing signature headers"
+    try:
+        ts = int(timestamp)
+    except ValueError:
+        return "bad timestamp"
+    if abs((now if now is not None else time.time()) - ts) > SIGNATURE_TOLERANCE_S:
+        return "timestamp too old or in the future"
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    except ImportError:
+        return "signature check needs the cryptography package"
+    try:
+        key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key_b64.strip()))
+        key.verify(base64.b64decode(signature_b64), f"{timestamp}|".encode() + body)
+    except InvalidSignature:
+        return "invalid signature"
+    except (ValueError, TypeError):
+        return "bad public key or signature encoding"
+    return ""

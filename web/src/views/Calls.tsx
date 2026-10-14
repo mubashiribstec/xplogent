@@ -240,6 +240,10 @@ function TelnyxCard({ cfg, keySet, save, toast, onKeySaved }: {
             onBlur={(e) => save({ from_number: e.target.value.trim() })} /></label>
         <button className="btn" onClick={test} disabled={busy || !keySet}>{busy ? "Testing…" : "Test Telnyx"}</button>
       </div>
+      <label className="bud" style={{ marginTop: 8 }}><span className="lbl-sm">Webhook public key (Telnyx portal → Keys &amp; Credentials → Public Key).
+        With it, forged webhooks are rejected even if the webhook URL leaks.</span>
+        <input defaultValue={cfg.telnyx_public_key ?? ""} placeholder="base64 public key" style={{ width: 420 }}
+          onBlur={(e) => save({ telnyx_public_key: e.target.value.trim() })} /></label>
       {result && (result.ok
         ? <p className="ok">✓ Key valid{result.application ? ` · application "${result.application}"` : ""}
             {result.webhook_matches ? " · webhook URL matches" : ""}</p>

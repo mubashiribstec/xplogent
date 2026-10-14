@@ -225,6 +225,7 @@ voip:
   model: ""                        # LLM for calls; blank = use `model`. Pick a small fast streaming model.
   transfer_number: ""              # human hand-off number (E.164), e.g. +15551234567
   connection_id: ""                # Telnyx Voice API (Call Control) application ID
+  telnyx_public_key: ""            # Telnyx portal public key: webhooks must carry a valid Ed25519 signature
   from_number: ""                  # your Telnyx number (E.164), caller ID for outbound calls
   max_call_seconds: 900
   calling_hours: { enabled: true, start: "09:00", end: "20:00", timezone: "" }   # outbound calls; the contact's time zone wins

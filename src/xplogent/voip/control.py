@@ -18,6 +18,9 @@ from typing import Any
 from xplogent.voip.brain import CallBrain
 from xplogent.voip.engine import CallSession
 
+TRANSFER_FAILED_LINE = ("I'm sorry, I couldn't connect you to a colleague just now. "
+                        "I can keep helping you, or arrange a call back.")
+
 
 @dataclass
 class LiveCall:
@@ -46,11 +49,21 @@ class LiveCall:
     async def transfer(self, number: str) -> None:
         if self.transfer_to is None:
             raise ValueError("this call can't be transferred")
+        # Quiet the agent, *then* try: if the transfer fails the caller must not be left
+        # in dead air with a silenced agent.
+        was_paused = self.brain.paused
+        self.brain.paused = True
+        await self.session.hush()
+        try:
+            await self.transfer_to(number)
+        except Exception:
+            self.brain.paused = was_paused
+            await self.session.say(TRANSFER_FAILED_LINE)
+            raise
         st = self.brain.state
         st.transfer, st.outcome = True, st.outcome or "transferred"
         st.transfer_reason = st.transfer_reason or "transferred from the dashboard"
-        await self.session.stop()           # the agent stops talking before the hand-off
-        await self.transfer_to(number)
+        await self.session.stop()
 
     async def say(self, text: str) -> None:
         await self.session.say(text)

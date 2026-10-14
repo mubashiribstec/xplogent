@@ -153,6 +153,9 @@ class _FakeSession:
     async def end(self):
         self.ended = True
 
+    async def hush(self):
+        pass
+
     async def stop(self):
         self.stopped = True
 

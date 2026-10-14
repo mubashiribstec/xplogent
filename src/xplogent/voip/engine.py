@@ -206,6 +206,17 @@ class CallSession:
             self.brain.said(text)
         await self._prompt(text.strip(), interrupt=True)
 
+    async def hush(self) -> None:
+        """Stop talking now: cancel the reply in progress and flush queued audio."""
+        if self._turn_task is not None and not self._turn_task.done():
+            self._turn_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._turn_task
+        self._speaking = False
+        if self.clear_audio:
+            with contextlib.suppress(Exception):
+                await self.clear_audio()
+
     async def end(self) -> None:
         """Hang up now (supervisor)."""
         await self._hangup()

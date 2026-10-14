@@ -166,6 +166,34 @@ def host_port(uri: str, default_port: int = 5060) -> tuple[str, int]:
     return host, int(port) if port.isdigit() else default_port
 
 
+def split_header_values(values: list[str]) -> list[str]:
+    """Split comma-separated header values, ignoring commas inside ``<…>`` or quotes."""
+    out: list[str] = []
+    for value in values:
+        depth, quoted, start = 0, False, 0
+        for i, ch in enumerate(value):
+            if ch == '"':
+                quoted = not quoted
+            elif not quoted and ch == "<":
+                depth += 1
+            elif not quoted and ch == ">":
+                depth -= 1
+            elif ch == "," and depth == 0 and not quoted:
+                out.append(value[start:i].strip())
+                start = i + 1
+        if value[start:].strip():
+            out.append(value[start:].strip())
+    return out
+
+
+def record_routes(msg: SipMessage) -> list[str]:
+    """Record-Route entries in message order (one header may carry several).
+
+    RFC 3261: the UAS uses them in this order (§12.1.1), the UAC reversed (§12.1.2).
+    """
+    return split_header_values(msg.get_all("Record-Route"))
+
+
 def new_branch() -> str:
     return "z9hG4bK" + secrets.token_hex(8)
 
@@ -879,7 +907,7 @@ class SipTrunk(asyncio.DatagramProtocol):
                        local_uri=req.get("To"), remote_uri=req.get("From"),
                        remote_tag=header_param(req.get("From"), "tag"),
                        remote_target=uri_of(req.get("Contact") or req.get("From")),
-                       route_set=list(req.get_all("Record-Route")), invite=req,
+                       route_set=record_routes(req), invite=req,
                        number=user_of(req.get("From")))
         try:
             call.rtp = await self._open_rtp(codec, sdp)
@@ -1007,7 +1035,7 @@ class SipTrunk(asyncio.DatagramProtocol):
         call.remote_tag = header_param(resp.get("To"), "tag")
         call.remote_uri = resp.get("To")
         call.remote_target = uri_of(resp.get("Contact")) or uri
-        call.route_set = list(reversed(resp.get_all("Record-Route")))
+        call.route_set = list(reversed(record_routes(resp)))
         call.state = "confirmed"
         ack = self._request("ACK", call.remote_target, from_=f"{call.local_uri};tag={call.local_tag}",
                             to=call.remote_uri, call_id=call.call_id, cseq=call.cseq,

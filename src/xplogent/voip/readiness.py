@@ -73,8 +73,13 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
     if mode in ("telnyx", "both"):
         url_problem = public_url_problem(str(v.get("public_url", "")))
         add("public_url", "Public HTTPS address", not url_problem, url_problem or str(v.get("public_url")))
-        add("webhook_secret", "Webhook secret", bool(v.get("webhook_secret")),
-            "" if v.get("webhook_secret") else "click 'Generate webhook secret'")
+        secret = str(v.get("webhook_secret") or "")
+        add("webhook_secret", "Webhook secret", len(secret) >= 16,
+            "" if len(secret) >= 16 else ("click 'Generate webhook secret'" if not secret else
+                                          "too short to be safe: click 'Regenerate webhook secret'"))
+        add("telnyx_signature", "Telnyx webhook signature check", bool(v.get("telnyx_public_key")),
+            "on" if v.get("telnyx_public_key") else
+            "recommended: paste your Telnyx public key in the Telnyx card", required=False)
         key_env = str(v.get("api_key_env", "TELNYX_API_KEY"))
         add("telnyx_key", "Telnyx API key", _key(env, key_env),
             "" if _key(env, key_env) else "paste your Telnyx API v2 key")
