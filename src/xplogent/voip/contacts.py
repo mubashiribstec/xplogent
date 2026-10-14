@@ -35,6 +35,9 @@ def _map_header(header: str) -> str:
     return ""
 
 
+MAX_ROWS = 50_000
+
+
 def import_csv(store: Store, text: str, source: str = "csv") -> dict[str, Any]:
     reader = csv.DictReader(io.StringIO(text.lstrip("﻿")))
     if not reader.fieldnames:
@@ -46,7 +49,12 @@ def import_csv(store: Store, text: str, source: str = "csv") -> dict[str, Any]:
 
     imported = skipped = dnc = 0
     errors: list[str] = []
+    truncated = False
     for line, row in enumerate(reader, start=2):
+        if line - 1 > MAX_ROWS:
+            truncated = True
+            errors.append(f"stopped after {MAX_ROWS} rows: split the file and import the rest")
+            break
         values: dict[str, str] = {}
         custom: dict[str, str] = {}
         for col, val in row.items():
@@ -73,4 +81,5 @@ def import_csv(store: Store, text: str, source: str = "csv") -> dict[str, Any]:
         if values.get("dnc", "").lower() in ("1", "yes", "y", "true", "x"):
             store.add_dnc(phone, "imported flag")
             dnc += 1
-    return {"ok": True, "imported": imported, "skipped": skipped, "dnc": dnc, "errors": errors[:20]}
+    return {"ok": True, "imported": imported, "skipped": skipped, "dnc": dnc, "errors": errors[:20],
+            "truncated": truncated}

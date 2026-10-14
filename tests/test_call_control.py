@@ -15,6 +15,7 @@ from xplogent.providers.base import Message, Role, ToolCall
 from xplogent.voip import service as service_mod
 from xplogent.voip.control import LiveCall, calling_hours_problem, clean_number
 from xplogent.voip.service import VoipService, get_service
+from xplogent.voip.telephony import telnyx_trunk
 
 
 @pytest.mark.parametrize("raw, out", [
@@ -88,7 +89,7 @@ def telnyx(monkeypatch):
     save_user_config({"voip": {"enabled": True, "from_number": "+15559990000", "connection_id": "c",
                                "calling_hours": {"start": "00:00", "end": "00:00", "timezone": "UTC"}}})
     _Telnyx.dialed = []
-    monkeypatch.setattr(service_mod, "TelnyxClient", _Telnyx)
+    monkeypatch.setattr(telnyx_trunk, "TelnyxClient", _Telnyx)
     return _Telnyx
 
 
@@ -101,7 +102,7 @@ async def test_dial_checks_hours_dnc_and_remembers_the_contact(telnyx):
     res = await svc.dial("+15550101111", contact_id=cid)
     assert not res["ok"] and res["hours"] and not telnyx.dialed
     assert (await svc.dial("+15550101111", contact_id=cid, ignore_hours=True))["ok"]
-    assert svc.outbound["cc-1"] == {"contact_id": cid, "test": False, "transport": "telnyx"}
+    assert svc.telnyx.outbound["cc-1"] == {"contact_id": cid, "test": False, "transport": "telnyx"}
     assert (await svc.dial("+1 555 010 3333", test=True))["ok"]
     assert telnyx.dialed == ["+15550101111", "+15550103333"]
     assert "do-not-call" in (await svc.dial("+15550102222", test=True))["error"]

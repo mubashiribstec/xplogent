@@ -13,6 +13,7 @@ from tests.conftest import ScriptedProvider
 from xplogent.core.config import save_user_config
 from xplogent.voip import service as service_mod
 from xplogent.voip.control import TRANSFER_FAILED_LINE, LiveCall
+from xplogent.voip.telephony import telnyx_trunk
 from xplogent.voip.telephony.sip import SipMessage, record_routes, split_header_values
 from xplogent.voip.telephony.telnyx import clear_message, media_message, verify_signature
 
@@ -146,10 +147,10 @@ async def test_media_socket_cleans_up_when_setup_fails(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("no speech configured")
 
-    monkeypatch.setattr(service_mod, "TelnyxClient", _Client)
+    monkeypatch.setattr(telnyx_trunk, "TelnyxClient", _Client)
     monkeypatch.setattr(service_mod, "build_session", boom)
     svc = service_mod.VoipService()
-    svc.pending["tok"] = {"call_control_id": "cc1", "from": "+1555", "to": "+1666"}
+    svc.telnyx.pending["tok"] = {"call_control_id": "cc1", "from": "+1555", "to": "+1666"}
     ws = _Socket()
     await asyncio.wait_for(svc.run_media_socket(ws, "tok"), timeout=5)
     assert ws.closed and closed == ["client"] and not svc.active

@@ -231,7 +231,7 @@ voip:
   calling_hours: { enabled: true, start: "09:00", end: "20:00", timezone: "" }   # outbound calls; the contact's time zone wins
   cost_per_minute: 0.012           # your estimate: carrier + LLM (shown in the Calls view)
   knowledge_top_k: 3
-  vad: { threshold: 500, silence_ms: 700 }
+  vad: { threshold: 500, silence_ms: 700, min_speech_ms: 200, max_utterance_ms: 15000 }
   stt:                             # whisper-local = faster-whisper on your GPU; or an OpenAI-compatible URL
     provider: whisper-local        # whisper-local | openai-compatible
     model: small.en

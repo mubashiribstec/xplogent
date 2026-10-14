@@ -8,11 +8,7 @@ socket loop, wrap up the call record, honour do-not-call).
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import re
-import time
-import uuid
 from typing import Any
 
 from xplogent.core.config import Config, data_dir, load_config
@@ -28,13 +24,6 @@ from xplogent.voip.control import (
 )
 from xplogent.voip.engine import CallSession
 from xplogent.voip.providers import build_stt, build_tts
-from xplogent.voip.telephony.telnyx import (
-    TelnyxClient,
-    clear_message,
-    media_message,
-    parse_stream_message,
-    parse_webhook,
-)
 
 _log = get_logger("voip.service")
 
@@ -102,7 +91,9 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         on_turn=lambda speaker, text: store.add_call_turn(call_id, speaker, text),
         greeting=greeting,
         vad=VAD(threshold=float(vad_cfg.get("threshold", 500)),
-                silence_ms=int(vad_cfg.get("silence_ms", 700))),
+                silence_ms=int(vad_cfg.get("silence_ms", 700)),
+                min_speech_ms=int(vad_cfg.get("min_speech_ms", 200)),
+                max_utterance_ms=int(vad_cfg.get("max_utterance_ms", 15000))),
         max_call_s=float(v.get("max_call_seconds", 900)), **session_kw)
     return session, call_id, brain
 
@@ -156,46 +147,19 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
 
 
 class VoipService:
-    PENDING_TTL = 120.0      # a stream token unused this long belongs to a call that never connected
-    CALL_TTL = 4 * 3600.0    # call info whose hangup webhook was lost
+    """Transport-agnostic call service: live-call registry and outbound policy.
+
+    Telnyx specifics live in :class:`~xplogent.voip.telephony.telnyx_trunk.TelnyxTrunk`,
+    SIP in :class:`~xplogent.voip.telephony.sip.SipTrunk` (which sets ``sip_dialer``).
+    """
 
     def __init__(self) -> None:
-        self.pending: dict[str, dict[str, str]] = {}      # stream token -> call info
-        self.by_call: dict[str, dict[str, str]] = {}      # call_control_id -> info
+        from xplogent.voip.telephony.telnyx_trunk import TelnyxTrunk
+
         self.active: dict[int, LiveCall] = {}             # call row id -> live call controls
-        self.outbound: dict[str, dict[str, Any]] = {}     # call_control_id -> {contact_id, test}
-        self._tasks: set[asyncio.Task] = set()
+        self.telnyx = TelnyxTrunk(self)
         # Set by the SIP trunk when it is running: async (number, meta) -> result.
         self.sip_dialer: Any = None
-        self._seen_at: dict[str, float] = {}              # token / call id -> created
-
-    def _remember(self, table: dict, key: str, value: dict[str, str]) -> None:
-        table[key] = value
-        self._seen_at[key] = time.monotonic()
-
-    def _expire(self) -> None:
-        now = time.monotonic()
-        for table, ttl in ((self.pending, self.PENDING_TTL), (self.by_call, self.CALL_TTL),
-                           (self.outbound, self.CALL_TTL)):
-            for key in [k for k in table if now - self._seen_at.get(k, now) > ttl]:
-                table.pop(key, None)
-                self._seen_at.pop(key, None)
-
-    @staticmethod
-    def _blocked(cfg: Config, info: dict[str, str]) -> bool:
-        """Outbound calls to a do-not-call number must not go ahead."""
-        if not is_outbound(info):
-            return False
-        store = Store(cfg.db_path)
-        try:
-            return store.is_dnc(customer_number(info))
-        finally:
-            store.close()
-
-    def _spawn(self, coro) -> None:
-        task = asyncio.create_task(coro)
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
 
     # -- outbound ---------------------------------------------------------------------
     async def dial(self, to_number: str, cfg: Config | None = None, *, contact_id: int | None = None,
@@ -232,22 +196,9 @@ class VoipService:
             if dialer is None:
                 return {"ok": False, "error": "the SIP trunk is not set up (Calls → Telephony)"}
             return await dialer(number, meta)
-        from_number, connection = str(v.get("from_number", "")), str(v.get("connection_id", ""))
-        if not (from_number and connection):
-            return {"ok": False, "error": "set your Telnyx number and Voice API application ID first"}
-        client = TelnyxClient(api_key_env=str(v.get("api_key_env", "TELNYX_API_KEY")))
-        try:
-            res = await client.dial(number, from_number, connection)
-        except Exception as exc:  # noqa: BLE001 - shown in the dashboard
-            return {"ok": False, "error": f"Telnyx refused the call: {exc}"[:300]}
-        finally:
-            await client.aclose()
-        data = res.get("data", res) if isinstance(res, dict) else {}
-        ccid = str(data.get("call_control_id", ""))
-        if ccid:
-            self._remember(self.outbound, ccid, meta)
-        return {"ok": True, "call": data, "via": "telnyx"}
+        return await self.telnyx.dial(number, meta, v)
 
+    # -- live calls -----------------------------------------------------------------------
     def live_by_ref(self, ref: str) -> LiveCall | None:
         if not ref:
             return None
@@ -259,155 +210,12 @@ class VoipService:
     def unregister(self, call_id: int) -> None:
         self.active.pop(call_id, None)
 
-    # -- carrier webhook -------------------------------------------------------------
+    # -- Telnyx entry points (routes) -----------------------------------------------------
     async def handle_webhook(self, payload: dict[str, Any]) -> dict[str, Any]:
-        cfg = load_config()
-        v = cfg.voip or {}
-        ev = parse_webhook(payload)
-        self._expire()
-        ccid = ev["call_control_id"]
-        xfer_of = ev["client_state"][5:] if ev["client_state"].startswith("xfer:") else ""
-        ours = ccid in self.outbound or bool(xfer_of) or self.live_by_ref(ccid) is not None
-        # Switched off: answer nothing new — but calls we placed (test calls) and calls
-        # already in progress still get their events.
-        if not v.get("enabled") and not ours:
-            return {"ok": False, "error": "voip is disabled"}
-        if xfer_of:                  # an event on the new leg of one of our transfers
-            live = self.live_by_ref(xfer_of)
-            if live is not None and ev["event"] == "call.bridged":
-                live.session.transfer_done()
-            elif live is not None and ev["event"] == "call.hangup":
-                self._spawn(live.session.transfer_failed("the other side didn't answer"))
-            return {"ok": True}
-        if ev["event"] == "call.bridged":
-            live = self.live_by_ref(ccid)
-            if live is not None and live.session.transfer_pending:
-                live.session.transfer_done()
-            return {"ok": True}
+        return await self.telnyx.handle_webhook(payload)
 
-        def client() -> TelnyxClient:
-            return TelnyxClient(api_key_env=str(v.get("api_key_env", "TELNYX_API_KEY")))
-
-        if ev["event"] == "call.initiated":
-            self._remember(self.by_call, ccid, ev)
-            if not is_outbound(ev):
-                c = client()
-                self._spawn(self._act(c, c.answer(ccid)))
-        elif ev["event"] == "call.answered":
-            info = {**self.by_call.get(ccid, ev), "call_control_id": ccid, "transport": "telnyx",
-                    **self.outbound.pop(ccid, {})}
-            if self._blocked(cfg, info):
-                _log.warning("outbound call to a do-not-call number: hanging up")
-                c = client()
-                self._spawn(self._act(c, c.hangup(ccid)))
-                return {"ok": True, "blocked": "do_not_call"}
-            token = uuid.uuid4().hex
-            self._remember(self.pending, token, info)
-            base = str(v.get("public_url", "")).rstrip("/")
-            ws_url = base.replace("https://", "wss://").replace("http://", "ws://") + f"/ws/telephony/{token}"
-            c = client()
-            self._spawn(self._act(c, c.start_stream(ccid, ws_url)))
-        elif ev["event"] == "call.hangup":
-            self.by_call.pop(ccid, None)
-            self._seen_at.pop(ccid, None)
-        return {"ok": True}
-
-    @staticmethod
-    async def _act(client: TelnyxClient, coro) -> None:
-        try:
-            await coro
-        except Exception:  # noqa: BLE001
-            _log.exception("telnyx action failed")
-        finally:
-            await client.aclose()
-
-    # -- media socket -------------------------------------------------------------------
     async def run_media_socket(self, websocket, token: str) -> None:
-        self._expire()
-        info = self.pending.pop(token, None)
-        self._seen_at.pop(token, None)
-        if info is None:
-            await websocket.close(code=1008)
-            return
-        await websocket.accept()
-        cfg = load_config()
-        v = cfg.voip or {}
-        store = Store(cfg.db_path)
-        client = TelnyxClient(api_key_env=str(v.get("api_key_env", "TELNYX_API_KEY")))
-        ccid = info.get("call_control_id", "")
-        stream_id = {"id": ""}
-
-        async def send_audio(chunk: bytes) -> None:
-            await websocket.send_text(media_message(chunk))
-
-        async def clear_audio() -> None:
-            await websocket.send_text(clear_message())
-
-        async def hangup() -> None:
-            await client.hangup(ccid)
-
-        async def transfer_to(number: str) -> None:
-            target = resolve_transfer_number(v, number, transport="telnyx")
-            if not target:
-                raise ValueError("no valid transfer number")
-            await client.transfer(ccid, target, client_state=f"xfer:{ccid}")
-
-        async def transfer(reason: str) -> None:      # the agent decided to hand over
-            await transfer_to("")
-
-        session = brain = None
-        call_id = 0
-        try:
-            # Inside the try: if building the session fails, the store, the Telnyx client
-            # and the socket are still closed below.
-            session, call_id, brain = build_session(
-                cfg, store, info, send_audio=send_audio, clear_audio=clear_audio,
-                hangup=hangup, transfer=transfer)
-            self.register(LiveCall(
-                call_id=call_id, session=session, brain=brain, number=customer_number(info),
-                direction="outbound" if is_outbound(info) else "inbound", transport="telnyx",
-                test=bool(info.get("test")), contact_name=str((brain.contact or {}).get("name") or ""),
-                transfer_to=transfer_to, ref=ccid))
-            started = False
-            while not session.finished.is_set():
-                try:
-                    raw = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
-                except TimeoutError:
-                    continue
-                msg = parse_stream_message(raw)
-                if msg["event"] == "start":
-                    stream_id["id"] = msg["stream_id"]
-                # Speak once the stream has started; some carriers skip `start`, so the
-                # first media frame counts too.
-                if not started and msg["event"] in ("start", "media"):
-                    started = True
-                    await session.start()
-                if msg["event"] == "media":
-                    await session.on_audio(msg["audio"])
-                elif msg["event"] == "stop":
-                    break
-        except Exception as exc:  # noqa: BLE001 - classify, log, then clean up below
-            if type(exc).__name__ in ("WebSocketDisconnect", "ClientDisconnected"):
-                _log.info("call %s: media stream closed by the carrier", call_id or ccid)
-            else:
-                _log.exception("call %s: media stream failed", call_id or ccid)
-        finally:
-            if call_id:
-                self.unregister(call_id)
-            closers = [client.aclose]
-            if session is not None and brain is not None:
-                await session.stop()
-                result = finalize_call(cfg, store, call_id, session, brain, customer_number(info))
-                _log.info("call %s finished: %s", call_id, result)
-                closers += [session.stt.aclose, session.tts.aclose, brain.provider.aclose]
-                if hasattr(brain.retrieve, "aclose"):
-                    closers.append(brain.retrieve.aclose)
-            for closer in closers:
-                with contextlib.suppress(Exception):
-                    await closer()
-            store.close()
-            with contextlib.suppress(Exception):
-                await websocket.close()
+        await self.telnyx.run_media_socket(websocket, token)
 
 
 _SERVICE: VoipService | None = None

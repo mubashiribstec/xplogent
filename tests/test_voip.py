@@ -317,13 +317,15 @@ def test_webhook_to_media_socket_end_to_end(monkeypatch):
         async def hangup(self, cc):
             actions.append(("hangup", cc))
 
-        async def transfer(self, cc, to):
+        async def transfer(self, cc, to, client_state=""):
             actions.append(("transfer", to))
 
         async def aclose(self):
             pass
 
-    monkeypatch.setattr(service, "TelnyxClient", FakeTelnyx)
+    from xplogent.voip.telephony import telnyx_trunk
+
+    monkeypatch.setattr(telnyx_trunk, "TelnyxClient", FakeTelnyx)
     monkeypatch.setattr(service, "build_stt", lambda cfg: FakeSTT())
     monkeypatch.setattr(service, "build_tts", lambda cfg: FakeTTS())
     monkeypatch.setattr(service, "_make_retriever", lambda *a, **k: None)

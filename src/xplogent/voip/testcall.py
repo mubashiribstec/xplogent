@@ -147,9 +147,7 @@ async def run_test_call(websocket, cfg: Config | None = None, *, stt=None, tts=N
             elif data.get("type") == "hangup":
                 break
         # Let the last words reach the browser before closing.
-        if session._turn_task is not None and not session._turn_task.done():
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(asyncio.shield(session._turn_task), timeout=20)
+        await session.wait_idle(20)
     except Exception as exc:  # noqa: BLE001 - shown in the test panel
         _log.exception("test call failed")
         outbox.put_nowait({"type": "error", "error": str(exc)[:300]})

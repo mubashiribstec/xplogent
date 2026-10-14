@@ -15,6 +15,7 @@ from xplogent.voip import service as service_mod
 from xplogent.voip.brain import CallBrain
 from xplogent.voip.control import LiveCall, resolve_transfer_number
 from xplogent.voip.engine import NO_TRANSFER_LINE, TRANSFER_FAILED_LINE
+from xplogent.voip.telephony import telnyx_trunk
 
 
 def _transfer_reply():
@@ -124,7 +125,7 @@ class _Telnyx:
 async def test_switched_off_agent_only_places_test_calls(monkeypatch):
     save_user_config({"voip": {"enabled": False, "from_number": "+15559990000", "connection_id": "c",
                                "calling_hours": {"enabled": False}}})
-    monkeypatch.setattr(service_mod, "TelnyxClient", _Telnyx)
+    monkeypatch.setattr(telnyx_trunk, "TelnyxClient", _Telnyx)
     svc = service_mod.VoipService()
     off = await svc.dial("+15550101111")
     assert not off["ok"] and "switched off" in off["error"]
@@ -132,7 +133,7 @@ async def test_switched_off_agent_only_places_test_calls(monkeypatch):
     # Its webhooks are still handled although the agent is off; strangers' aren't.
     hook = {"data": {"event_type": "call.answered", "payload": {
         "call_control_id": "cc-dialed", "direction": "outgoing", "from": "+1", "to": "+15550101111"}}}
-    assert (await svc.handle_webhook(hook))["ok"] and svc.pending
+    assert (await svc.handle_webhook(hook))["ok"] and svc.telnyx.pending
     stranger = {"data": {"event_type": "call.initiated", "payload": {"call_control_id": "cc-x"}}}
     assert (await svc.handle_webhook(stranger))["ok"] is False
 
@@ -176,3 +177,37 @@ def test_outcome_is_validated():
     assert brain.state.outcome == "other"
     brain._run_tool("log_outcome", {"outcome": "Interested"})
     assert brain.state.outcome == "interested"
+
+
+# ── structure: CSV cap, VAD settings, idle wait ───────────────────────────────
+def test_contact_import_is_capped(monkeypatch):
+    from xplogent.voip import contacts
+
+    monkeypatch.setattr(contacts, "MAX_ROWS", 3)
+    csv_text = "name,phone\n" + "".join(f"P{i},+1555010{1000 + i}\n" for i in range(6))
+    with Store(load_config().db_path) as store:
+        res = contacts.import_csv(store, csv_text)
+    assert res["imported"] == 3 and res["truncated"] and "stopped after 3" in res["errors"][-1]
+
+
+def test_vad_timings_come_from_config():
+    save_user_config({"voip": {"vad": {"min_speech_ms": 120, "max_utterance_ms": 9000}}})
+    store = Store(load_config().db_path)
+
+    async def send(_b):
+        return None
+
+    session, _c, _b = service_mod.build_session(
+        load_config(), store, {"direction": "incoming", "from": "+1"}, send_audio=send,
+        stt=FakeSTT(), tts=FakeTTS(), provider=ScriptedProvider([]), retrieve=None)
+    assert session.vad.min_speech_frames == 6 and session.vad.max_frames == 450     # 20 ms frames
+    store.close()
+
+
+async def test_wait_idle_waits_for_the_reply():
+    session, *_ = make_session(ScriptedProvider([Message(role=Role.ASSISTANT, content="Hi there.")]),
+                               tts=FakeTTS(delay=0.05), realtime=False)
+    await session.on_text("hello")
+    assert session.turn_in_progress
+    await session.wait_idle(5)
+    assert not session.turn_in_progress

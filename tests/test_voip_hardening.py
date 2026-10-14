@@ -12,9 +12,9 @@ from tests.test_voip import FakeSTT, FakeTTS, make_session, speak_utterance
 from xplogent.core.config import load_config
 from xplogent.memory.store import Store
 from xplogent.providers.base import Message, Role
-from xplogent.voip import service as service_mod
 from xplogent.voip.brain import CallBrain
 from xplogent.voip.service import VoipService, build_session, customer_number, finalize_call
+from xplogent.voip.telephony import telnyx_trunk
 
 OUR_NUMBER = "+15559990000"
 CUSTOMER = "+15550102000"
@@ -134,13 +134,13 @@ def telnyx(monkeypatch):
                                "from_number": OUR_NUMBER, "connection_id": "conn",
                                "calling_hours": {"enabled": False}}})
     _FakeTelnyx.actions = []
-    monkeypatch.setattr(service_mod, "TelnyxClient", _FakeTelnyx)
+    monkeypatch.setattr(telnyx_trunk, "TelnyxClient", _FakeTelnyx)
     return _FakeTelnyx
 
 
 async def _drain(svc: VoipService) -> None:
     for _ in range(50):
-        if not svc._tasks:
+        if not svc.telnyx._tasks:
             return
         await asyncio.sleep(0.01)
 
@@ -160,7 +160,7 @@ async def test_outbound_call_to_dnc_number_is_hung_up_not_streamed(telnyx):
     assert res.get("blocked") == "do_not_call"
     assert ("hangup", "cc-out") in telnyx.actions
     assert not any(a == "stream" for a, _ in telnyx.actions)
-    assert not svc.pending
+    assert not svc.telnyx.pending
 
 
 @pytest.mark.asyncio
@@ -197,11 +197,11 @@ async def test_stale_tokens_and_calls_expire(telnyx, monkeypatch):
     await svc.handle_webhook(_hook({"event": "call.answered", "call_control_id": "c1",
                                     "from": CUSTOMER, "to": OUR_NUMBER, "direction": "incoming"}))
     await _drain(svc)
-    assert svc.pending and svc.by_call
-    later = time.monotonic() + VoipService.CALL_TTL + 1
-    monkeypatch.setattr(service_mod.time, "monotonic", lambda: later)
-    svc._expire()
-    assert not svc.pending and not svc.by_call
+    assert svc.telnyx.pending and svc.telnyx.by_call
+    later = time.monotonic() + telnyx_trunk.TelnyxTrunk.CALL_TTL + 1
+    monkeypatch.setattr(telnyx_trunk.time, "monotonic", lambda: later)
+    svc.telnyx._expire()
+    assert not svc.telnyx.pending and not svc.telnyx.by_call
 
 
 # ── real-time pacing / barge-in ───────────────────────────────────────────────

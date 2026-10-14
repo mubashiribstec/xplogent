@@ -192,8 +192,11 @@ async def voip_contacts(q: str = "", limit: int = 500) -> dict:
 async def voip_import(body: dict) -> dict:
     from xplogent.voip.contacts import import_csv
 
-    with Store(load_config().db_path) as store:
-        res = import_csv(store, str(body.get("csv", "")), source=str(body.get("source", "csv")))
+    def run() -> dict:            # big files: keep the event loop (and live calls) responsive
+        with Store(load_config().db_path) as store:
+            return import_csv(store, str(body.get("csv", "")), source=str(body.get("source", "csv")))
+
+    res = await asyncio.to_thread(run)
     deps.audit_event("contacts_import", target=f"{res.get('imported', 0)} contacts", risk="medium")
     return res
 

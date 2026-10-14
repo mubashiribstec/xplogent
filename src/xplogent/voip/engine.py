@@ -98,6 +98,18 @@ class CallSession:
                     await task
 
     @property
+    def turn_in_progress(self) -> bool:
+        """The agent is working on (or speaking) a reply."""
+        return self._turn_task is not None and not self._turn_task.done()
+
+    async def wait_idle(self, timeout: float = 20.0) -> None:
+        """Wait (bounded) until the current reply has been fully spoken."""
+        task = self._turn_task
+        if task is not None and not task.done():
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+
+    @property
     def duration_s(self) -> float:
         return time.time() - self.started
 
