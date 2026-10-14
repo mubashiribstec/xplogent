@@ -91,3 +91,112 @@ def test_forwarded_allow_ips_is_configurable(monkeypatch, tmp_path):
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(kw))
     server.run_server(host="127.0.0.1", port=18999)
     assert seen["forwarded_allow_ips"] == "172.18.0.0/16"
+
+
+# ── Docker one-command install (get.sh) + compose layout ───────────────────────
+import os  # noqa: E402
+import platform  # noqa: E402
+import re  # noqa: E402
+import shutil  # noqa: E402
+import stat  # noqa: E402
+import subprocess  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+REPO = Path(__file__).resolve().parents[1]
+_bash = pytest.mark.skipif(platform.system() != "Linux" or not shutil.which("bash"),
+                           reason="the Docker installer targets Linux")
+
+
+def _get_sh(tmp_path, *args, env=None):
+    run_env = {**os.environ, "XPL_SRC": str(REPO), "XPL_BIN_DIR": str(tmp_path / "bin"), **(env or {})}
+    return subprocess.run(["bash", str(REPO / "get.sh"), "--dry-run", "--yes",
+                           "--dir", str(tmp_path / "x"), *args],
+                          capture_output=True, text=True, env=run_env, stdin=subprocess.DEVNULL)
+
+
+def _env(tmp_path) -> dict[str, str]:
+    text = (tmp_path / "x" / "deploy" / "docker" / ".env").read_text()
+    return dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#"))
+
+
+@_bash
+def test_installer_local_mode_writes_private_env_with_token(tmp_path):
+    res = _get_sh(tmp_path, "--mode", "local", "--no-ollama", "--model", "openai:gpt-4o-mini")
+    assert res.returncode == 0, res.stderr
+    env = _env(tmp_path)
+    assert re.fullmatch(r"[0-9a-f]{64}", env["XPLOGENT_AUTH_TOKEN"])
+    assert env["COMPOSE_FILE"] == "docker-compose.yml:compose.local.yml"
+    assert env["XPLOGENT_BIND"] == "127.0.0.1"           # not exposed unless --lan
+    assert env["COMPOSE_PROFILES"] == ""
+    mode = stat.S_IMODE((tmp_path / "x" / "deploy" / "docker" / ".env").stat().st_mode)
+    assert mode == 0o600
+    helper = (tmp_path / "bin" / "xplogent-docker").read_text()
+    assert f'DEFAULT_DIR="{tmp_path / "x"}"' in helper
+    assert env["XPLOGENT_AUTH_TOKEN"] in res.stdout       # printed once for the user
+
+
+@_bash
+def test_installer_rerun_keeps_token_and_reconfigure_switches_to_https(tmp_path):
+    assert _get_sh(tmp_path, "--mode", "local", "--no-ollama").returncode == 0
+    token = _env(tmp_path)["XPLOGENT_AUTH_TOKEN"]
+    assert _get_sh(tmp_path).returncode == 0
+    assert _env(tmp_path)["XPLOGENT_AUTH_TOKEN"] == token
+    res = _get_sh(tmp_path, "--reconfigure", "--domain", "agent.example.com", "--ollama")
+    assert res.returncode == 0, res.stderr
+    env = _env(tmp_path)
+    assert env["XPLOGENT_AUTH_TOKEN"] == token
+    assert env["COMPOSE_FILE"] == "docker-compose.yml:compose.https.yml"
+    assert env["DOMAIN"] == "agent.example.com"
+    assert env["COMPOSE_PROFILES"] in ("ollama", "ollama-gpu")
+    assert env["OLLAMA_HOST"] == "http://ollama:11434"
+
+
+@_bash
+def test_installer_takes_the_api_key_from_the_environment(tmp_path):
+    res = _get_sh(tmp_path, "--mode", "local", "--no-ollama", "--model", "anthropic:claude-x",
+                  env={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    assert res.returncode == 0, res.stderr
+    assert _env(tmp_path)["ANTHROPIC_API_KEY"] == "sk-ant-test"
+    assert "sk-ant-test" not in res.stdout                 # never echoed
+
+
+@_bash
+@pytest.mark.parametrize("args, message", [
+    (["--domain", "bad;rm -rf /"], "not a valid hostname"),
+    (["--mode", "https"], "needs a domain"),
+    (["--mode", "ftp"], "must be https or local"),
+])
+def test_installer_rejects_bad_input(tmp_path, args, message):
+    res = _get_sh(tmp_path, *args)
+    assert res.returncode != 0 and message in res.stderr
+
+
+@_bash
+def test_install_scripts_parse():
+    for script in ("get.sh", "deploy/docker/xplogent-docker", "deploy/install-server.sh", "install.sh"):
+        subprocess.run(["bash", "-n", str(REPO / script)], check=True)
+
+
+def test_compose_layout():
+    yaml = pytest.importorskip("yaml")
+    d = REPO / "deploy" / "docker"
+    base = yaml.safe_load((d / "docker-compose.yml").read_text())["services"]
+    assert base["xplogent"]["image"].startswith("${XPLOGENT_IMAGE:-ghcr.io/mubashiribstec/xplogent")
+    assert "ports" not in base["xplogent"]                 # only the mode files publish anything
+    assert base["ollama"]["profiles"] == ["ollama"]
+    assert base["ollama-gpu"]["networks"]["default"]["aliases"] == ["ollama"]
+    https = yaml.safe_load((d / "compose.https.yml").read_text())["services"]
+    assert set(https) == {"caddy"} and "80:80" in https["caddy"]["ports"]
+    local = yaml.safe_load((d / "compose.local.yml").read_text())["services"]
+    assert local["xplogent"]["ports"] == ["${XPLOGENT_BIND:-127.0.0.1}:${XPLOGENT_PORT:-8765}:8765"]
+
+
+def test_dashboard_update_check_explains_docker(monkeypatch):
+    from xplogent.core import updater
+
+    monkeypatch.setenv("XPLOGENT_IN_DOCKER", "1")
+    monkeypatch.setenv("XPLOGENT_VERSION", "v1.2.3")
+    info = updater.check_update()
+    assert info["docker"] is True and info["version"] == "v1.2.3"
+    assert "xplogent-docker update" in info["error"]
+    assert updater.pull()["ok"] is False

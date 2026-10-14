@@ -53,6 +53,7 @@ def create_backup(dest: Path | str | None = None, *, include_secrets: bool = Fal
         backups.mkdir(parents=True, exist_ok=True)
         dest = backups / f"xplogent-backup-{time.strftime('%Y%m%d-%H%M%S')}.tar.gz"
     dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
     # Memory (DB) + skills live in the install data dir; config/.env in home.
     data = data_dir()

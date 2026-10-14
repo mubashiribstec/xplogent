@@ -12,5 +12,5 @@ class OpenRouterProvider(OpenAIProvider):
 
     def _extra_headers(self, headers: dict[str, str]) -> None:
         # Optional attribution headers recommended by OpenRouter.
-        headers.setdefault("HTTP-Referer", "https://github.com/mubashiribstec/Ai-agent")
+        headers.setdefault("HTTP-Referer", "https://github.com/mubashiribstec/xplogent")
         headers.setdefault("X-Title", "Xplogent Agent")

@@ -14,6 +14,15 @@ COPY web/ ./
 RUN npm run build
 
 FROM python:3.12-slim AS app
+ARG VERSION=dev
+ARG REVISION=unknown
+# Links the GHCR package to the repository (README, visibility) and records the build.
+LABEL org.opencontainers.image.title="Xplogent" \
+      org.opencontainers.image.description="Self-improving AI agent framework (dashboard, multi-agent, phone agent)" \
+      org.opencontainers.image.source="https://github.com/mubashiribstec/xplogent" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}"
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -44,6 +53,8 @@ ENV XPLOGENT_HOME=/data \
     XPLOGENT_API_HOST=0.0.0.0 \
     XPLOGENT_API_PORT=8765 \
     XPLOGENT_BEHIND_PROXY=1 \
+    XPLOGENT_IN_DOCKER=1 \
+    XPLOGENT_VERSION=${VERSION} \
     PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring
 
 VOLUME ["/data"]

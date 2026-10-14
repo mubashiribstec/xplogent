@@ -43,7 +43,9 @@ export function UpdatePanel() {
     <div className="card">
       <h3>Update</h3>
       {!info && <p className="dim">Check whether a newer version is available.</p>}
-      {info && !info.git && <p className="warn">Not a git checkout — update via your installer.</p>}
+      {info && !info.git && (info.docker
+        ? <p className="warn">Running in Docker{info.version ? ` (${info.version})` : ""}. Update on the server with <code>xplogent-docker update</code>.</p>
+        : <p className="warn">Not a git checkout — update via your installer.</p>)}
       {info && info.git && info.update_available && (
         <div>
           <p>{info.behind_by} new commit(s) available:</p>

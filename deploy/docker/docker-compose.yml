@@ -1,29 +1,37 @@
-# Xplogent on a Linux server with automatic HTTPS.
+# Xplogent with Docker. Easiest: the one-command installer does all of this for you:
+#   curl -fsSL https://raw.githubusercontent.com/mubashiribstec/xplogent/main/get.sh | sudo bash
 #
-#   cd deploy/docker
-#   cp .env.example .env     # set DOMAIN and XPLOGENT_AUTH_TOKEN (and provider keys)
-#   docker compose up -d --build
+# Manual use:
+#   cp .env.example .env    # set XPLOGENT_AUTH_TOKEN (openssl rand -hex 32), mode, keys
+#   docker compose up -d
 #
-# Optional GPU speech servers for the phone agent (needs the NVIDIA Container Toolkit):
-#   docker compose --profile gpu-speech up -d
+# This base file only defines the app (+ optional extras). How it is reached is picked by
+# COMPOSE_FILE in .env (docker compose reads it automatically):
+#   HTTPS with a domain : COMPOSE_FILE=docker-compose.yml:compose.https.yml   (Caddy, ports 80/443)
+#   No domain / LAN     : COMPOSE_FILE=docker-compose.yml:compose.local.yml   (port 8765, no TLS)
+# Optional profiles (COMPOSE_PROFILES in .env, comma separated):
+#   ollama      local models on CPU          ollama-gpu  local models on an NVIDIA GPU
+#   gpu-speech  Whisper + Kokoro speech servers for the phone agent (NVIDIA GPU)
 #
-# Only Caddy publishes ports (80/443). Xplogent itself is reachable only on the
-# internal network and refuses to start without an access token.
+# The app refuses to start without an access token, in every mode.
 
 name: xplogent
 
 services:
   xplogent:
+    # Prebuilt multi-arch image from GitHub Actions. `docker compose build` (or `up --build`)
+    # builds from this checkout instead.
+    image: ${XPLOGENT_IMAGE:-ghcr.io/mubashiribstec/xplogent:latest}
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
-    image: xplogent:local
+    pull_policy: ${XPLOGENT_PULL_POLICY:-missing}
     restart: unless-stopped
     env_file: .env
     environment:
       # Fail closed: refuse to start without a dashboard access token.
       XPLOGENT_AUTH_TOKEN: ${XPLOGENT_AUTH_TOKEN:?set XPLOGENT_AUTH_TOKEN in .env (openssl rand -hex 32)}
-      # Caddy reaches us over the private compose network, so trust its forwarded headers.
+      # Only Caddy (https mode) or the published port reach us; trust forwarded headers.
       XPLOGENT_FORWARDED_ALLOW_IPS: "*"
     volumes:
       - xplogent-data:/data
@@ -36,26 +44,41 @@ services:
       start_period: 20s
       retries: 3
 
-  caddy:
-    image: caddy:2
+  # --- optional: local models with Ollama ------------------------------------------------
+  # Set OLLAMA_HOST=http://ollama:11434 in .env and pull a model once:
+  #   docker compose exec ollama ollama pull llama3.1
+  #   docker compose exec ollama ollama pull nomic-embed-text
+  ollama:
+    profiles: ["ollama"]
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
     restart: unless-stopped
-    depends_on:
-      xplogent:
-        condition: service_healthy
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      DOMAIN: ${DOMAIN:?set DOMAIN in .env (the public hostname pointing at this server)}
-      XPLOGENT_UPSTREAM: xplogent:8765
     volumes:
-      - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
+      - ollama-models:/root/.ollama
+    expose:
+      - "11434"
+
+  ollama-gpu:
+    profiles: ["ollama-gpu"]
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    restart: unless-stopped
+    # Same address as the CPU service, so OLLAMA_HOST=http://ollama:11434 works for both.
+    networks:
+      default:
+        aliases: [ollama]
+    volumes:
+      - ollama-models:/root/.ollama
+    expose:
+      - "11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # --- optional: local speech for the phone agent (OpenAI-compatible APIs) -------------
-  # After starting, set in the dashboard config (voip.stt / voip.tts):
+  # After starting, set in config (voip.stt / voip.tts):
   #   stt.provider: openai-compatible, base_url: http://whisper:8000/v1, model: Systran/faster-whisper-small.en
   #   tts.base_url: http://kokoro:8880/v1, model: kokoro, voice: af_heart
   whisper:
@@ -96,6 +119,5 @@ services:
 
 volumes:
   xplogent-data:
-  caddy-data:
-  caddy-config:
+  ollama-models:
   hf-cache:

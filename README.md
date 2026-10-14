@@ -1,5 +1,9 @@
 # 🧠 Xplogent — a self-improving AI agent framework
 
+[![CI](https://github.com/mubashiribstec/xplogent/actions/workflows/ci.yml/badge.svg)](https://github.com/mubashiribstec/xplogent/actions/workflows/ci.yml)
+[![Docker image](https://github.com/mubashiribstec/xplogent/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/mubashiribstec/xplogent/pkgs/container/xplogent)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
+
 Xplogent is a personal AI agent you fully own and run yourself. It works with **any
 LLM provider** (including **local Ollama**, fully offline), keeps **its own
 persistent memory**, **improves itself** by reflecting on tasks and writing
@@ -9,6 +13,47 @@ screen, browser) — all behind a configurable **safety/approval layer**.
 It's inspired by [Hermes](https://github.com/NousResearch/hermes-agent) and the
 OpenClaw ecosystem, but built as a leaner, cleanly-architected core that's easy
 to extend with plugins and MCP servers. It runs on **Windows and Linux** (and macOS).
+
+## Install
+
+### Linux server: one command (Docker)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mubashiribstec/xplogent/main/get.sh | sudo bash
+```
+
+It installs Docker if needed, asks a few questions (your domain for automatic HTTPS, or
+no-domain mode; local models with Ollama; your model and API key), generates an access
+token, starts Xplogent and prints the address and token. Then manage it with:
+
+```bash
+xplogent-docker status        # health + address
+xplogent-docker update        # backup, pull the new image, restart
+xplogent-docker backup        # backup to /opt/xplogent-docker/backups
+xplogent-docker token         # show the token (--rotate for a new one)
+xplogent-docker help          # logs, restore, https <domain>, local, ollama on|off, ...
+```
+
+Non-interactive: `... | sudo bash -s -- --yes --domain agent.example.com` (or `--mode local --lan`,
+`--ollama`, `--model openai:gpt-4o-mini`). Details: [docs/deploy-linux.md](docs/deploy-linux.md).
+
+### Desktop (Windows, macOS, Linux)
+
+```bash
+git clone https://github.com/mubashiribstec/xplogent.git && cd xplogent
+bash install.sh               # Windows (PowerShell): ./install.ps1
+xplogent setup                # one time: pick provider/model, enter a key (or use local Ollama)
+xplogent up                   # opens the dashboard in your browser
+```
+
+### Other ways
+
+| | |
+|---|---|
+| Docker Compose by hand | `cd deploy/docker && cp .env.example .env` (set the token), `docker compose up -d` |
+| Prebuilt image | `docker run -e XPLOGENT_AUTH_TOKEN=... -p 127.0.0.1:8765:8765 -v xplogent:/data ghcr.io/mubashiribstec/xplogent` |
+| systemd, no Docker | `sudo ./deploy/install-server.sh` |
+| From source | `pip install -e ".[all]"` and `cd web && npm install && npm run build` |
 
 ## Why Xplogent
 
@@ -75,23 +120,22 @@ See `src/xplogent/` for the implementation; each subsystem is a self-contained
 package behind a small interface, so providers, tools, and memory backends are
 swappable.
 
-## Quick start (easy path)
+## Using it
 
 ```bash
-bash install.sh        # Windows: ./install.ps1   (pipx/venv + PATH + build dashboard)
-xplogent setup         # one time: pick provider/model, enter a key (or use local Ollama)
 xplogent up            # foreground: opens the dashboard in your browser
 # or run it in the background (survives closing the terminal):
 xplogent start         # xplogent status / xplogent stop ; service install for boot auto-start
 ```
 
-Setup is one-time (saved in `~/.xplogent`). The dashboard has four tabs:
+Setup is one-time (saved in `~/.xplogent`). The main dashboard views:
 - **Chat** — talk to a single agent, **switch models on the fly**, set effort /
   thinking, and your conversation **persists** across reloads (with New chat).
 - **Mission Control** — launch multi-agent teams and watch them live.
+- **Calls / Contacts** — the phone agent ([docs/voip.md](docs/voip.md)).
 - **Settings** — change *everything* from the GUI: model, API keys (masked),
   safety policy, concurrency, tool toggles, role/permission editor, memory &
-  skills, and **one-click Update** (git pull → reinstall → auto-restart).
+  skills, and **one-click Update** (git installs; Docker installs use `xplogent-docker update`).
 - **Guide** — this documentation, in-app.
 
 ### Terminal usage
@@ -104,31 +148,11 @@ xplogent update                            # pull + reinstall from git
 xplogent serve                             # API only (no browser)
 ```
 
-### Linux server (Docker or systemd + HTTPS)
-
-```bash
-# Docker Compose + automatic HTTPS (Caddy):
-cd deploy/docker && cp .env.example .env && nano .env && docker compose up -d --build
-# or directly on the host as a hardened systemd service:
-sudo ./deploy/install-server.sh
-```
-
-Both require an access token and install from the pinned `requirements/server.lock`.
-Full guide (DNS, firewall, phone agent, GPU speech, backups, security): [docs/deploy-linux.md](docs/deploy-linux.md).
-
-### Manual install
-
-```bash
-pip install -e ".[all]"
-ollama pull llama3.1 && ollama pull nomic-embed-text   # local models
-cd web && npm install && npm run build                 # build the dashboard
-```
-
-### Web dashboard
+### Developing the dashboard
 
 ```bash
 xplogent serve            # backend API on :8765
-cd web && npm install && npm run dev    # dashboard on :5173
+cd web && npm install && npm run dev    # dashboard on :5173 (hot reload)
 ```
 
 ### Use Xplogent from Claude Desktop / Claude Code (MCP)
@@ -190,10 +214,23 @@ the agent emits an `approval_required` event your UI resolves.
 > ⚠️ GUI automation (`pyautogui`) needs a real display. On a headless/remote
 > machine, drive Xplogent through the API/dashboard instead.
 
-## Status
+## Updating
 
-Active development. Build order and design live in the project plan. Contributions
-and issues welcome on the `claude/custom-ai-agent-framework-wxq891` branch.
+| Install | How |
+|---|---|
+| Docker (get.sh) | `xplogent-docker update` (backs up first; image tags pinned via `XPLOGENT_IMAGE`) |
+| Desktop / git | Settings → Update in the dashboard, or `xplogent update` |
+| systemd | `git pull && sudo ./deploy/install-server.sh` |
+
+Releases: pushing a `v*` tag publishes `ghcr.io/mubashiribstec/xplogent:<version>`; `main`
+publishes `:latest`.
+
+## Contributing
+
+Issues and pull requests are welcome on
+[github.com/mubashiribstec/xplogent](https://github.com/mubashiribstec/xplogent). Before a PR:
+`ruff check src tests`, `pytest -q`, and `cd web && npm run build` (CI runs the same, plus the
+Docker build and installer checks).
 
 ## License
 

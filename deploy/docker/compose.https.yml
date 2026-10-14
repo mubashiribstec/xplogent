@@ -1,0 +1,24 @@
+# HTTPS mode: Caddy in front with an automatic Let's Encrypt certificate for $DOMAIN.
+# Only ports 80/443 are published; the app is reachable only through Caddy.
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      xplogent:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env (the public hostname pointing at this server)}
+      XPLOGENT_UPSTREAM: xplogent:8765
+    volumes:
+      - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:

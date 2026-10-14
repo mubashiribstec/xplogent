@@ -7,7 +7,21 @@ layer.
 
 ## Install
 
+### On a Linux server (one command, Docker)
+
 ```bash
+curl -fsSL https://raw.githubusercontent.com/mubashiribstec/xplogent/main/get.sh | sudo bash
+```
+
+It installs Docker if needed, asks for your domain (automatic HTTPS) or uses no-domain
+mode, optionally runs local models with Ollama, and prints the address and your access
+token. Manage it afterwards with `xplogent-docker` (`status`, `update`, `backup`, `token`,
+`help`). Full details: `docs/deploy-linux.md` in the repository.
+
+### On your own computer
+
+```bash
+git clone https://github.com/mubashiribstec/xplogent.git && cd xplogent
 # Linux / macOS
 bash install.sh
 # Windows (PowerShell)

@@ -1,0 +1,9 @@
+# No-domain mode: publish the app directly, without TLS.
+#   XPLOGENT_BIND=127.0.0.1 (default)  only this machine (use an SSH tunnel to reach it)
+#   XPLOGENT_BIND=0.0.0.0              your LAN / anyone who can reach the port
+# The access token is still required. Traffic is plain HTTP: don't expose this to the
+# internet; use https mode (compose.https.yml) for that.
+services:
+  xplogent:
+    ports:
+      - "${XPLOGENT_BIND:-127.0.0.1}:${XPLOGENT_PORT:-8765}:8765"

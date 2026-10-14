@@ -75,8 +75,19 @@ jobs:
           XPLOGENT_AUTH_TOKEN: ci-token
         run: |
           cp .env.example .env
-          docker compose config -q
-          docker compose --profile gpu-speech config -q
+          for files in docker-compose.yml:compose.https.yml docker-compose.yml:compose.local.yml; do
+            for profiles in "" ollama ollama-gpu gpu-speech; do
+              COMPOSE_FILE=$files COMPOSE_PROFILES=$profiles docker compose config -q
+            done
+          done
+      - name: Lint the install scripts
+        run: |
+          shellcheck get.sh deploy/docker/xplogent-docker deploy/install-server.sh install.sh
+      - name: Installer dry run (local + https)
+        run: |
+          XPL_SRC=$PWD XPL_BIN_DIR=$RUNNER_TEMP/bin bash get.sh --dry-run --yes --dir $RUNNER_TEMP/a --mode local
+          XPL_SRC=$PWD XPL_BIN_DIR=$RUNNER_TEMP/bin bash get.sh --dry-run --yes --dir $RUNNER_TEMP/b --domain ci.example.com
+          grep -q '^XPLOGENT_AUTH_TOKEN=[0-9a-f]\{64\}$' $RUNNER_TEMP/a/deploy/docker/.env
       - name: Build image
         run: docker build -f deploy/docker/Dockerfile -t xplogent:ci .
       - name: Smoke test the container

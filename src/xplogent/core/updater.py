@@ -53,8 +53,20 @@ def current_commit(root: Path | None = None) -> str:
     return out
 
 
+DOCKER_UPDATE_HINT = ("Running in Docker: update on the server with `xplogent-docker update` "
+                      "(or `docker compose pull && docker compose up -d`).")
+
+
+def in_docker() -> bool:
+    return os.environ.get("XPLOGENT_IN_DOCKER", "").strip() in ("1", "true", "yes")
+
+
 def check_update() -> dict:
     """Compare the local branch against its upstream. Network: runs ``git fetch``."""
+    if in_docker():
+        # The container has no git checkout; the image is replaced from outside.
+        return {"git": False, "docker": True, "update_available": False,
+                "version": os.environ.get("XPLOGENT_VERSION", ""), "error": DOCKER_UPDATE_HINT}
     root = repo_root()
     if not root:
         return {"git": False, "update_available": False,
@@ -81,6 +93,8 @@ def check_update() -> dict:
 
 def pull() -> dict:
     """Fast-forward pull. Returns success + combined git output."""
+    if in_docker():
+        return {"ok": False, "output": DOCKER_UPDATE_HINT}
     root = repo_root()
     if not root:
         return {"ok": False, "output": "not a git checkout"}
