@@ -6,7 +6,6 @@ from typing import Any
 
 from xplogent.providers.anthropic import AnthropicProvider
 from xplogent.providers.base import Provider
-from xplogent.providers.claude_cli import ClaudeCLIProvider
 from xplogent.providers.gemini import GeminiProvider
 from xplogent.providers.ollama import OllamaProvider
 from xplogent.providers.openai import OpenAIProvider
@@ -18,7 +17,6 @@ _PROVIDERS: dict[str, type[Provider]] = {
     "anthropic": AnthropicProvider,
     "openrouter": OpenRouterProvider,
     "gemini": GeminiProvider,
-    "claude-cli": ClaudeCLIProvider,
 }
 
 

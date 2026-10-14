@@ -54,9 +54,9 @@ _PRICING: list[tuple[str, tuple[float, float]]] = [
 
 
 def estimate_cost(model_spec: str, input_tokens: int, output_tokens: int) -> float:
-    """Rough USD cost for a turn. Local providers (ollama/claude-cli) are 0."""
+    """Rough USD cost for a turn. Local providers (ollama) are 0."""
     provider = model_spec.split(":", 1)[0].lower()
-    if provider in ("ollama", "claude-cli"):
+    if provider == "ollama":
         return 0.0
     name = model_spec.split(":", 1)[-1].lower()
     for needle, (pin, pout) in _PRICING:

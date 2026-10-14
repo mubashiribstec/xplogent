@@ -4,7 +4,6 @@ import { ollamaPull, patchConfig, putSecrets, saveOllama, testOllama } from "../
 import { useToast } from "./Toast";
 
 const PROVIDERS = [
-  { id: "claude-cli", label: "Claude (subscription)", note: "No API key — uses the local `claude` CLI", model: "claude-cli:sonnet", keyEnv: "" },
   { id: "ollama", label: "Ollama", note: "Your own Ollama server (or this machine)", model: "ollama:llama3.1", keyEnv: "" },
   { id: "openai", label: "OpenAI", note: "GPT-4o and o-series", model: "openai:gpt-4o", keyEnv: "OPENAI_API_KEY" },
   { id: "anthropic", label: "Anthropic", note: "Claude via API key", model: "anthropic:claude-sonnet-4-6", keyEnv: "ANTHROPIC_API_KEY" },
@@ -82,8 +81,6 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   <input type="password" placeholder="paste your API key" value={key}
                     onChange={(e) => setKey(e.target.value)} />
                 </label>
-              ) : provider.id === "claude-cli" ? (
-                <p className="dim">Make sure Claude Code is installed and you've run <code>claude login</code>. No API key needed.</p>
               ) : (
                 <>
                   <label className="field-l">Ollama server URL <span className="dim">(blank = this machine)</span>

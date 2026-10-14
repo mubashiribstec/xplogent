@@ -59,7 +59,7 @@ xplogent up                   # opens the dashboard in your browser
 
 | Capability | Xplogent |
 |---|---|
-| **Providers** | Ollama (local/offline), OpenAI, Anthropic, Gemini, OpenRouter (200+ models), and **Claude via your subscription** (no API key, through the `claude` CLi) — switch with one config value |
+| **Providers** | Ollama (local, or your own server with a bearer token), OpenAI, Anthropic, Gemini, OpenRouter (200+ models) — switch with one config value |
 | **Council chat** | Ask several models the same question at once and get each answer side-by-side **plus a synthesized final** |
 | **Token & cost** | Real token usage, a context-window gauge, and a live cost estimate in the chat |
 | **Backup** | One-click `.tar.gz` backup/restore and JSON export/import of skills + memory |

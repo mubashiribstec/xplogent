@@ -24,7 +24,6 @@ def test_context_window_lookup_and_override():
 
 def test_estimate_cost():
     assert estimate_cost("ollama:llama3.1", 1000, 1000) == 0.0
-    assert estimate_cost("claude-cli:sonnet", 1000, 1000) == 0.0  # subscription
     # 1M in + 1M out of gpt-4o = 2.5 + 10 = 12.5
     assert estimate_cost("openai:gpt-4o", 1_000_000, 1_000_000) == pytest.approx(12.5)
     assert estimate_cost("unknown:model", 1000, 1000) == 0.0

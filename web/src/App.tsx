@@ -74,7 +74,7 @@ export function App() {
     Promise.all([getStatus().catch(() => null), getSessions().catch(() => ({ sessions: [] }))])
       .then(([st, ss]) => {
         const anyKey = Object.values(st?.secrets ?? {}).some(Boolean);
-        const usingLocal = st?.model?.startsWith("claude-cli") || st?.model?.startsWith("ollama");
+        const usingLocal = st?.model?.startsWith("ollama");
         if (!anyKey && !usingLocal && (ss.sessions?.length ?? 0) === 0) setOnboard(true);
       });
   }, [authed]);
