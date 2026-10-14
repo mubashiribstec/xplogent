@@ -200,3 +200,26 @@ def test_dashboard_update_check_explains_docker(monkeypatch):
     assert info["docker"] is True and info["version"] == "v1.2.3"
     assert "xplogent-docker update" in info["error"]
     assert updater.pull()["ok"] is False
+
+
+@_bash
+def test_installer_flags_apply_to_an_existing_install(tmp_path):
+    """Re-running with --no-ollama used to be ignored ("keeping its settings")."""
+    assert _get_sh(tmp_path, "--mode", "local", "--ollama").returncode == 0
+    before = _env(tmp_path)
+    assert before["COMPOSE_PROFILES"].startswith("ollama")
+    res = _get_sh(tmp_path, "--no-ollama", "--model", "openai:gpt-4o-mini")
+    assert res.returncode == 0, res.stderr
+    after = _env(tmp_path)
+    assert after["COMPOSE_PROFILES"] == "" and after["OLLAMA_HOST"] == ""
+    assert after["XPLOGENT_MODEL"] == "openai:gpt-4o-mini"
+    assert after["XPLOGENT_AUTH_TOKEN"] == before["XPLOGENT_AUTH_TOKEN"]
+    assert after["COMPOSE_FILE"] == before["COMPOSE_FILE"]          # untouched
+    # Only --lan: everything else (model, profiles) stays as it was.
+    assert _get_sh(tmp_path, "--lan").returncode == 0
+    lan = _env(tmp_path)
+    assert lan["XPLOGENT_BIND"] == "0.0.0.0"
+    assert lan["XPLOGENT_MODEL"] == "openai:gpt-4o-mini" and lan["COMPOSE_PROFILES"] == ""
+    # No flags at all: nothing changes.
+    assert _get_sh(tmp_path).returncode == 0
+    assert _env(tmp_path) == lan

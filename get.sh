@@ -36,17 +36,20 @@ OLLAMA="${XPL_OLLAMA:-}"
 MODEL="${XPL_MODEL:-}"
 BIND=""
 YES=0; DRY=0; INSTALL_DOCKER=1; RECONFIGURE=0
+# Settings given explicitly (flags or XPL_* env) are applied even to an existing install.
+EXPLICIT=0
+[ -z "$MODE$DOMAIN$OLLAMA$MODEL" ] || EXPLICIT=1
 BIN_DIR="${XPL_BIN_DIR:-/usr/local/bin}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --yes|-y) YES=1 ;;
-    --mode) MODE="${2:?--mode needs https or local}"; shift ;;
-    --domain) DOMAIN="${2:?--domain needs a hostname}"; MODE=https; shift ;;
-    --lan) BIND=0.0.0.0 ;;
-    --ollama) OLLAMA=1 ;;
-    --no-ollama) OLLAMA=0 ;;
-    --model) MODEL="${2:?--model needs a value}"; shift ;;
+    --mode) MODE="${2:?--mode needs https or local}"; EXPLICIT=1; shift ;;
+    --domain) DOMAIN="${2:?--domain needs a hostname}"; MODE=https; EXPLICIT=1; shift ;;
+    --lan) BIND=0.0.0.0; MODE="${MODE:-local}"; EXPLICIT=1 ;;  # LAN access = no-domain mode
+    --ollama) OLLAMA=1; EXPLICIT=1 ;;
+    --no-ollama) OLLAMA=0; EXPLICIT=1 ;;
+    --model) MODEL="${2:?--model needs a value}"; EXPLICIT=1; shift ;;
     --reconfigure) RECONFIGURE=1 ;;
     --dir) DIR="${2:?--dir needs a path}"; shift ;;
     --ref) REF="${2:?--ref needs a branch or tag}"; shift ;;
@@ -168,17 +171,27 @@ COMPOSE_DIR="$DIR/deploy/docker"
 ENV_FILE="$COMPOSE_DIR/.env"
 
 # ── settings ──────────────────────────────────────────────────────────────────
-FRESH=1
+FRESH=1; PARTIAL=0
 if [ -f "$ENV_FILE" ] && [ -n "$(get_env "$ENV_FILE" XPLOGENT_AUTH_TOKEN)" ]; then
   FRESH=0
-  ok "Existing install found: keeping its settings and access token"
+  if [ "$RECONFIGURE" -eq 1 ]; then
+    ok "Existing install found: asking again (the access token is kept)"
+  elif [ "$EXPLICIT" -eq 1 ]; then
+    # Apply only what was given on the command line; leave everything else as it is.
+    PARTIAL=1
+    ok "Existing install found: applying the given options (other settings and the token are kept)"
+  else
+    ok "Existing install found: keeping its settings and access token"
+  fi
 fi
 
-if [ "$FRESH" -eq 1 ] || [ "$RECONFIGURE" -eq 1 ]; then
+if [ "$FRESH" -eq 1 ] || [ "$RECONFIGURE" -eq 1 ] || [ "$PARTIAL" -eq 1 ]; then
   [ -f "$ENV_FILE" ] || cp "$COMPOSE_DIR/.env.example" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
 
-  if [ -z "$MODE" ]; then
+  if [ -z "$MODE" ] && [ "$PARTIAL" -eq 1 ]; then
+    MODE=keep
+  elif [ -z "$MODE" ]; then
     echo
     echo "How should people reach Xplogent?"
     echo "  - with a domain (e.g. agent.example.com) pointing at this server: automatic HTTPS"
@@ -204,16 +217,21 @@ if [ "$FRESH" -eq 1 ] || [ "$RECONFIGURE" -eq 1 ]; then
       fi
       ;;
     local)
-      if [ -z "$BIND" ]; then
+      if [ -z "$BIND" ] && [ "$PARTIAL" -eq 1 ]; then
+        BIND="$(get_env "$ENV_FILE" XPLOGENT_BIND)"; BIND="${BIND:-127.0.0.1}"
+      elif [ -z "$BIND" ]; then
         if yes_no "Allow other machines on your network to open it (plain HTTP)? [y/N]" n; then BIND=0.0.0.0; else BIND=127.0.0.1; fi
       fi
       set_env "$ENV_FILE" COMPOSE_FILE "docker-compose.yml:compose.local.yml"
       set_env "$ENV_FILE" XPLOGENT_BIND "$BIND"
       ;;
+    keep) ;;
     *) die "--mode must be https or local" ;;
   esac
 
-  if [ -z "$OLLAMA" ]; then
+  if [ -z "$OLLAMA" ] && [ "$PARTIAL" -eq 1 ]; then
+    OLLAMA=keep
+  elif [ -z "$OLLAMA" ]; then
     if yes_no "Run local models with Ollama on this server (needs ~8 GB RAM; GPU used if present)? [y/N]" n; then OLLAMA=1; else OLLAMA=0; fi
   fi
   profile=""
@@ -226,15 +244,18 @@ if [ "$FRESH" -eq 1 ] || [ "$RECONFIGURE" -eq 1 ]; then
     fi
     set_env "$ENV_FILE" COMPOSE_PROFILES "$profile"
     set_env "$ENV_FILE" OLLAMA_HOST "http://ollama:11434"
-    [ -n "$MODEL" ] || MODEL="ollama:llama3.1"
-  else
+    [ -n "$MODEL" ] || [ "$PARTIAL" -eq 1 ] || MODEL="ollama:llama3.1"
+  elif [ "$OLLAMA" != keep ]; then
     set_env "$ENV_FILE" COMPOSE_PROFILES ""
+    set_env "$ENV_FILE" OLLAMA_HOST ""
   fi
 
-  if [ -z "$MODEL" ]; then
+  if [ -z "$MODEL" ] && [ "$PARTIAL" -eq 1 ]; then
+    :  # keep the current model
+  elif [ -z "$MODEL" ]; then
     MODEL="$(ask "Default model (e.g. openai:gpt-4o-mini, anthropic:claude-sonnet-4-6, gemini:gemini-2.5-flash, openrouter:...):" "openai:gpt-4o-mini")"
   fi
-  set_env "$ENV_FILE" XPLOGENT_MODEL "$MODEL"
+  [ -z "$MODEL" ] || set_env "$ENV_FILE" XPLOGENT_MODEL "$MODEL"
   case "${MODEL%%:*}" in
     openai) key_var=OPENAI_API_KEY ;;
     anthropic) key_var=ANTHROPIC_API_KEY ;;
@@ -267,13 +288,27 @@ ok "Installed the helper: $helper"
 # ── start ─────────────────────────────────────────────────────────────────────
 cd "$COMPOSE_DIR"
 say "Pulling images…"
-if [ "$DRY" -eq 0 ] && ! docker compose pull --quiet; then
+if [ "$DRY" -eq 0 ] && ! pull_out="$(docker compose pull --quiet 2>&1)"; then
+  printf '%s\n' "$pull_out" | tail -n 3 >&2
+  image="$(get_env "$ENV_FILE" XPLOGENT_IMAGE)"; image="${image:-ghcr.io/$REPO:latest}"
   # Not fatal when the image is already on this machine (offline re-run, local build).
-  docker image inspect "$(get_env "$ENV_FILE" XPLOGENT_IMAGE)" >/dev/null 2>&1 \
-    || die "could not download the Xplogent image; check the network (or that the GHCR package is public)"
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    case "$pull_out" in
+      *"not found"*|*"manifest unknown"*)
+        die "the image $image does not exist (yet). If a new release is still being built, retry in a few minutes; or pin an existing tag with XPLOGENT_IMAGE in $ENV_FILE" ;;
+      *denied*|*unauthorized*)
+        die "access to $image was denied: the package must be public (GitHub -> Packages -> xplogent -> Package settings -> visibility)" ;;
+      *) die "could not download $image; check this server's internet connection" ;;
+    esac
+  fi
   warn "image pull failed; using the copy already on this machine"
 fi
 [ "$DRY" -eq 1 ] && run docker compose pull --quiet
+case ",$(get_env "$ENV_FILE" COMPOSE_PROFILES)," in
+  *,ollama*) ;;
+  *)  # Ollama switched off: a container from an earlier install would otherwise keep running.
+    [ "$DRY" -eq 1 ] || COMPOSE_PROFILES=ollama,ollama-gpu docker compose rm -sf ollama ollama-gpu >/dev/null 2>&1 || true ;;
+esac
 say "Starting Xplogent…"
 run docker compose up -d --remove-orphans
 if [ "$DRY" -eq 0 ]; then
