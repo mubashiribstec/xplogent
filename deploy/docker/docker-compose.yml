@@ -21,7 +21,7 @@ services:
   xplogent:
     # Prebuilt multi-arch image from GitHub Actions. `docker compose build` (or `up --build`)
     # builds from this checkout instead.
-    image: ${XPLOGENT_IMAGE:-ghcr.io/mubashiribstec/xplogent:latest}
+    image: ${XPLOGENT_IMAGE:-ghcr.io/mubashiribstec/xplogent:sha-860fceb}
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
