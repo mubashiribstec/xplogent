@@ -34,7 +34,7 @@ async def run_trigger(trigger: dict[str, Any], context: str = "",
     """Run one trigger's prompt (with optional event context) and record status."""
     config = config or load_config()
     from xplogent.core.events import EventBus
-    from xplogent.runtime import build_orchestrator, build_runtime
+    from xplogent.runtime import build_runtime, run_team_goal
 
     prompt = trigger["prompt"]
     if context:
@@ -48,11 +48,7 @@ async def run_trigger(trigger: dict[str, Any], context: str = "",
     answer = ""
     try:
         if (trigger.get("mode") or "agent") == "team":
-            rt = build_orchestrator(bus=EventBus(), approve=_auto_approve())
-            try:
-                answer = await rt.orchestrator.run_goal(prompt)
-            finally:
-                await rt.aclose()
+            answer = await run_team_goal(prompt, approve=_auto_approve(), config=config)
         else:
             rt = build_runtime(bus=EventBus(), approve=_auto_approve())
             try:

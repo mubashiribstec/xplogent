@@ -478,77 +478,11 @@ skills_app = typer.Typer(help="Inspect learned skills.")
 schedule_app = typer.Typer(help="Schedule recurring / timed agent jobs.")
 knowledge_app = typer.Typer(help="Export/import learned facts + skills (JSON).")
 docs_app = typer.Typer(help="Ingest documents for RAG (the agent answers from them).")
-evals_app = typer.Typer(help="Run agent eval suites (LLM-judged quality checks).")
 app.add_typer(memory_app, name="memory")
 app.add_typer(skills_app, name="skills")
 app.add_typer(schedule_app, name="schedule")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(docs_app, name="docs")
-app.add_typer(evals_app, name="evals")
-
-
-@evals_app.command("list")
-def evals_list() -> None:
-    """List eval suites and their latest pass-rate."""
-    store = Store(load_config().db_path)
-    suites = store.list_evals()
-    store.close()
-    if not suites:
-        console.print("[dim]no eval suites — create one in the dashboard[/]")
-        return
-    for s in suites:
-        last = s["runs"][0] if s["runs"] else None
-        rate = f"{last['passed']}/{last['total']}" if last else "never run"
-        console.print(f"[cyan]#{s['id']}[/] {s['name']} [dim]({len(s['cases'])} cases)[/] — {rate}")
-
-
-@evals_app.command("run")
-def evals_run(eval_id: int) -> None:
-    """Run a suite by id and print the score."""
-    from xplogent.core.evals import run_suite
-
-    res = asyncio.run(run_suite(eval_id))
-    if res.get("ok") is False:
-        console.print(f"[red]{res.get('error')}[/]")
-        return
-    color = "green" if res["passed"] == res["total"] else "yellow"
-    console.print(f"[{color}]{res['passed']}/{res['total']} passed[/] · score {res['score']}")
-    for r in res["results"]:
-        mark = "[green]✓[/]" if r["passed"] else "[red]✗[/]"
-        console.print(f"  {mark} {r['prompt'][:60]} [dim]— {r['reason']}[/]")
-
-
-@evals_app.command("gate")
-def evals_gate(
-    eval_id: int = typer.Option(None, "--suite", help="Gate one suite (default: all suites)."),
-    min_score: float = typer.Option(0.8, "--min-score", help="Fail below this average score."),
-) -> None:
-    """CI gate: run suite(s) and exit non-zero if any scores below the threshold.
-
-    Use in CI to block regressions, e.g. `xplogent evals gate --min-score 0.9`.
-    """
-    from xplogent.core.evals import run_suite
-
-    store = Store(load_config().db_path)
-    ids = [eval_id] if eval_id is not None else [s["id"] for s in store.list_evals()]
-    names = {s["id"]: s["name"] for s in store.list_evals()}
-    store.close()
-    if not ids:
-        console.print("[yellow]no eval suites to gate[/]")
-        raise typer.Exit(0)
-
-    failed = False
-    for sid in ids:
-        res = asyncio.run(run_suite(sid))
-        ok = res["score"] >= min_score
-        failed = failed or not ok
-        tag = "[green]PASS[/]" if ok else "[red]FAIL[/]"
-        console.print(f"{tag} suite '{names.get(sid, sid)}' — score {res['score']} "
-                      f"({res['passed']}/{res['total']}) vs min {min_score}")
-    if failed:
-        console.print("[red]eval gate failed[/]")
-        raise typer.Exit(1)
-    console.print("[green]eval gate passed[/]")
 
 
 @docs_app.command("ingest")

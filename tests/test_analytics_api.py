@@ -1,4 +1,4 @@
-"""Analytics aggregation + evals CRUD over the REST API."""
+"""Analytics aggregation over the REST API."""
 
 from __future__ import annotations
 
@@ -34,20 +34,3 @@ def test_analytics_aggregates_usage(tmp_path, monkeypatch):
     models = {m["model"]: m for m in a["by_model"]}
     assert models["openai:gpt-4o"]["turns"] == 2
     assert len(a["by_day"]) == 1  # all seeded "now"
-
-
-def test_evals_crud_endpoints(tmp_path, monkeypatch):
-    c = _client(tmp_path, monkeypatch)
-    saved = c.post("/evals", json={
-        "name": "demo", "description": "d",
-        "cases": [{"prompt": "hi", "criteria": "greets back"}],
-    }).json()
-    assert saved["ok"]
-    eid = saved["eval"]["id"]
-    assert saved["eval"]["cases"][0]["prompt"] == "hi"
-
-    listed = c.get("/evals").json()["evals"]
-    assert any(e["id"] == eid for e in listed)
-
-    assert c.delete(f"/evals/{eid}").json()["ok"]
-    assert all(e["id"] != eid for e in c.get("/evals").json()["evals"])

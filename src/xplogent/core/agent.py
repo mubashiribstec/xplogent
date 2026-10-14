@@ -140,22 +140,17 @@ class Agent:
     async def _build_messages(self, task: str) -> list[Message]:
         facts: list[str] = []
         skills: list[tuple[str, str, str]] = []
-        graph_block = ""
         if self.memory:
             facts = await self.memory.recall(task, k=int(self.config.memory.get("retrieval_top_k", 5)))
             relevant = await self.memory.relevant_skills(task, k=3,
                                                          counted=self._recalled_skills)
             skills = [(s.name, s.description, s.body, s.trigger, s.tools) for s in relevant]
             self._recalled_skills.update(s.name for s in relevant)
-            if self.config.memory.get("graph_recall", True):
-                from xplogent.memory.graph import context_block
-                graph_block = context_block(self.memory.store, task)
             if facts or skills:
                 await self._emit(EventType.MEMORY, facts=len(facts), skills=len(skills))
         system = build_system_prompt(
             self.config.agent.get("system_prompt"), facts, skills,
             persona=getattr(self, "_persona", ""), memory_md=getattr(self, "_memory_md", ""),
-            graph_block=graph_block,
         )
         return [Message(role=Role.SYSTEM, content=system), *self.stm.render()]
 

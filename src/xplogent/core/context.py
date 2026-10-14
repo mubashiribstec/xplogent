@@ -30,7 +30,6 @@ def build_system_prompt(
     skills: list[tuple],  # (name, description, body[, trigger, tools])
     persona: str = "",
     memory_md: str = "",
-    graph_block: str = "",
 ) -> str:
     parts: list[str] = []
     if persona.strip():
@@ -40,8 +39,6 @@ def build_system_prompt(
         parts.append("## Curated memory (MEMORY.md)\n" + memory_md.strip())
     if facts:
         parts.append("## What you remember\n" + "\n".join(f"- {f}" for f in facts))
-    if graph_block.strip():
-        parts.append(graph_block.strip())
     if skills:
         skill_block = ["## Learned skills (apply when relevant)"]
         for s in skills:

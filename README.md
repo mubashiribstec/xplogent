@@ -60,7 +60,6 @@ xplogent up                   # opens the dashboard in your browser
 | Capability | Xplogent |
 |---|---|
 | **Providers** | Ollama (local, or your own server with a bearer token), OpenAI, Anthropic, Gemini, OpenRouter (200+ models) — switch with one config value |
-| **Council chat** | Ask several models the same question at once and get each answer side-by-side **plus a synthesized final** |
 | **Token & cost** | Real token usage, a context-window gauge, and a live cost estimate in the chat |
 | **Backup** | One-click `.tar.gz` backup/restore and JSON export/import of skills + memory |
 | **Memory** | SQLite + local embeddings; short-term, long-term, and episodic recall |
@@ -75,7 +74,7 @@ xplogent up                   # opens the dashboard in your browser
 | **Sandboxing** | Run `shell`/`python_exec` locally, in **Docker**, or over **SSH** — swap backends without touching tools |
 | **Resilience** | Transient errors (network/timeout/429) auto-retry with backoff; agents can `delegate_task` to sub-agents |
 | **Safety** | Every risky action is risk-classified and gated (`auto` / `confirm` / `deny`) |
-| **Interfaces** | CLI/TUI, REST + WebSocket API, Web dashboard (Chat · Mission Control · Schedules), Voice |
+| **Interfaces** | CLI/TUI, REST + WebSocket API, Web dashboard (Chat · Calls · Schedules), Voice |
 | **Extensible** | Drop-in Python plugins + MCP servers via one unified tool registry |
 
 ## Multi-agent teams
@@ -99,7 +98,7 @@ the terminal.
 ## Architecture
 
 ```
-              CLI/TUI · Voice · Web (Chat + Mission Control)
+              CLI/TUI · Voice · Web (Chat + Calls)
                                   │
                   REST + WebSocket API (FastAPI)  ── monitor ──┐
                                   │                            │
@@ -131,7 +130,8 @@ xplogent start         # xplogent status / xplogent stop ; service install for b
 Setup is one-time (saved in `~/.xplogent`). The main dashboard views:
 - **Chat** — talk to a single agent, **switch models on the fly**, set effort /
   thinking, and your conversation **persists** across reloads (with New chat).
-- **Mission Control** — launch multi-agent teams and watch them live.
+- **Runs** — history of multi-agent team runs (from the CLI, schedules or triggers).
+- **Call training** — teach the phone agent from recordings, scripts and Q&A sheets.
 - **Calls / Contacts** — the phone agent ([docs/voip.md](docs/voip.md)).
 - **Settings** — change *everything* from the GUI: model, API keys (masked),
   safety policy, concurrency, tool toggles, role/permission editor, memory &

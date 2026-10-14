@@ -37,7 +37,6 @@ memory:
   short_term_max_tokens: 6000   # summarize the conversation past this budget
   retrieval_top_k: 5            # facts/skills injected per turn
   auto_compact_every: 0         # distill MEMORY.md every N tasks (0 = off; use the GUI/API)
-  graph_recall: true            # surface related knowledge-graph entities/relations per turn
   md_max_chars: 6000            # character budget for the agent-curated MEMORY.md (memory tool)
 
 # Live Canvas: let the agent render interactive HTML into a dashboard panel.

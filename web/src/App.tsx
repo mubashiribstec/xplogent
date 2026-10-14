@@ -11,18 +11,13 @@ import { Runs } from "./views/Runs";
 import { Persona } from "./views/Persona";
 import { Knowledge } from "./views/Knowledge";
 import { Analytics } from "./views/Analytics";
-import { Evals } from "./views/Evals";
 import { Audit } from "./views/Audit";
-import { Graph } from "./views/Graph";
-import { Workflows } from "./views/Workflows";
 import { Operator } from "./views/Operator";
 import { Browser } from "./views/Browser";
 import { Calls } from "./views/Calls";
 import { Contacts } from "./views/Contacts";
 import { Training } from "./views/Training";
 import { Triggers } from "./views/Triggers";
-import { Council } from "./Council";
-import { MissionControl } from "./MissionControl";
 import { Schedules } from "./Schedules";
 import { Settings } from "./Settings";
 import { Guide } from "./Guide";
@@ -118,8 +113,6 @@ export function App() {
           </div>
         )}
         {tab === "chat" && <Chat />}
-        {tab === "council" && <Council />}
-        {tab === "mission" && <MissionControl />}
         {tab === "operator" && (caps && !caps.display
           ? <div className="pane"><div className="pane-wide"><div className="card">
               <h3>Operator isn't available on this server</h3>
@@ -133,10 +126,7 @@ export function App() {
         {tab === "training" && <Training />}
         {tab === "runs" && <Runs />}
         {tab === "knowledge" && <Knowledge />}
-        {tab === "graph" && <Graph />}
-        {tab === "workflows" && <Workflows />}
         {tab === "analytics" && <Analytics />}
-        {tab === "evals" && <Evals />}
         {tab === "persona" && <Persona />}
         {tab === "schedules" && <Schedules />}
         {tab === "triggers" && <Triggers />}

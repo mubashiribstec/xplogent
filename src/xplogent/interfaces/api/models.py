@@ -9,21 +9,6 @@ class RunRequest(BaseModel):
     task: str
 
 
-class AgentSpecModel(BaseModel):
-    name: str
-    role: str = "operator"
-    task: str = ""
-    model: str | None = None
-
-
-class OrchestrateRequest(BaseModel):
-    goal: str | None = None
-    specs: list[AgentSpecModel] | None = None
-    max_concurrent: int | None = None
-    mode: str = "auto"
-    auto_approve: bool = False  # explicit opt-in (the dashboard sends it)
-
-
 class ConfigPatch(BaseModel):
     updates: dict = {}
 

@@ -21,11 +21,9 @@ from xplogent.interfaces.api.security import (
 )
 from xplogent.memory.store import Store
 from xplogent.providers.registry import build_provider  # noqa: F401 - re-exported
-from xplogent.runtime import build_orchestrator, build_runtime  # noqa: F401 - re-exported
+from xplogent.runtime import build_runtime  # noqa: F401 - re-exported
 
 # ── shared state ──────────────────────────────────────────────────────────────
-# Live multi-agent runs, keyed by run_id, for monitoring + control.
-active_runs: dict[str, dict] = {}
 # Fire-and-forget tasks (kept referenced so they aren't garbage-collected mid-run).
 bg_tasks: set[asyncio.Task] = set()
 webhook_running: set[int] = set()

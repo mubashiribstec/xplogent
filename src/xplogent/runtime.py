@@ -146,3 +146,21 @@ def build_orchestrator(
         reflector=reflector, skills=skills, approve=approve,
     )
     return OrchestratorRuntime(config=config, orchestrator=orchestrator, store=store, bus=bus)
+
+
+async def run_team_goal(goal: str, *, approve: ApproveCallback | None = None,
+                        config: Config | None = None) -> str:
+    """Run a multi-agent goal unattended (schedules/triggers in team mode), recording
+    its event trace so the Runs page can show what each agent did."""
+    from xplogent.monitor.recorder import TraceRecorder
+
+    bus = EventBus()
+    runtime = build_orchestrator(config, bus=bus, approve=approve)
+    recorder = TraceRecorder(bus, runtime.store, runtime.orchestrator.run_id)
+    recorder.start()
+    try:
+        return await runtime.orchestrator.run_goal(goal)
+    finally:
+        await bus.close()
+        await recorder.stop()
+        await runtime.aclose()

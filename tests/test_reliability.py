@@ -349,14 +349,6 @@ async def test_shell_timeout_kills_child_processes(tmp_path):
 
 
 # ── small fixes ───────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
-async def test_judge_tolerates_non_numeric_score():
-    from xplogent.core.evals import judge_answer
-
-    judge = ScriptedProvider([Message(role=Role.ASSISTANT,
-                                      content='{"pass": "false", "score": "high", "reason": "r"}')])
-    passed, score, reason = await judge_answer(judge, "p", "c", "a")
-    assert passed is False and score == 0.0 and reason == "r"
 
 
 def test_install_root_ignores_unrelated_projects(tmp_path, monkeypatch):

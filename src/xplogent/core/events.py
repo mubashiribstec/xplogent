@@ -37,8 +37,6 @@ class EventType(StrEnum):
     BUDGET = "budget"
     # agent-rendered visual workspace
     CANVAS = "canvas"
-    # visual workflow execution
-    WORKFLOW_NODE = "workflow_node"  # a workflow node changed status / produced output
     # multi-agent
     AGENT_SPAWN = "agent_spawn"      # a worker started
     AGENT_STATUS = "agent_status"    # status change (running/paused/done/cancelled)

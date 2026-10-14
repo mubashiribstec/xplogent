@@ -1,4 +1,4 @@
-"""Dashboard chat WebSocket (agent runs, council, approvals) and the computer-use operator."""
+"""Dashboard chat WebSocket (agent runs, approvals) and the computer-use operator."""
 
 from __future__ import annotations
 
@@ -81,69 +81,6 @@ async def ws(websocket: WebSocket) -> None:
             running["on"] = False
             await send({"type": "done"})
 
-    async def handle_council(msg: dict) -> None:
-        """Ask several models the same question at once, then synthesize."""
-        from xplogent.providers.base import Message, Role, StreamKind
-
-        models = [m for m in msg.get("models", []) if m]
-        task = msg.get("task", "")
-        base = [Message(role=Role.SYSTEM, content="You are a helpful assistant."),
-                Message(role=Role.USER, content=task)]
-        answers: dict[str, str] = {}
-
-        async def run_one(model: str) -> None:
-            provider = deps.build_provider(model)
-            parts: list[str] = []
-            try:
-                async for ev in provider.stream(base):
-                    if ev.kind == StreamKind.TOKEN:
-                        parts.append(ev.text)
-                        await send({"type": "council_token",
-                                                   "channel": model, "text": ev.text})
-                    elif ev.kind == StreamKind.DONE and ev.message and not parts:
-                        parts.append(ev.message.content)
-                        await send({"type": "council_token",
-                                                   "channel": model,
-                                                   "text": ev.message.content})
-            except Exception as exc:  # noqa: BLE001 - one model failing must not sink the rest
-                await send({"type": "council_token", "channel": model,
-                                           "text": f"[error: {exc}]"})
-            finally:
-                await provider.aclose()
-            answers[model] = "".join(parts)
-            await send({"type": "council_done", "channel": model})
-
-        await asyncio.gather(*[run_one(m) for m in models])
-
-        synthesis = ""
-        if msg.get("synthesize", True) and answers:
-            synth_model = msg.get("synth_model") or models[0]
-            merged = "\n\n".join(f"[{m}]\n{a}" for m, a in answers.items())
-            sp = ("You are given answers from multiple AI models to the same question. "
-                  "Produce the single best, most accurate combined answer, noting any "
-                  f"important disagreements.\n\nQuestion:\n{task}\n\nAnswers:\n{merged}")
-            provider = deps.build_provider(synth_model)
-            try:
-                async for ev in provider.stream(
-                        [Message(role=Role.SYSTEM, content="You synthesize multiple answers."),
-                         Message(role=Role.USER, content=sp)]):
-                    if ev.kind == StreamKind.TOKEN:
-                        synthesis += ev.text
-                        await send({"type": "council_token",
-                                                   "channel": "synthesis", "text": ev.text})
-            finally:
-                await provider.aclose()
-            await send({"type": "council_done", "channel": "synthesis"})
-
-        # Persist the turn so it appears in history.
-        if session_id is not None:
-            with Store(cfg.db_path) as store:
-                store.add_message(session_id, "user", task)
-                store.set_session_title(session_id, task[:60])
-                store.add_message(session_id, "assistant",
-                                  synthesis or "\n\n".join(f"**{m}**: {a}" for m, a in answers.items()))
-        await send({"type": "done"})
-
     async def guarded(coro) -> None:
         """Run a handler so it always ends the turn, even on failure."""
         try:
@@ -171,8 +108,6 @@ async def ws(websocket: WebSocket) -> None:
                 rt = current.get("runtime")
                 if rt is not None:
                     rt.agent.inject(str(msg.get("text") or msg.get("task") or ""))
-            elif kind == "task" and len([m for m in msg.get("models", []) if m]) > 1:
-                chan.spawn(guarded(handle_council(msg)))
             elif kind == "task":
                 chan.spawn(handle_task(msg))
             elif kind == "cancel":

@@ -134,10 +134,6 @@ export class XplogentSocket {
     this.send({ type: "task", task, ...opts });
   }
 
-  sendCouncil(task: string, models: string[], synthModel?: string) {
-    this.send({ type: "task", task, models, synthesize: true, synth_model: synthModel });
-  }
-
   cancel() { this.send({ type: "cancel" }); }
   sendSteer(text: string) { this.send({ type: "steer", text }); }
   resolveApproval(id: string, allowed: boolean) { this.send({ type: "approval", id, allowed }); }
@@ -171,30 +167,6 @@ export class OperatorSocket {
   cancel() { this.send({ type: "cancel" }); }
   resolveApproval(id: string, allowed: boolean) { this.send({ type: "approval", id, allowed }); }
   close() { this.closed = true; this.ws.close(); }
-}
-
-// ── Multi-agent orchestration + monitoring ────────────────────────────────────
-export interface OrchestrateOptions {
-  goal?: string;
-  specs?: { name: string; role: string; task: string }[];
-  max_concurrent?: number;
-  mode?: string;
-  auto_approve?: boolean;
-}
-
-export async function orchestrate(opts: OrchestrateOptions): Promise<{ run_id: string }> {
-  const r = await fetch("/orchestrate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(opts),
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok || !data.run_id) throw new Error(data.error || `HTTP ${r.status}`);
-  return data;
-}
-
-export async function controlAgent(agentId: string, action: "pause" | "resume" | "cancel") {
-  await fetch(`/agents/${agentId}/${action}`, { method: "POST" });
 }
 
 // ── Settings / config ─────────────────────────────────────────────────────────
@@ -318,34 +290,6 @@ export async function setBudget(b: Budget): Promise<{ ok: boolean; budget: Budge
   return (await fetch("/budget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) })).json();
 }
 
-// ── Evals ─────────────────────────────────────────────────────────────────────
-export interface EvalCase { id?: number; prompt: string; criteria: string; }
-export interface EvalRun { passed: number; total: number; score: number; model: string; created_at: number; }
-export interface EvalSuite {
-  id: number; name: string; description: string;
-  cases: EvalCase[]; runs: EvalRun[];
-}
-export async function getEvals(): Promise<{ evals: EvalSuite[] }> {
-  return (await fetch("/evals")).json();
-}
-export async function saveEval(body: { id?: number; name: string; description?: string; cases: EvalCase[] }): Promise<any> {
-  return (await fetch("/evals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
-}
-export async function runEval(id: number): Promise<any> {
-  return (await fetch(`/evals/${id}/run`, { method: "POST" })).json();
-}
-export async function deleteEval(id: number) {
-  await fetch(`/evals/${id}`, { method: "DELETE" });
-}
-export interface AbVariant { name: string; system_prompt?: string; model?: string; }
-export interface AbResult { name: string; system_prompt: string; model: string; passed: number; total: number; score: number; }
-export async function runEvalAB(id: number, variants: AbVariant[]): Promise<{ ok: boolean; error?: string; variants: AbResult[]; winner: string; winner_detail: AbResult }> {
-  return (await fetch(`/evals/${id}/ab`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ variants }) })).json();
-}
-export async function promoteEval(body: { system_prompt?: string; model?: string }): Promise<{ ok: boolean; promoted: string[] }> {
-  return (await fetch("/evals/promote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
-}
-
 // ── Chrome extension (real-browser control) ───────────────────────────────────
 export interface BrowserTab { id: number; title: string; url: string; active: boolean; }
 export interface InputActivity { field: string; type: string; page: string; url: string; redacted?: boolean; ts?: number; }
@@ -387,33 +331,6 @@ export async function importContactsCsv(csv: string): Promise<{ ok: boolean; imp
 export async function deleteContact(id: number) { await fetch(`/voip/contacts/${id}`, { method: "DELETE" }); }
 export async function addDnc(phone: string) {
   await fetch("/voip/dnc", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone }) });
-}
-
-// ── Knowledge graph ───────────────────────────────────────────────────────────
-export interface GraphNode { name: string; type: string; mentions: number; }
-export interface GraphEdge { subject: string; relation: string; object: string; }
-export async function getGraph(limit = 300): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
-  return (await fetch(`/graph?limit=${limit}`)).json();
-}
-
-// ── Visual workflows ──────────────────────────────────────────────────────────
-export interface WfNode { id: string; type: "input" | "agent" | "tool"; name: string; x: number; y: number; config: Record<string, any>; }
-export interface WfEdge { from: string; to: string; }
-export interface WfGraph { nodes: WfNode[]; edges: WfEdge[]; }
-export interface Workflow { id: number; name: string; graph: WfGraph; updated_at: number; }
-export interface WfResult { node_id: string; name: string; status: string; output: string; }
-
-export async function getWorkflows(): Promise<{ workflows: Workflow[] }> {
-  return (await fetch("/workflows")).json();
-}
-export async function saveWorkflow(body: { id?: number; name: string; graph: WfGraph }): Promise<{ ok: boolean; workflow: Workflow }> {
-  return (await fetch("/workflows", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
-}
-export async function runWorkflow(id: number): Promise<{ ok: boolean; error?: string; results: WfResult[] }> {
-  return (await fetch(`/workflows/${id}/run`, { method: "POST" })).json();
-}
-export async function deleteWorkflow(id: number) {
-  await fetch(`/workflows/${id}`, { method: "DELETE" });
 }
 
 // ── Proactive triggers ────────────────────────────────────────────────────────
@@ -664,24 +581,6 @@ export async function getGuidePages(): Promise<{ pages: { slug: string; title: s
 
 export async function getGuidePage(slug: string): Promise<{ content: string }> {
   return (await fetch(`/guide/${slug}`)).json();
-}
-
-// Live monitor stream for one orchestration run.
-export class MonitorSocket {
-  private ws: WebSocket;
-  private closed = false;
-
-  // ``onEnd`` fires when the server ends the stream (the run finished), not on close().
-  constructor(runId: string, onEvent: (ev: XplogentEvent) => void, onEnd?: () => void) {
-    this.ws = new WebSocket(wsUrl(`/ws/monitor?run_id=${encodeURIComponent(runId)}${wsTokenParam()}`));
-    this.ws.onmessage = (m) => { const ev = parseFrame(m.data); if (ev) onEvent(ev); };
-    this.ws.onclose = () => { if (!this.closed) onEnd?.(); };
-  }
-
-  close() {
-    this.closed = true;
-    this.ws.close();
-  }
 }
 
 // ── Phone agent training ─────────────────────────────────────────────────────

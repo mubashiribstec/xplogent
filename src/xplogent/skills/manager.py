@@ -25,12 +25,6 @@ class SkillManager:
         for fact in result.facts:
             await self.memory.remember(fact, source="reflection")
 
-        relations = 0
-        if result.relations:
-            from xplogent.memory.graph import ingest_relations
-
-            relations = ingest_relations(self.memory.store, result.relations, source="reflection")
-
         skill_name: str | None = None
         skill_action: str | None = None
         skill_level = ""
@@ -50,7 +44,7 @@ class SkillManager:
                 skill_name, skill_action, skill_level, skill_stars,
                 result.skill.description[:120])
 
-        return {"facts": len(result.facts), "relations": relations, "skill": skill_name,
+        return {"facts": len(result.facts), "skill": skill_name,
                 "skill_action": skill_action, "skill_level": skill_level,
                 "skill_stars": skill_stars}
 

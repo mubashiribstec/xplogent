@@ -59,8 +59,8 @@ xplogent service install   # optional: auto-start at login/boot
 ```
 
 Open the dashboard at `http://127.0.0.1:8765`. From there you can chat (with a
-**model switcher** and effort/thinking controls), run multi-agent teams in
-**Mission Control**, change every setting in **Settings**, and read this guide.
+**model switcher** and effort/thinking controls), run the phone agent from **Calls**,
+change every setting in **Settings**, and read this guide.
 
 Setup is **one time** — your choices are saved under `~/.xplogent`, so `start`/`up`
 just work afterward.

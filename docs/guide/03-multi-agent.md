@@ -19,8 +19,7 @@ xplogent team -a "scout:researcher:find facts about X" \
               -a "writer:coder:write a summary to notes.md"
 ```
 
-In the dashboard, open **Mission Control**, type a goal, set the concurrency
-slider, and click **Launch team**.
+Teams also run unattended: choose **team** mode for a schedule or trigger.
 
 ## How agents collaborate
 
@@ -33,6 +32,6 @@ A shared **task board** tracks each subtask (pending → active → done/failed)
 
 ## Monitoring
 
-Mission Control shows a live card per agent (status, current tool, steps,
-tokens), the task board, and the inter-agent chatter. You can **pause**,
-**resume**, or **cancel** any agent mid-run.
+The CLI streams each agent's progress while a team runs. Afterwards the
+dashboard's **Runs** page shows every team run with each agent's steps, tools
+and messages.

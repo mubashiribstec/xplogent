@@ -65,6 +65,36 @@ def test_api_app_builds_with_monitoring_routes():
     # HTTP routes via the public OpenAPI schema; WebSocket routes aren't in it.
     paths = set(app.openapi()["paths"])
     paths |= {r.path for router in ALL_ROUTERS for r in router.routes if hasattr(r, "path")}
-    assert "/orchestrate" in paths
     assert "/runs/{run_id}/events" in paths
-    assert "/ws/monitor" in paths
+    assert "/orchestrate" not in paths          # removed with Mission Control
+
+
+@pytest.mark.asyncio
+async def test_unattended_team_runs_are_recorded(monkeypatch):
+    """Schedules/triggers in team mode leave a trace the Runs page can show."""
+    import xplogent.runtime as runtime_mod
+    from xplogent import runtime
+
+    made = {}
+
+    class FakeOrch:
+        run_id = "team-1"
+
+        async def run_goal(self, goal):
+            from xplogent.core.events import Event, EventType
+            made["store"].create_run(self.run_id, goal=goal, mode="auto")
+            await made["bus"].publish(Event(type=EventType.STEP_START, data={"agent_id": "a"}))
+            return "answer"
+
+    class FakeRuntime:
+        def __init__(self, bus):
+            self.store, self.orchestrator = Store(load_config().db_path), FakeOrch()
+            made["store"], made["bus"] = self.store, bus
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(runtime_mod, "build_orchestrator",
+                        lambda config=None, *, bus=None, approve=None: FakeRuntime(bus))
+    assert await runtime.run_team_goal("check the inbox") == "answer"
+    assert any(e["agent_id"] == "a" for e in made["store"].run_events("team-1"))

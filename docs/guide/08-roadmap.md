@@ -2,7 +2,7 @@
 
 Xplogent already covers local + hosted models, memory with self-improvement,
 multi-agent orchestration, scheduling, vision, sandboxed execution, backup, and a
-multi-model "council". Here are researched next steps, roughly by value/effort.
+phone agent. Here are researched next steps, roughly by value/effort.
 
 ## Near-term, high value
 - **RAG over your documents** — a `documents` tool + loader (PDF/markdown/text) that

@@ -283,16 +283,12 @@ class Scheduler:
 
     async def _run_job(self, job: dict[str, Any]) -> None:
         from xplogent.core.events import EventBus
-        from xplogent.runtime import build_orchestrator, build_runtime
+        from xplogent.runtime import build_runtime, run_team_goal
 
         prompt = job["prompt"]
         approve = _auto_approve()
         if (job.get("mode") or "agent") == "team":
-            runtime = build_orchestrator(bus=EventBus(), approve=approve)
-            try:
-                await runtime.orchestrator.run_goal(prompt)
-            finally:
-                await runtime.aclose()
+            await run_team_goal(prompt, approve=approve)
         else:
             runtime = build_runtime(bus=EventBus(), approve=approve)
             try:

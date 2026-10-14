@@ -112,29 +112,6 @@ CREATE TABLE IF NOT EXISTS usage (
     session_id INTEGER,
     created_at REAL
 );
-CREATE TABLE IF NOT EXISTS evals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE,
-    description TEXT,
-    created_at REAL
-);
-CREATE TABLE IF NOT EXISTS eval_cases (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    eval_id INTEGER,
-    prompt TEXT,
-    criteria TEXT,
-    created_at REAL
-);
-CREATE TABLE IF NOT EXISTS eval_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    eval_id INTEGER,
-    model TEXT,
-    passed INTEGER,
-    total INTEGER,
-    score REAL,
-    detail TEXT,
-    created_at REAL
-);
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor TEXT,
@@ -144,29 +121,6 @@ CREATE TABLE IF NOT EXISTS audit (
     allowed INTEGER,
     detail TEXT,
     created_at REAL
-);
-CREATE TABLE IF NOT EXISTS kg_nodes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE,
-    type TEXT,
-    mentions INTEGER DEFAULT 1,
-    created_at REAL
-);
-CREATE TABLE IF NOT EXISTS kg_edges (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    subject TEXT,
-    relation TEXT,
-    object TEXT,
-    source TEXT,
-    created_at REAL,
-    UNIQUE(subject, relation, object)
-);
-CREATE TABLE IF NOT EXISTS workflows (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    graph TEXT,
-    created_at REAL,
-    updated_at REAL
 );
 CREATE TABLE IF NOT EXISTS skill_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -253,11 +207,7 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value INTEGER DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_cases_eval ON eval_cases(eval_id);
-CREATE INDEX IF NOT EXISTS idx_evalruns_eval ON eval_runs(eval_id);
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(created_at);
-CREATE INDEX IF NOT EXISTS idx_kg_edge_subj ON kg_edges(subject);
-CREATE INDEX IF NOT EXISTS idx_kg_edge_obj ON kg_edges(object);
 """
 
 
@@ -793,61 +743,6 @@ class Store:
             "SELECT model, input_tokens, output_tokens, cost, created_at FROM usage "
             "WHERE created_at>=? ORDER BY created_at", (since,))]
 
-    # -- evals -----------------------------------------------------------------
-    def upsert_eval(self, name: str, description: str = "") -> int:
-        row = self._query("SELECT id FROM evals WHERE name=?", (name,))
-        if row:
-            self._write("UPDATE evals SET description=? WHERE id=?",
-                        (description, row[0]["id"]))
-            return int(row[0]["id"])
-        cur = self._write(
-            "INSERT INTO evals (name, description, created_at) VALUES (?,?,?)",
-            (name, description, time.time()))
-        return int(cur.lastrowid)
-
-    def add_eval_case(self, eval_id: int, prompt: str, criteria: str) -> int:
-        cur = self._write(
-            "INSERT INTO eval_cases (eval_id, prompt, criteria, created_at) VALUES (?,?,?,?)",
-            (eval_id, prompt, criteria, time.time()))
-        return int(cur.lastrowid)
-
-    def set_eval_cases(self, eval_id: int, cases: list[dict[str, str]]) -> None:
-        """Replace a suite's cases wholesale (used when saving from the GUI)."""
-        self._write("DELETE FROM eval_cases WHERE eval_id=?", (eval_id,))
-        for c in cases:
-            self.add_eval_case(eval_id, c.get("prompt", ""), c.get("criteria", ""))
-
-    def list_evals(self) -> list[dict[str, Any]]:
-        out = []
-        for r in self._query("SELECT id, name, description, created_at FROM evals ORDER BY id DESC"):
-            d = dict(r)
-            d["cases"] = [dict(c) for c in self._query(
-                "SELECT id, prompt, criteria FROM eval_cases WHERE eval_id=? ORDER BY id",
-                (d["id"],))]
-            d["runs"] = [dict(rr) for rr in self._query(
-                "SELECT passed, total, score, model, created_at FROM eval_runs "
-                "WHERE eval_id=? ORDER BY id DESC LIMIT 20", (d["id"],))]
-            out.append(d)
-        return out
-
-    def eval_cases(self, eval_id: int) -> list[dict[str, Any]]:
-        return [dict(r) for r in self._query(
-            "SELECT id, prompt, criteria FROM eval_cases WHERE eval_id=? ORDER BY id",
-            (eval_id,))]
-
-    def add_eval_run(self, eval_id: int, model: str, passed: int, total: int,
-                     score: float, detail: str) -> int:
-        cur = self._write(
-            "INSERT INTO eval_runs (eval_id, model, passed, total, score, detail, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (eval_id, model, passed, total, score, detail, time.time()))
-        return int(cur.lastrowid)
-
-    def delete_eval(self, eval_id: int) -> None:
-        self._write("DELETE FROM eval_cases WHERE eval_id=?", (eval_id,))
-        self._write("DELETE FROM eval_runs WHERE eval_id=?", (eval_id,))
-        self._write("DELETE FROM evals WHERE id=?", (eval_id,))
-
     # -- audit log -------------------------------------------------------------
     def add_audit(self, actor: str, action: str, target: str = "", risk: str = "",
                   allowed: bool | None = None, detail: str = "") -> None:
@@ -871,76 +766,6 @@ class Store:
         sql += " ORDER BY id DESC LIMIT ?"
         params.append(limit)
         return [dict(r) for r in self._query(sql, tuple(params))]
-
-    # -- knowledge graph -------------------------------------------------------
-    def upsert_node(self, name: str, type_: str = "") -> None:
-        existing = self._query("SELECT id, type FROM kg_nodes WHERE name=?", (name,))
-        if existing:
-            self._write("UPDATE kg_nodes SET mentions = mentions + 1, "
-                        "type = COALESCE(NULLIF(type,''), ?) WHERE name=?", (type_, name))
-        else:
-            self._write("INSERT INTO kg_nodes (name, type, mentions, created_at) VALUES (?,?,1,?)",
-                        (name, type_, time.time()))
-
-    def add_edge(self, subject: str, relation: str, object_: str, source: str = "") -> None:
-        self.upsert_node(subject)
-        self.upsert_node(object_)
-        self._write(
-            "INSERT OR IGNORE INTO kg_edges (subject, relation, object, source, created_at) "
-            "VALUES (?,?,?,?,?)", (subject, relation, object_, source, time.time()))
-
-    def graph_snapshot(self, limit: int = 300) -> dict[str, list[dict[str, Any]]]:
-        nodes = [dict(r) for r in self._query(
-            "SELECT name, type, mentions FROM kg_nodes ORDER BY mentions DESC LIMIT ?", (limit,))]
-        keep = {n["name"] for n in nodes}
-        edges = []
-        for r in self._query("SELECT subject, relation, object FROM kg_edges ORDER BY id DESC LIMIT ?",
-                             (limit * 2,)):
-            d = dict(r)
-            if d["subject"] in keep and d["object"] in keep:
-                edges.append(d)
-        return {"nodes": nodes, "edges": edges}
-
-    def neighbors(self, entity: str, limit: int = 12) -> list[dict[str, Any]]:
-        return [dict(r) for r in self._query(
-            "SELECT subject, relation, object FROM kg_edges "
-            "WHERE subject=? OR object=? ORDER BY id DESC LIMIT ?", (entity, entity, limit))]
-
-    def kg_node_names(self) -> list[str]:
-        return [r["name"] for r in self._query("SELECT name FROM kg_nodes")]
-
-    # -- workflows -------------------------------------------------------------
-    def save_workflow(self, name: str, graph: dict, workflow_id: int | None = None) -> int:
-        now = time.time()
-        blob = json.dumps(graph)
-        if workflow_id:
-            self._write("UPDATE workflows SET name=?, graph=?, updated_at=? WHERE id=?",
-                        (name, blob, now, workflow_id))
-            return workflow_id
-        cur = self._write(
-            "INSERT INTO workflows (name, graph, created_at, updated_at) VALUES (?,?,?,?)",
-            (name, blob, now, now))
-        return int(cur.lastrowid)
-
-    def list_workflows(self) -> list[dict[str, Any]]:
-        out = []
-        for r in self._query("SELECT id, name, graph, updated_at FROM workflows ORDER BY id DESC"):
-            d = dict(r)
-            d["graph"] = json.loads(d["graph"] or "{}")
-            out.append(d)
-        return out
-
-    def get_workflow(self, workflow_id: int) -> dict[str, Any] | None:
-        rows = self._query("SELECT id, name, graph, updated_at FROM workflows WHERE id=?",
-                           (workflow_id,))
-        if not rows:
-            return None
-        d = dict(rows[0])
-        d["graph"] = json.loads(d["graph"] or "{}")
-        return d
-
-    def delete_workflow(self, workflow_id: int) -> None:
-        self._write("DELETE FROM workflows WHERE id=?", (workflow_id,))
 
     # -- proactive triggers ----------------------------------------------------
     def add_trigger(self, name: str, type_: str, spec: str, prompt: str,

@@ -1,4 +1,4 @@
-"""Memory, skills, knowledge graph, persona (SOUL.md / MEMORY.md)."""
+"""Memory, skills, persona (SOUL.md / MEMORY.md)."""
 
 from __future__ import annotations
 
@@ -85,23 +85,6 @@ async def skills_install(body: dict) -> dict:
         await embed_provider.aclose()
         store.close()
     return res
-
-
-# ── Knowledge graph ──────────────────────────────────────────────────────
-
-
-@router.get("/graph")
-async def graph(limit: int = 300) -> dict:
-    with Store(load_config().db_path) as store:
-        snap = store.graph_snapshot(limit=limit)
-    return snap
-
-
-@router.get("/graph/neighbors")
-async def graph_neighbors(entity: str) -> dict:
-    with Store(load_config().db_path) as store:
-        rows = store.neighbors(entity, limit=50)
-    return {"entity": entity, "edges": rows}
 
 
 # ── Persona (SOUL.md) + curated memory (MEMORY.md) ───────────────────────
