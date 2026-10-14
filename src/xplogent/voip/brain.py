@@ -35,7 +35,9 @@ Rules:
 - If the customer is upset, asks for a person, or the request is outside your scope, call
   transfer_to_human.
 - Confirm important details (name, number, date) by repeating them back.
-- When the conversation is finished, call log_outcome then end_call."""
+- When the conversation is finished, call log_outcome then end_call.
+- Keys the caller presses on their phone keypad arrive as [keypad: digits] (for example an
+  account number or a menu choice). Repeat important numbers back to confirm them."""
 
 OUTCOMES = {"resolved", "callback", "transferred", "interested", "not_interested",
             "do_not_call", "other"}
@@ -59,6 +61,11 @@ TOOLS = [
         "type": "object", "properties": {"reason": {"type": "string"}}}),
     ToolSpec("lookup_customer", "Re-read the record of the customer on this call (if known).", {
         "type": "object", "properties": {}}),
+    ToolSpec("press_keys", "Press phone keypad keys (DTMF), e.g. to choose an option in a company's "
+             "phone menu when you placed the call. They are sent after your current sentence.", {
+        "type": "object",
+        "properties": {"digits": {"type": "string", "description": "Keys: 0-9, * and #, e.g. '2' or '1234#'."}},
+        "required": ["digits"]}),
     ToolSpec("end_call", "Politely end the call after saying goodbye.", {
         "type": "object", "properties": {"reason": {"type": "string"}}}),
 ]
@@ -75,6 +82,7 @@ class CallState:
     end: bool = False
     do_not_call: bool = False
     transfer_failed: bool = False
+    dtmf_out: str = ""                  # keys to press after the current reply (press_keys)
     events: list[str] = field(default_factory=list)
 
 
@@ -118,7 +126,7 @@ class CallBrain:
     def __init__(self, provider: Provider, *, persona: str = "", playbook: str = "",
                  contact: dict[str, Any] | None = None, retrieve: Retriever | None = None,
                  store: Any = None, max_turns: int = 16, temperature: float = 0.3,
-                 can_transfer: bool = True) -> None:
+                 can_transfer: bool = True, can_send_dtmf: bool = False) -> None:
         self.provider = provider
         self.persona = persona or "You are a friendly, professional customer-service agent."
         self.playbook = playbook
@@ -131,7 +139,9 @@ class CallBrain:
         self.history: list[Message] = []
         # Only offer a hand-off that can actually happen (a number is configured).
         self.can_transfer = can_transfer
-        self.tools = TOOLS if can_transfer else [t for t in TOOLS if t.name != "transfer_to_human"]
+        hidden = ({"transfer_to_human"} if not can_transfer else set()) | \
+            ({"press_keys"} if not can_send_dtmf else set())
+        self.tools = [t for t in TOOLS if t.name not in hidden]
         self.notes: list[str] = []      # supervisor instructions for the rest of the call
         self.paused = False             # a person is handling the call: the AI stays quiet
 
@@ -192,6 +202,12 @@ class CallBrain:
             st.transfer_reason = str(args.get("reason", ""))
             st.outcome = st.outcome or "transferred"
             return "transferring now; tell the customer you are connecting them"
+        if name == "press_keys":
+            digits = "".join(c for c in str(args.get("digits", "")) if c in "0123456789*#ABCDabcd")[:32]
+            if not digits:
+                return "no valid keys (use 0-9, * and #)"
+            st.dtmf_out += digits.upper()
+            return f"will press {digits} after this sentence"
         if name == "end_call":
             st.end = True
             return "call will end after your goodbye"

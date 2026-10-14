@@ -202,6 +202,7 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
       else if (m.type === "clear") clearAudio();
       else if (m.type === "transfer") add({ who: "note", text: `📞 the agent transfers the call${m.to ? ` to ${m.to}` : ""} (${m.reason || "no reason"})` });
       else if (m.type === "hangup") add({ who: "note", text: "📴 the agent hung up" });
+      else if (m.type === "dtmf_sent") add({ who: "note", text: `🔢 the agent pressed ${m.digits}` });
       else if (m.type === "error") add({ who: "note", text: `⚠ ${m.error}` });
       else if (m.type === "ended") {
         add({ who: "note", text: `ended · outcome: ${m.outcome || "—"}${m.summary ? ` · ${m.summary}` : ""}${m.latency_ms?.length ? ` · first-word delay ${m.latency_ms.join(", ")} ms` : ""}` });
@@ -216,6 +217,11 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
     setText("");
   };
   const hang = () => ws.current?.send(JSON.stringify({ type: "hangup" }));
+  const press = (digit: string) => {
+    if (ws.current?.readyState !== WebSocket.OPEN) return;
+    clearAudio();
+    ws.current.send(JSON.stringify({ type: "dtmf", digit }));
+  };
 
   const stopMic = () => { micStop.current?.(); micStop.current = null; setMic(false); };
   const startMic = async () => {
@@ -273,6 +279,12 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
             ? <div key={i} className="dim" style={{ fontSize: 12 }}>{l.text}</div>
             : <div key={i}><b style={{ color: l.who === "agent" ? "var(--accent)" : "var(--amber)" }}>
                 {l.who === "agent" ? "Agent" : "You"}:</b> {l.text}</div>)}
+        </div>
+      )}
+      {state === "live" && (
+        <div className="keypad" aria-label="phone keypad">
+          {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((k) => (
+            <button key={k} className="btn" onClick={() => press(k)}>{k}</button>))}
         </div>
       )}
       {state === "live" && (

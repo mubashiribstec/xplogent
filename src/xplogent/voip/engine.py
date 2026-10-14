@@ -53,13 +53,23 @@ class CallSession:
                  max_call_s: float = 900.0, realtime: bool = True,
                  lead_s: float = 0.2,
                  on_events: Callable[[list[str]], Awaitable[None]] | None = None,
-                 transfer_timeout_s: float = 60.0) -> None:
+                 transfer_timeout_s: float = 60.0,
+                 send_dtmf: Callable[[str], Awaitable[None]] | None = None,
+                 dtmf_keys: dict[str, str] | None = None, dtmf_gap_s: float = 2.0) -> None:
         self.brain, self.stt, self.tts = brain, stt, tts
         self.send_audio, self.clear_audio = send_audio, clear_audio
         self.hangup_cb, self.transfer_cb = hangup, transfer
         self.on_turn = on_turn
         self.on_events = on_events          # tool events after each reply (test calls)
         self.transfer_timeout_s = transfer_timeout_s
+        # Keypad: digits in (collected, then given to the agent) and out (press_keys).
+        self.send_dtmf = send_dtmf
+        self.dtmf_keys = {str(k): str(v) for k, v in (dtmf_keys or {}).items()}
+        self.dtmf_gap_s = dtmf_gap_s
+        self._dtmf_buf = ""
+        self._dtmf_timer: asyncio.Task | None = None
+        self._last_agent_line = ""
+        self.dtmf_enabled = True
         self._events_seen = 0
         self.greeting = greeting
         self.vad = vad or VAD()
@@ -91,7 +101,7 @@ class CallSession:
 
     async def stop(self) -> None:
         self.finished.set()
-        for task in (self._turn_task, self._watchdog, self._transfer_timer):
+        for task in (self._turn_task, self._watchdog, self._transfer_timer, self._dtmf_timer):
             if task and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -114,6 +124,8 @@ class CallSession:
         return time.time() - self.started
 
     def _record(self, speaker: str, text: str) -> None:
+        if speaker == "agent" and text.strip():
+            self._last_agent_line = text.strip()
         if self.on_turn and text.strip():
             try:
                 self.on_turn(speaker, text.strip())
@@ -175,12 +187,12 @@ class CallSession:
             self._turn_task.cancel()
         self._turn_task = asyncio.create_task(self._reply(text.strip()))
 
-    async def _reply(self, text: str) -> None:
+    async def _reply(self, text: str, record_as: str | None = None) -> None:
         try:
-            if len(text) < 2:
+            if len(text) < 2 and record_as is None:
                 return
             self._last_activity = time.time()
-            self._record("caller", text)
+            self._record("caller", record_as or text)
             if getattr(self.brain, "paused", False):
                 return              # a person is handling the call
             reply_parts: list[str] = []
@@ -204,6 +216,13 @@ class CallSession:
                 raise
             if reply_parts:
                 self._record("agent", " ".join(reply_parts))
+            st = self.brain.state
+            if getattr(st, "dtmf_out", "") and self.send_dtmf is not None:
+                digits, st.dtmf_out = st.dtmf_out, ""
+                try:
+                    await self.send_dtmf(digits)
+                except Exception:  # noqa: BLE001 - a failed key press must not drop the call
+                    _log.exception("sending DTMF %s failed", digits)
             if self.on_events:
                 with contextlib.suppress(Exception):
                     await self.on_events(self.brain.state.events[self._events_seen:])
@@ -215,6 +234,57 @@ class CallSession:
             _log.exception("turn failed")
             with contextlib.suppress(Exception):
                 await self._say("Sorry, I had a problem. Could you say that again?")
+
+    # -- keypad (DTMF) ------------------------------------------------------------------
+    async def on_dtmf(self, digit: str) -> None:
+        """A key the caller pressed. Digits are collected until ``#`` or a pause of
+        ``dtmf_gap_s``, then given to the agent as ``[keypad: 123]``. Keys listed in
+        ``dtmf_keys`` act at once (``transfer``, ``repeat``)."""
+        digit = str(digit).strip().upper()[:1]
+        if not self.dtmf_enabled or self.finished.is_set() or not digit or digit not in "0123456789*#ABCD":
+            return
+        self._last_activity = time.time()
+        self._idle_prompted = False
+        if self._speaking:
+            await self._barge_in()
+        action = self.dtmf_keys.get(digit) if not self._dtmf_buf else None
+        if action:
+            self._run_turn(self._quick_key(digit, action))
+            return
+        if digit == "#":
+            self._flush_dtmf()
+            return
+        self._dtmf_buf += digit
+        if self._dtmf_timer is not None and not self._dtmf_timer.done():
+            self._dtmf_timer.cancel()
+        self._dtmf_timer = asyncio.create_task(self._dtmf_after_gap())
+
+    async def _dtmf_after_gap(self) -> None:
+        await asyncio.sleep(self.dtmf_gap_s)
+        self._flush_dtmf()
+
+    def _flush_dtmf(self) -> None:
+        digits, self._dtmf_buf = self._dtmf_buf, ""
+        if self._dtmf_timer is not None and not self._dtmf_timer.done() \
+                and self._dtmf_timer is not asyncio.current_task():
+            self._dtmf_timer.cancel()
+        if digits:
+            self._speech_end_at = time.time()
+            self._run_turn(self._reply(f"[keypad: {digits}]", record_as=f"(keypad: {' '.join(digits)})"))
+
+    def _run_turn(self, coro) -> None:
+        if self._turn_task is not None and not self._turn_task.done():
+            self._turn_task.cancel()
+        self._turn_task = asyncio.create_task(coro)
+
+    async def _quick_key(self, digit: str, action: str) -> None:
+        self._record("caller", f"(keypad: {digit})")
+        if action == "repeat" and self._last_agent_line:
+            await self._say(self._last_agent_line)
+        elif action == "transfer":
+            st = self.brain.state
+            st.transfer, st.transfer_reason = True, f"caller pressed {digit}"
+            await self._after_turn()
 
     # -- supervisor controls ---------------------------------------------------------
     async def say(self, text: str) -> None:

@@ -583,3 +583,6 @@ label.check { display: flex; flex-direction: row; align-items: center; gap: var(
 .live-call { border: 1px solid var(--border); border-radius: var(--r2, 8px); padding: 10px 12px; margin-bottom: 10px; }
 .live-transcript { max-height: 260px; overflow: auto; margin: 8px 0; padding: 8px 10px; background: var(--bg);
   border: 1px solid var(--border); border-radius: 6px; line-height: 1.5; }
+.keypad { display: grid; grid-template-columns: repeat(12, minmax(34px, 1fr)); gap: 4px; margin-top: 8px; max-width: 520px; }
+.keypad .btn { padding: 4px 0; font-family: var(--mono); }
+@media (max-width: 600px) { .keypad { grid-template-columns: repeat(6, 1fr); } }

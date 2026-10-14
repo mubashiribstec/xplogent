@@ -5,6 +5,7 @@ The dashboard opens ``/ws/voip/test`` and talks to the same :class:`CallSession`
 you hear is what a caller would hear — only the phone line is replaced:
 
 * browser → server: JSON ``{"type": "text", "text": …}`` for typed caller turns,
+  ``{"type": "dtmf", "digit": "5"}`` for keypad presses,
   binary frames of 8 kHz μ-law for microphone audio (HTTPS only), and
   ``{"type": "hangup"}``;
 * server → browser: JSON ``turn`` / ``events`` / ``clear`` / ``transfer`` /
@@ -93,6 +94,9 @@ async def run_test_call(websocket, cfg: Config | None = None, *, stt=None, tts=N
     async def transfer(reason: str) -> None:
         simulate_transfer(str(v.get("transfer_number", "")), reason)
 
+    async def send_dtmf(digits: str) -> None:
+        outbox.put_nowait({"type": "dtmf_sent", "digits": digits})
+
     async def on_events(events: list[str]) -> None:
         if events:
             outbox.put_nowait({"type": "events", "items": events})
@@ -113,7 +117,7 @@ async def run_test_call(websocket, cfg: Config | None = None, *, stt=None, tts=N
         session, call_id, brain = build_session(
             cfg, store, info, send_audio=send_audio, clear_audio=clear_audio, hangup=hangup,
             transfer=transfer, stt=stt, tts=tts if tts is not None else (None if voice else SilentTTS()),
-            provider=provider, retrieve=retrieve, on_events=on_events,
+            provider=provider, retrieve=retrieve, on_events=on_events, send_dtmf=send_dtmf,
             idle_prompt_s=300.0, idle_hangup_s=900.0)
         box.append(call_id)
         session.on_turn = lambda speaker, text: on_turn(box, speaker, text)
@@ -144,6 +148,8 @@ async def run_test_call(websocket, cfg: Config | None = None, *, stt=None, tts=N
                 continue
             if data.get("type") == "text":
                 await session.on_text(str(data.get("text", ""))[:2000])
+            elif data.get("type") == "dtmf":
+                await session.on_dtmf(str(data.get("digit", ""))[:1])
             elif data.get("type") == "hangup":
                 break
         # Let the last words reach the browser before closing.

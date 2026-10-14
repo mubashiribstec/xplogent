@@ -58,7 +58,7 @@ def test_digest_matches_rfc2617_example():
 def test_sdp_offer_answer():
     sdp = parse_sdp(build_sdp("192.0.2.5", 10002, (8, 0)))
     assert sdp == {"ip": "192.0.2.5", "port": 10002, "payloads": [8, 0, 101],
-                   "names": {8: "PCMA", 0: "PCMU", 101: "TELEPHONE-EVENT"}}
+                   "names": {8: "PCMA", 0: "PCMU", 101: "TELEPHONE-EVENT"}, "dtmf_pt": 101}
     assert choose_codec(sdp) == 8
     assert choose_codec(parse_sdp(b"v=0\r\nc=IN IP4 1.2.3.4\r\nm=audio 4000 RTP/AVP 18 0\r\n")) == 0
     assert choose_codec(parse_sdp(b"m=audio 4000 RTP/AVP 18\r\n")) is None

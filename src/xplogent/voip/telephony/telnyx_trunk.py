@@ -124,6 +124,11 @@ class TelnyxTrunk:
             elif live is not None and ev["event"] == "call.hangup":
                 self._spawn(live.session.transfer_failed("the other side didn't answer"))
             return {"ok": True}
+        if ev["event"] == "call.dtmf.received":      # the one source of keypad presses
+            live = self.service.live_by_ref(ccid)
+            if live is not None and ev["digit"]:
+                self._spawn(live.session.on_dtmf(ev["digit"]))
+            return {"ok": True}
         if ev["event"] == "call.bridged":
             live = self.service.live_by_ref(ccid)
             if live is not None and live.session.transfer_pending:
@@ -205,6 +210,9 @@ class TelnyxTrunk:
         async def transfer(reason: str) -> None:      # the agent decided to hand over
             await transfer_to("")
 
+        async def send_dtmf(digits: str) -> None:
+            await client.send_dtmf(ccid, digits)
+
         session = brain = None
         call_id = 0
         try:
@@ -212,7 +220,7 @@ class TelnyxTrunk:
             # and the socket are still closed below.
             session, call_id, brain = build_session(
                 cfg, store, info, send_audio=send_audio, clear_audio=clear_audio,
-                hangup=hangup, transfer=transfer)
+                hangup=hangup, transfer=transfer, send_dtmf=send_dtmf)
             self.service.register(LiveCall(
                 call_id=call_id, session=session, brain=brain, number=customer_number(info),
                 direction="outbound" if is_outbound(info) else "inbound", transport="telnyx",

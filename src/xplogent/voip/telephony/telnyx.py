@@ -59,6 +59,9 @@ class TelnyxClient:
             body["client_state"] = base64.b64encode(client_state.encode()).decode()
         return await self._action(call_control_id, "transfer", body)
 
+    async def send_dtmf(self, call_control_id: str, digits: str) -> dict:
+        return await self._action(call_control_id, "send_dtmf", {"digits": digits, "duration_millis": 250})
+
     async def dial(self, to_number: str, from_number: str, connection_id: str,
                    webhook_url: str = "") -> dict:
         """Place an outbound call (used by the V3 dialer)."""
@@ -130,6 +133,9 @@ def parse_stream_message(raw: str | bytes) -> dict[str, Any]:
         except ValueError:
             audio = b""
         return {"event": "media", "audio": audio, "stream_id": stream_id, "meta": {}}
+    if event == "dtmf":
+        digit = str((msg.get("dtmf") or {}).get("digit", ""))[:1]
+        return {"event": "dtmf", "audio": b"", "stream_id": stream_id, "meta": {"digit": digit}}
     if event in ("start", "stop"):
         return {"event": event, "audio": b"", "stream_id": stream_id, "meta": msg.get(event, {})}
     return {"event": "other", "audio": b"", "stream_id": stream_id, "meta": {}}

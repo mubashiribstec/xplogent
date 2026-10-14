@@ -485,7 +485,8 @@ class SipTrunk(asyncio.DatagramProtocol):
             if call is not None:                              # re-INVITE (hold, codec refresh…)
                 self._reply(req, addr, 200, "OK", to_tag=call.local_tag,
                             body=build_sdp(self.contact_ip, call.rtp.port if call.rtp else 0,
-                                           (call.rtp.pt,) if call.rtp else (PCMU,)))
+                                           (call.rtp.pt,) if call.rtp else (PCMU,),
+                                           dtmf_pt=call.rtp.dtmf_pt if call.rtp else None))
             else:
                 await self._inbound_invite(req, addr)
         elif method == "ACK":
@@ -548,7 +549,7 @@ class SipTrunk(asyncio.DatagramProtocol):
         self.calls[call.call_id] = call
         self._reply(req, addr, 180, "Ringing", to_tag=call.local_tag)
         ok = self._reply(req, addr, 200, "OK", to_tag=call.local_tag,
-                         body=build_sdp(self.contact_ip, call.rtp.port, (codec,)))
+                         body=build_sdp(self.contact_ip, call.rtp.port, (codec,), dtmf_pt=call.rtp.dtmf_pt))
         call.state = "confirmed"
         info = {"direction": "inbound", "from": call.number, "to": user_of(req.get("To")),
                 "call_control_id": call.call_id, "transport": "sip"}
@@ -587,6 +588,7 @@ class SipTrunk(asyncio.DatagramProtocol):
             raise RuntimeError(f"no RTP port available ({last})")
         if sdp.get("ip") and sdp.get("port"):
             rtp.remote = (sdp["ip"], int(sdp["port"]))
+        rtp.dtmf_pt = sdp.get("dtmf_pt")          # keypad events only if the offer has them
         return rtp
 
     # -- outbound calls ------------------------------------------------------------------------
@@ -672,13 +674,17 @@ class SipTrunk(asyncio.DatagramProtocol):
                             routes=call.route_set)
         self._acks[call.call_id] = (ack.encode(), self.server_addr)
         self._send(ack, self.server_addr)
-        answer = parse_sdp(resp.body)
+        try:
+            answer = parse_sdp(resp.body)
+        except ValueError:
+            answer = {}
         codec = choose_codec(answer)
         if codec is None:
             settle({"ok": False, "error": "the far end chose a codec we don't speak"})
             await self.hangup(call)
             return
         call.rtp.pt = codec
+        call.rtp.dtmf_pt = answer.get("dtmf_pt")
         if answer.get("ip") and answer.get("port"):
             call.rtp.remote = (answer["ip"], int(answer["port"]))
         settle({"ok": True, "via": "sip", "call": {"sip_call_id": call.call_id}, "state": "answered"})
@@ -775,9 +781,13 @@ class SipTrunk(asyncio.DatagramProtocol):
         async def ai_transfer(reason: str) -> None:     # failures: the session resumes
             await transfer_to("")
 
+        async def send_dtmf(digits: str) -> None:
+            call.rtp.queue_dtmf(digits)
+
         try:
             session, row_id, brain = build_session(
                 cfg, store, info, send_audio=call.rtp.send_audio, clear_audio=call.rtp.clear,
+                send_dtmf=send_dtmf if call.rtp.dtmf_pt is not None else None,
                 hangup=hangup, transfer=ai_transfer, **self.session_kw)
         except Exception as exc:  # noqa: BLE001
             _log.exception("could not start the call session")
@@ -787,6 +797,7 @@ class SipTrunk(asyncio.DatagramProtocol):
             return
         call.session, call.brain, call.row_id = session, brain, row_id
         call.rtp.on_audio = session.on_audio
+        call.rtp.on_dtmf = session.on_dtmf
         call.rtp.start()
         if self.service is not None:
             self.service.register(LiveCall(

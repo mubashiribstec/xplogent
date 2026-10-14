@@ -70,7 +70,7 @@ def _speech_tts(v: dict[str, Any]):
 
 def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio, clear_audio=None,
                   hangup=None, transfer=None, stt=None, tts=None, provider=None,
-                  retrieve=None, **session_kw: Any) -> tuple[CallSession, int, CallBrain]:
+                  retrieve=None, send_dtmf=None, **session_kw: Any) -> tuple[CallSession, int, CallBrain]:
     """Create a CallSession + its call row. Injected parts make this unit-testable.
 
     ``info`` may carry ``contact_id`` (a manual call to a chosen contact), ``test``
@@ -96,10 +96,15 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         retrieve = _make_retriever(cfg, store, int(v.get("knowledge_top_k", 3)))
 
     persona = f"You work for {v.get('company', 'our company')}."
+    dtmf_cfg = v.get("dtmf") or {}
+    dtmf_on = bool(dtmf_cfg.get("enabled", True))
+    if dtmf_on:
+        session_kw.setdefault("dtmf_keys", dtmf_cfg.get("keys") or {})
     can_transfer = transfer is not None and bool(
         resolve_transfer_number(v, transport=str(info.get("transport", ""))))
     brain = CallBrain(provider, persona=persona, playbook=load_playbook(),
-                      contact=contact, retrieve=retrieve, store=store, can_transfer=can_transfer)
+                      contact=contact, retrieve=retrieve, store=store, can_transfer=can_transfer,
+                      can_send_dtmf=send_dtmf is not None and dtmf_on)
     greeting = str(v.get("greeting", "")).replace("{company}", str(v.get("company", "our company")))
     vad_cfg = v.get("vad", {}) or {}
     session = CallSession(
@@ -111,7 +116,9 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
                 silence_ms=int(vad_cfg.get("silence_ms", 700)),
                 min_speech_ms=int(vad_cfg.get("min_speech_ms", 200)),
                 max_utterance_ms=int(vad_cfg.get("max_utterance_ms", 15000))),
-        max_call_s=float(v.get("max_call_seconds", 900)), **session_kw)
+        max_call_s=float(v.get("max_call_seconds", 900)),
+        send_dtmf=send_dtmf if dtmf_on else None, **session_kw)
+    session.dtmf_enabled = dtmf_on
     return session, call_id, brain
 
 

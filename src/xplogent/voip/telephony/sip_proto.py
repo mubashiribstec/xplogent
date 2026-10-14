@@ -220,14 +220,16 @@ CODEC_NAMES = {PCMU: "PCMU", PCMA: "PCMA"}
 
 
 def build_sdp(ip: str, port: int, payloads: tuple[int, ...] = (PCMU, PCMA),
-              session_id: int | None = None) -> bytes:
+              session_id: int | None = None, dtmf_pt: int | None = DTMF_PT) -> bytes:
+    """An audio offer/answer. ``dtmf_pt`` None leaves out keypad events (telephone-event)."""
     sid = session_id or random.randint(10**6, 10**9)
-    fmt = " ".join(str(p) for p in (*payloads, DTMF_PT))
+    fmt = " ".join(str(p) for p in (*payloads, *([dtmf_pt] if dtmf_pt is not None else [])))
     lines = ["v=0", f"o=xplogent {sid} {sid} IN IP4 {ip}", "s=Xplogent", f"c=IN IP4 {ip}", "t=0 0",
              f"m=audio {port} RTP/AVP {fmt}"]
     lines += [f"a=rtpmap:{p} {CODEC_NAMES[p]}/8000" for p in payloads]
-    lines += [f"a=rtpmap:{DTMF_PT} telephone-event/8000", f"a=fmtp:{DTMF_PT} 0-16", "a=ptime:20",
-              "a=sendrecv"]
+    if dtmf_pt is not None:
+        lines += [f"a=rtpmap:{dtmf_pt} telephone-event/8000", f"a=fmtp:{dtmf_pt} 0-16"]
+    lines += ["a=ptime:20", "a=sendrecv"]
     return ("\r\n".join(lines) + "\r\n").encode()
 
 
@@ -255,7 +257,8 @@ def parse_sdp(body: bytes) -> dict[str, Any]:
             pt, _, enc = line[9:].partition(" ")
             if pt.isdigit():
                 names[int(pt)] = enc.split("/")[0].upper()
-    return {"ip": media_ip or ip, "port": port, "payloads": payloads, "names": names}
+    dtmf = next((p for p in payloads if names.get(p) == "TELEPHONE-EVENT"), None)
+    return {"ip": media_ip or ip, "port": port, "payloads": payloads, "names": names, "dtmf_pt": dtmf}
 
 
 def choose_codec(sdp: dict[str, Any]) -> int | None:

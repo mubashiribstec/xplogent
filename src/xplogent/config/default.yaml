@@ -232,6 +232,9 @@ voip:
   cost_per_minute: 0.012           # your estimate: carrier + LLM (shown in the Calls view)
   knowledge_top_k: 3
   vad: { threshold: 500, silence_ms: 700, min_speech_ms: 200, max_utterance_ms: 15000 }
+  dtmf:                            # phone keypad
+    enabled: true                  # keys pressed reach the agent as [keypad: …]; it can press keys too
+    keys: {}                       # instant keys, e.g. {"0": "transfer", "*": "repeat"}
   stt:                             # whisper-local = faster-whisper on your GPU; or an OpenAI-compatible URL
     provider: whisper-local        # whisper-local | openai-compatible
     model: small.en
