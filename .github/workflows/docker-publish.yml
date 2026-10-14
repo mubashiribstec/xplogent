@@ -63,7 +63,8 @@ jobs:
         with:
           images: ${{ steps.name.outputs.image }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            # main, not "the default branch": this repo's default branch is a dev branch.
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=ref,event=branch
             type=sha,prefix=sha-
             type=semver,pattern={{version}}
