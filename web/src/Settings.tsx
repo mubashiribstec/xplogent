@@ -5,7 +5,6 @@ import {
   putSecrets, restoreBackup, saveOllama, StatusInfo, testOllama, testVision,
   BackupStatus, getBackupModel, pullBackupModel, saveBackupModel, testBackupModel,
 } from "./api";
-import { UpdatePanel } from "./UpdatePanel";
 
 const RISK_TIERS = ["low", "medium", "high", "critical"];
 const ACTIONS = ["auto", "confirm", "deny"];
@@ -49,7 +48,6 @@ export function Settings() {
       <OllamaCard host={cfg.ollama?.host ?? ""} hasToken={!!cfg.secrets?.OLLAMA_API_KEY}
         onUse={async (u) => { await save(u); reload(); }} onSaved={reload} flash={flash} />
       <BackupModelCard flash={flash} />
-      <McpCard mcp={cfg.mcp ?? {}} onSave={save} />
 
       <div className="card">
         <h3>Model</h3>
@@ -107,15 +105,6 @@ export function Settings() {
       </div>
 
       <div className="card">
-        <h3>Orchestrator</h3>
-        <label>Max concurrent agents: <b>{cfg.orchestrator?.max_concurrent_agents ?? 3}</b>
-          <input type="range" min={1} max={8}
-                 defaultValue={cfg.orchestrator?.max_concurrent_agents ?? 3}
-                 onMouseUp={(e: any) => save({ orchestrator: { max_concurrent_agents: Number(e.target.value) } })} />
-        </label>
-      </div>
-
-      <div className="card">
         <h3>Tools</h3>
         {Array.from(new Set(tools.map((t) => t.group))).map((group) => {
           const noScreen = DISPLAY_GROUPS.includes(group) && caps && !caps.display;
@@ -167,7 +156,6 @@ export function Settings() {
         </ul>
       </div>
 
-      <UpdatePanel />
     </div>
   );
 }
@@ -329,37 +317,6 @@ function HealthCard() {
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-function McpCard({ mcp, onSave }: { mcp: any; onSave: (u: Record<string, any>) => void }) {
-  const server = mcp.server ?? {};
-  const set = (k: string, v: any) => onSave({ mcp: { server: { [k]: v } } });
-  const clientSnippet = JSON.stringify({
-    mcpServers: { xplogent: { command: "xplogent-mcp", args: [] } },
-  }, null, 2);
-  return (
-    <div className="card">
-      <h3>MCP server</h3>
-      <p className="dim">Expose Xplogent's tools/agents to MCP clients (Claude Desktop, Cursor, …).
-        Launch it with <code>xplogent mcp</code>.</p>
-      <div className="grid2">
-        <label className="field-l">Transport
-          <select defaultValue={server.transport ?? "stdio"} onChange={(e) => set("transport", e.target.value)}>
-            {["stdio", "streamable-http", "sse"].map((t) => <option key={t}>{t}</option>)}
-          </select>
-        </label>
-        <label className="field-l">Role profile
-          <input defaultValue={server.agent_role ?? "operator"} onBlur={(e) => set("agent_role", e.target.value)} />
-        </label>
-      </div>
-      <label className="check"><input type="checkbox" defaultChecked={server.auto_approve ?? false}
-        onChange={(e) => set("auto_approve", e.target.checked)} /> auto-approve confirm-tier actions</label>
-      <label className="check"><input type="checkbox" defaultChecked={server.expose_raw_tools ?? true}
-        onChange={(e) => set("expose_raw_tools", e.target.checked)} /> expose raw PC tools</label>
-      <h4 style={{ margin: "14px 0 6px", fontSize: 13 }} className="dim">Claude Desktop config</h4>
-      <pre className="snippet">{clientSnippet}</pre>
     </div>
   );
 }

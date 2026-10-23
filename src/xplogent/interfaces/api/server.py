@@ -12,7 +12,7 @@ shared auth/origin checks and run state in ``interfaces/api/deps.py``.
 import asyncio
 import os
 
-from xplogent.core import updater
+from xplogent.core import repo_info
 from xplogent.core.config import load_config, save_user_config
 from xplogent.core.logging import get_logger
 from xplogent.interfaces.api import deps
@@ -33,16 +33,6 @@ def create_app():
     @asynccontextmanager
     async def lifespan(app: "FastAPI"):
         cfg = load_config()
-        sched = None
-        if cfg.scheduler.get("enabled", True):
-            from xplogent.core.scheduler import Scheduler
-            sched = Scheduler(cfg, tick=float(cfg.scheduler.get("tick_seconds", 30)))
-            await sched.start()
-            app.state.scheduler = sched
-        from xplogent.core.triggers import FileWatcher
-        watcher = FileWatcher(cfg, tick=float(cfg.scheduler.get("file_tick_seconds", 5)))
-        await watcher.start()
-        app.state.watcher = watcher
         sip_task = None
         from xplogent.voip.config_check import check_voip
         for problem in check_voip(cfg.voip or {}):
@@ -56,9 +46,6 @@ def create_app():
             if sip_task is not None:
                 sip_task.cancel()
             await sip_mod.shutdown()
-            if sched is not None:
-                await sched.stop()
-            await watcher.stop()
 
     app = FastAPI(title="Xplogent Agent API", version="0.1.0", lifespan=lifespan)
     # No wildcard CORS: the dashboard is served same-origin. Only explicitly configured
@@ -101,7 +88,7 @@ def _dashboard_dir():
     if os.environ.get("XPLOGENT_WEB_DIR"):                       # explicit override (Docker)
         candidates.append(Path(os.environ["XPLOGENT_WEB_DIR"]))
     candidates.append(Path(__file__).resolve().parents[2] / "web_dist")   # packaged build
-    root = updater.repo_root()
+    root = repo_info.repo_root()
     if root:
         candidates.append(root / "web" / "dist")
     candidates.append(Path(__file__).resolve().parents[3] / "web" / "dist")

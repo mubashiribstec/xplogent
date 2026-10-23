@@ -1,4 +1,4 @@
-"""Error classification + retry policy, and orchestrator task-level retry."""
+"""Error classification + retry policy."""
 
 from __future__ import annotations
 
@@ -51,63 +51,3 @@ async def test_with_retry_reraises_fatal():
 
     with pytest.raises(ValueError):
         await with_retry(boom, RetryPolicy(max_attempts=3, base_delay=0))
-
-
-@pytest.mark.asyncio
-async def test_orchestrator_retries_then_completes(monkeypatch):
-    """A worker that fails twice (transient) then succeeds should complete."""
-    from tests.test_orchestrator import _orchestrator
-    from xplogent.core.taskboard import Task
-
-    orch = _orchestrator(monkeypatch, reply="done", max_concurrent=2)
-    orch.task_retries = 3
-    import xplogent.core.orchestrator as orch_mod
-
-    async def fake_decompose(self, goal, roles, count=3):
-        return [Task(id="t1", title="x", description="do x", role="operator")]
-
-    monkeypatch.setattr(orch_mod.Planner, "decompose", fake_decompose)
-
-    attempts = {"n": 0}
-    real_spawn = orch._spawn
-
-    async def flaky_spawn(agent, task):
-        attempts["n"] += 1
-        if attempts["n"] < 3:
-            raise httpx.ConnectError("temporary network")
-        return await real_spawn(agent, task)
-
-    monkeypatch.setattr(orch, "_spawn", flaky_spawn)
-    result = await orch.run_goal("do a thing", max_concurrent=2)
-    statuses = {t["id"]: t["status"] for t in result["tasks"]}
-    assert statuses == {"t1": "done"}
-    assert attempts["n"] == 3
-    await orch.aclose()
-
-
-@pytest.mark.asyncio
-async def test_orchestrator_fatal_fails_fast(monkeypatch):
-    from tests.test_orchestrator import _orchestrator
-    from xplogent.core.taskboard import Task
-
-    orch = _orchestrator(monkeypatch, reply="done", max_concurrent=2)
-    orch.task_retries = 3
-    import xplogent.core.orchestrator as orch_mod
-
-    async def fake_decompose(self, goal, roles, count=3):
-        return [Task(id="t1", title="x", description="do x", role="operator")]
-
-    monkeypatch.setattr(orch_mod.Planner, "decompose", fake_decompose)
-
-    attempts = {"n": 0}
-
-    async def fatal_spawn(agent, task):
-        attempts["n"] += 1
-        raise ValueError("bad request")
-
-    monkeypatch.setattr(orch, "_spawn", fatal_spawn)
-    result = await orch.run_goal("do a thing", max_concurrent=2)
-    statuses = {t["id"]: t["status"] for t in result["tasks"]}
-    assert statuses == {"t1": "failed"}
-    assert attempts["n"] == 1  # fatal → no retry
-    await orch.aclose()

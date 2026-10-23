@@ -1,7 +1,7 @@
 [project]
 name = "xplogent"
 version = "0.1.0"
-description = "Xplogent — a self-improving, multi-provider AI agent framework with memory and full PC control."
+description = "Xplogent — a self-improving AI agent with memory, skills, and a phone-calling agent for Telnyx / FreePBX."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -24,12 +24,6 @@ providers = [
     "openai>=1.30",
     "anthropic>=0.34",
 ]
-# Full PC control
-control = [
-    "pyautogui>=0.9.54",
-    "mss>=9.0",
-    "playwright>=1.44",
-]
 # Local embeddings for memory (offline)
 memory = [
     "sqlite-vec>=0.1.1",
@@ -42,24 +36,10 @@ api = [
     "websockets>=12.0",
     "python-multipart>=0.0.9",   # file uploads (phone agent training)
 ]
-# Voice interface
-voice = [
-    "faster-whisper>=1.0",
-    "sounddevice>=0.4",
-    "pyttsx3>=2.90",
-]
 # Phone calling agent (server side: no microphone/speaker needed)
 voip = [
     "faster-whisper>=1.0",
     "audioop-lts>=0.2; python_version >= '3.13'",
-]
-# Plugins / MCP
-mcp = [
-    "mcp>=1.0,<2",
-]
-# Cron-expression schedules (natural-language schedules work without this)
-scheduler = [
-    "croniter>=2.0",
 ]
 # RAG over documents (PDF support; text/markdown/code work without this)
 rag = [
@@ -78,15 +58,14 @@ dev = [
 ]
 # Headless Linux server: no desktop control, microphone, or multi-GB torch download.
 server = [
-    "xplogent[providers,api,voip,mcp,scheduler,rag,security]",
+    "xplogent[providers,api,voip,rag,security]",
 ]
 all = [
-    "xplogent[providers,control,memory,api,voice,voip,mcp,scheduler,rag,security,dev]",
+    "xplogent[providers,memory,api,voip,rag,security,dev]",
 ]
 
 [project.scripts]
 xplogent = "xplogent.interfaces.cli.app:main"
-xplogent-mcp = "xplogent.interfaces.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

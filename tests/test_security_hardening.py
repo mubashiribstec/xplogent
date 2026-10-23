@@ -75,13 +75,6 @@ def test_bad_user_regex_does_not_disable_checks():
     assert sm._matches_deny({"command": "rm -rf /"})
 
 
-def test_screenshot_to_custom_path_needs_approval():
-    from xplogent.tools.gui import ScreenshotTool
-
-    assert ScreenshotTool().risk_for({}) == RiskLevel.LOW
-    assert ScreenshotTool().risk_for({"path": "~/.bashrc"}) == RiskLevel.MEDIUM
-
-
 # ── restore: no tar-slip ──────────────────────────────────────────────────────────────
 
 
@@ -296,13 +289,6 @@ def test_secrets_endpoint_rejects_unknown_keys_and_newlines():
     assert c.put("/secrets", json={"keys": {"OPENAI_API_KEY": "a\nEVIL=1"}}).status_code == 400
 
 
-def test_webhook_tokens_are_always_random():
-    c = _client()
-    t = c.post("/triggers", json={"name": "x", "type": "webhook", "spec": "test",
-                                  "prompt": "p"}).json()["trigger"]
-    assert t["spec"] != "test" and len(t["spec"]) >= 32
-
-
 # ── SSRF guard ──────────────────────────────────────────────────────────────────────
 
 
@@ -315,14 +301,6 @@ async def test_fetch_guard_refuses_internal_targets(url):
     from xplogent.core.netguard import check_url
 
     assert await check_url(url, allow_private=False)
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_tool_refuses_metadata_endpoint():
-    from xplogent.tools.web import WebFetchTool
-
-    res = await WebFetchTool().run("http://169.254.169.254/latest/meta-data/")
-    assert not res.ok and "refused" in res.error.lower()
 
 
 def test_skill_install_refuses_non_markdown_files(tmp_path):

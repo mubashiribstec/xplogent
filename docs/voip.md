@@ -103,7 +103,7 @@ estimate, shown per call.
 
 ## Safety defaults
 
-- The agent states it is an AI and that the call may be recorded (edit `voip.greeting`).
+- The agent states it is an AI and that the call is transcribed (edit `voip.greeting`). Xplogent stores transcripts, not audio recordings — the greeting must not claim recording.
 - It answers only from the knowledge base, playbook and customer record; otherwise it offers a
   callback or a human.
 - "Stop calling me" → the number is added to the do-not-call list; dialing such a number is refused.
@@ -111,3 +111,33 @@ estimate, shown per call.
 
 Check recording, AI-disclosure, consent and calling-hours rules for your country before going
 live, especially before outbound calling. This is engineering documentation, not legal advice.
+
+## The agent layer (disclosure, silence, fields, templates, CRM)
+
+- **AI disclosure (`voip.disclose_ai`, default on).** The disclosure sentence is
+  injected by the system in front of the greeting whenever the greeting text
+  doesn't already contain it — editing the greeting can never silently remove
+  it. The greeting itself is spoken once by the engine and is not part of the
+  model's prompt; the model is instructed not to greet again.
+- **Silence (`voip.silence`).** A quiet caller gets at most `max_prompts` short
+  prompts ("Are you still there?" …), then a polite goodbye and hangup.
+- **Mandatory fields (`voip.fields`).** Declare fields the call must capture —
+  e.g. a callback number with `validator: phone, require_confirmed: true`.
+  Values are validated and normalised (phone → E.164), the model gets a
+  per-turn checklist, and **`end_call` is refused** while a required field is
+  missing or a number hasn't been read back and confirmed. The only closes
+  without them are explicit exit paths (`refused`, `hung_up`, `wrong_party`)
+  or a do-not-call / not-interested outcome, recorded on the call.
+- **Dynamic variables.** Greeting, persona and playbook may use
+  `{{caller_name}}`, `{{role}}`, `{company}`, contact fields, etc.
+- **Templates (`voip.template`).** `kingsbury_inbound` and
+  `kingsbury_outbound_screener` ship a greeting, playbook and field schema for
+  UK recruitment, plus a scoring rubric (right-to-work gate; must-haves 40 /
+  commute 20 / shifts 20 / experience 20; a pay mismatch flags, never scores).
+- **CRM (`voip.crm`).** On call end, a signed (HMAC-SHA256) `call.completed`
+  webhook is POSTed with outcome, summary, field completeness and the
+  transcript — 3 attempts, backoff, delivery log at
+  `voip/crm_deliveries.jsonl`. See `docs/crm-laravel.md`.
+- **Knowledge gaps.** Questions the knowledge base couldn't answer are logged
+  to `voip/knowledge_gaps.jsonl`; `top_knowledge_gaps()` ranks them — that list
+  is what to teach the agent next.

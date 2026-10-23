@@ -37,6 +37,9 @@ SendAudio = Callable[[bytes], Awaitable[None]]
 
 TRANSFER_FAILED_LINE = ("I'm sorry, I couldn't connect you to a colleague just now. "
                         "I can keep helping you, or arrange a call back.")
+# Silence recovery (vs-Retell brief C5): at most ``idle_max_prompts`` short prompts,
+# spaced between the first-prompt delay and the hangup delay, then a polite goodbye.
+SILENCE_PROMPTS = ("Are you still there?", "I still can't hear you — are you there?")
 NO_TRANSFER_LINE = ("I'm sorry, I can't transfer this call right now, but I can arrange "
                     "for someone to call you back.")
 Hook = Callable[..., Awaitable[None]]
@@ -50,6 +53,7 @@ class CallSession:
                  on_turn: Callable[[str, str], None] | None = None,
                  greeting: str = "", vad: VAD | None = None,
                  idle_prompt_s: float = 12.0, idle_hangup_s: float = 30.0,
+                 idle_max_prompts: int = 2,
                  max_call_s: float = 900.0, realtime: bool = True,
                  lead_s: float = 0.2,
                  on_events: Callable[[list[str]], Awaitable[None]] | None = None,
@@ -74,6 +78,7 @@ class CallSession:
         self.greeting = greeting
         self.vad = vad or VAD()
         self.idle_prompt_s, self.idle_hangup_s, self.max_call_s = idle_prompt_s, idle_hangup_s, max_call_s
+        self.idle_max_prompts = max(0, idle_max_prompts)
         # Send audio at playback speed (keeping only ``lead_s`` buffered at the carrier),
         # so "speaking" means the caller is actually hearing it and barge-in can stop it.
         self.realtime, self.lead_s = realtime, lead_s
@@ -81,6 +86,8 @@ class CallSession:
         self.started = time.time()
         self.finished = asyncio.Event()
         self.latencies_ms: list[float] = []
+        self.turn_timings: list[dict[str, float]] = []  # per-turn stage timings (debug/CRM)
+        self._last_stt_ms = 0.0
         self._pending = bytearray()
         self._turn_task: asyncio.Task | None = None
         self._speaking = False
@@ -88,7 +95,7 @@ class CallSession:
         self._last_activity = time.time()
         self.transfer_pending = False
         self._transfer_timer: asyncio.Task | None = None
-        self._idle_prompted = False
+        self._idle_prompts = 0
         self._speech_end_at = 0.0
         self._watchdog: asyncio.Task | None = None
 
@@ -143,7 +150,7 @@ class CallSession:
             event = self.vad.feed(frame)
             if event == "speech_start":
                 self._last_activity = time.time()
-                self._idle_prompted = False
+                self._idle_prompts = 0
                 if self._speaking:
                     await self._barge_in()
             elif event == "speech_end":
@@ -166,8 +173,10 @@ class CallSession:
 
     # -- one turn ----------------------------------------------------------------
     async def _turn(self, pcm8k: bytes) -> None:
+        _t0 = time.time()
         try:
             text = await self.stt.transcribe(resample(pcm8k, 8000, 16000))
+            self._last_stt_ms = (time.time() - _t0) * 1000
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - one bad turn must not drop the call
@@ -216,6 +225,11 @@ class CallSession:
                 raise
             if reply_parts:
                 self._record("agent", " ".join(reply_parts))
+            self.turn_timings.append({
+                "stt_ms": round(self._last_stt_ms, 1),
+                "llm_first_ms": round(self.latencies_ms[-1], 1) if self.latencies_ms else 0.0,
+            })
+            self._last_stt_ms = 0.0
             st = self.brain.state
             if getattr(st, "dtmf_out", "") and self.send_dtmf is not None:
                 digits, st.dtmf_out = st.dtmf_out, ""
@@ -244,7 +258,7 @@ class CallSession:
         if not self.dtmf_enabled or self.finished.is_set() or not digit or digit not in "0123456789*#ABCD":
             return
         self._last_activity = time.time()
-        self._idle_prompted = False
+        self._idle_prompts = 0
         if self._speaking:
             await self._barge_in()
         action = self.dtmf_keys.get(digit) if not self._dtmf_buf else None
@@ -468,6 +482,9 @@ class CallSession:
                     continue  # the caller spoke over the goodbye: they're still there
                 await self._hangup()
                 return
-            if idle > self.idle_prompt_s and not self._idle_prompted:
-                self._idle_prompted = True
-                await self._prompt("Are you still there?")
+            if self._idle_prompts < self.idle_max_prompts:
+                step = (self.idle_hangup_s - self.idle_prompt_s) / max(1, self.idle_max_prompts)
+                if idle > self.idle_prompt_s + self._idle_prompts * step:
+                    text = SILENCE_PROMPTS[min(self._idle_prompts, len(SILENCE_PROMPTS) - 1)]
+                    self._idle_prompts += 1
+                    await self._prompt(text)

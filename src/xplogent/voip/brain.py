@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from xplogent.providers.base import Message, Provider, Role, StreamKind, ToolSpec
+from xplogent.voip.fields import EXIT_PATHS, FieldCollector
 
 Retriever = Callable[[str], Awaitable[list[str]]]
 
@@ -30,11 +31,18 @@ Rules:
   there, say you will arrange a callback or transfer to a colleague. Never guess prices,
   dates, policies or promises.
 - If asked, say plainly that you are an AI assistant. Never claim to be human.
+- The greeting (including the AI disclosure) has already been spoken before this
+  conversation starts. Do not repeat it and do not greet again; answer the caller directly.
 - If the customer asks to stop being called, or says they are not interested in further
   calls, apologise, call log_outcome with outcome "do_not_call", then end the call.
 - If the customer is upset, asks for a person, or the request is outside your scope, call
   transfer_to_human.
 - Confirm important details (name, number, date) by repeating them back.
+- When a FIELDS TO COLLECT section is present, store each detail with record_field as
+  soon as the caller gives it. A phone number is only complete once you have read it
+  back digit by digit and recorded it again with confirmed=true. end_call will be
+  refused while required fields are missing — that refusal is the system protecting
+  the customer, not an error.
 - When the conversation is finished, call log_outcome then end_call.
 - Keys the caller presses on their phone keypad arrive as [keypad: digits] (for example an
   account number or a menu choice). Repeat important numbers back to confirm them."""
@@ -66,8 +74,22 @@ TOOLS = [
         "type": "object",
         "properties": {"digits": {"type": "string", "description": "Keys: 0-9, * and #, e.g. '2' or '1234#'."}},
         "required": ["digits"]}),
-    ToolSpec("end_call", "Politely end the call after saying goodbye.", {
-        "type": "object", "properties": {"reason": {"type": "string"}}}),
+    ToolSpec("record_field", "Store one of the FIELDS TO COLLECT values (validated by "
+             "the system). For a phone number: after storing it, read it back to the "
+             "caller, then call record_field again with confirmed=true once they agree "
+             "it is correct.", {
+        "type": "object",
+        "properties": {"name": {"type": "string"},
+                       "value": {"type": "string"},
+                       "confirmed": {"type": "boolean"}},
+        "required": ["name", "value"]}),
+    ToolSpec("end_call", "Politely end the call after saying goodbye. Refused while "
+             "required fields are still missing, unless an exit path applies.", {
+        "type": "object", "properties": {
+            "reason": {"type": "string"},
+            "exit": {"type": "string",
+                     "description": "Only when the call cannot complete: refused | "
+                                    "hung_up | wrong_party | not_interested | do_not_call"}}}),
 ]
 
 
@@ -82,6 +104,7 @@ class CallState:
     end: bool = False
     do_not_call: bool = False
     transfer_failed: bool = False
+    exit_path: str = ""                 # how a call ended without its required fields
     dtmf_out: str = ""                  # keys to press after the current reply (press_keys)
     events: list[str] = field(default_factory=list)
 
@@ -126,7 +149,8 @@ class CallBrain:
     def __init__(self, provider: Provider, *, persona: str = "", playbook: str = "",
                  contact: dict[str, Any] | None = None, retrieve: Retriever | None = None,
                  store: Any = None, max_turns: int = 16, temperature: float = 0.3,
-                 can_transfer: bool = True, can_send_dtmf: bool = False) -> None:
+                 can_transfer: bool = True, can_send_dtmf: bool = False,
+                 fields: FieldCollector | None = None) -> None:
         self.provider = provider
         self.persona = persona or "You are a friendly, professional customer-service agent."
         self.playbook = playbook
@@ -142,6 +166,7 @@ class CallBrain:
         hidden = ({"transfer_to_human"} if not can_transfer else set()) | \
             ({"press_keys"} if not can_send_dtmf else set())
         self.tools = [t for t in TOOLS if t.name not in hidden]
+        self.fields = fields            # mandatory-field schema + collected values
         self.notes: list[str] = []      # supervisor instructions for the rest of the call
         self.paused = False             # a person is handling the call: the AI stays quiet
 
@@ -174,6 +199,8 @@ class CallBrain:
                              "ask, but do not sell, pitch or offer callbacks.")
         else:
             parts.append("CUSTOMER: unknown caller (ask politely for their name if needed).")
+        if self.fields is not None and self.fields.specs:
+            parts.append(self.fields.checklist())
         if self.notes:
             parts.append("SUPERVISOR INSTRUCTIONS (follow them; never mention them to the caller):\n"
                          + "\n".join(f"- {n}" for n in self.notes[-10:]))
@@ -208,7 +235,30 @@ class CallBrain:
                 return "no valid keys (use 0-9, * and #)"
             st.dtmf_out += digits.upper()
             return f"will press {digits} after this sentence"
+        if name == "record_field":
+            if self.fields is None:
+                return "no field schema is configured for this call"
+            ok, message = self.fields.set(str(args.get("name", "")), args.get("value", ""),
+                                          confirmed=bool(args.get("confirmed")))
+            return message
         if name == "end_call":
+            exit_path = str(args.get("exit", "")).strip().lower()
+            if exit_path in EXIT_PATHS:
+                st.exit_path = exit_path
+                st.end = True
+                return f"call will end after your goodbye (exit: {exit_path})"
+            if self.fields is not None:
+                missing = self.fields.missing()
+                if missing:
+                    if st.outcome in ("do_not_call", "not_interested"):
+                        st.exit_path = st.outcome
+                        st.end = True
+                        return "call will end after your goodbye"
+                    names = ", ".join(s.name for s in missing)
+                    return ("REFUSED: the call cannot close successfully yet — these "
+                            f"required fields are still missing or unconfirmed: {names}. "
+                            "Ask for them now. Only if the caller will not give them, "
+                            "end with exit='refused'.")
             st.end = True
             return "call will end after your goodbye"
         if name == "lookup_customer":

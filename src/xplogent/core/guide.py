@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from xplogent.core.updater import repo_root
+from xplogent.core.repo_info import repo_root
 
 _PACKAGE_FALLBACK = Path(__file__).resolve().parents[3] / "docs" / "guide"
 

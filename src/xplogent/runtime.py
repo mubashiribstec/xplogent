@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from xplogent.core.agent import Agent, ApproveCallback
 from xplogent.core.config import Config, load_config
 from xplogent.core.events import EventBus
-from xplogent.core.orchestrator import Orchestrator
 from xplogent.memory.manager import MemoryManager
 from xplogent.memory.store import Store
 from xplogent.memory.vector import Embedder
@@ -60,14 +59,9 @@ def build_runtime(
     provider = build_provider(model or config.model)
     tools = ToolRegistry.from_config(config.tools.get("enabled"))
     load_plugins(tools)  # drop-in plugins extend the same registry
-    # Live Canvas needs the event bus to push HTML to the dashboard, so it's wired
-    # here rather than via the zero-arg builtin tool groups.
-    if config.raw.get("canvas", {}).get("enabled", True):
-        from xplogent.tools.canvas import CanvasTool
-        tools.register(CanvasTool(bus))
     safety = SafetyManager.from_config(config.safety)
 
-    # Optionally scope this runtime to a role profile (used by the MCP server).
+    # Optionally scope this runtime to a role profile (safety PermissionProfile).
     if role:
         profile = PermissionProfile.from_role(role, config.roles)
         tools = tools.filtered(profile.tool_filter())
@@ -98,69 +92,3 @@ def build_runtime(
     if session_id is not None:
         agent.load_history()
     return Runtime(config=config, agent=agent, store=store, bus=bus)
-
-
-@dataclass
-class OrchestratorRuntime:
-    config: Config
-    orchestrator: Orchestrator
-    store: Store
-    bus: EventBus
-
-    async def aclose(self) -> None:
-        await self.orchestrator.aclose()
-        await self.orchestrator.embedder.provider.aclose()
-        if self.orchestrator.reflector:
-            await self.orchestrator.reflector.provider.aclose()
-        self.store.close()
-
-
-def build_orchestrator(
-    config: Config | None = None,
-    *,
-    bus: EventBus | None = None,
-    approve: ApproveCallback | None = None,
-) -> OrchestratorRuntime:
-    """Assemble a multi-agent orchestrator sharing one store, memory, and bus."""
-    config = config or load_config()
-    bus = bus or EventBus()
-
-    store = Store(config.db_path)
-    embedder = Embedder(build_provider(config.embedding_model))
-    base_tools = ToolRegistry.from_config(config.tools.get("enabled"))
-    load_plugins(base_tools)
-    base_safety = SafetyManager.from_config(config.safety)
-
-    reflector: Reflector | None = None
-    skills: SkillManager | None = None
-    if config.skills.get("enabled", True):
-        reflector = Reflector(build_provider(config.reflection_model))
-        skills = SkillManager(
-            MemoryManager(store, embedder, session_id=store.create_session("skills")),
-            config.skills_dir,
-        )
-
-    orchestrator = Orchestrator(
-        config, bus=bus, store=store, embedder=embedder,
-        base_tools=base_tools, base_safety=base_safety,
-        reflector=reflector, skills=skills, approve=approve,
-    )
-    return OrchestratorRuntime(config=config, orchestrator=orchestrator, store=store, bus=bus)
-
-
-async def run_team_goal(goal: str, *, approve: ApproveCallback | None = None,
-                        config: Config | None = None) -> str:
-    """Run a multi-agent goal unattended (schedules/triggers in team mode), recording
-    its event trace so the Runs page can show what each agent did."""
-    from xplogent.monitor.recorder import TraceRecorder
-
-    bus = EventBus()
-    runtime = build_orchestrator(config, bus=bus, approve=approve)
-    recorder = TraceRecorder(bus, runtime.store, runtime.orchestrator.run_id)
-    recorder.start()
-    try:
-        return await runtime.orchestrator.run_goal(goal)
-    finally:
-        await bus.close()
-        await recorder.stop()
-        await runtime.aclose()

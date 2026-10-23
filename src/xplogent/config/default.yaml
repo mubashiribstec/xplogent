@@ -39,10 +39,6 @@ memory:
   auto_compact_every: 0         # distill MEMORY.md every N tasks (0 = off; use the GUI/API)
   md_max_chars: 6000            # character budget for the agent-curated MEMORY.md (memory tool)
 
-# Live Canvas: let the agent render interactive HTML into a dashboard panel.
-canvas:
-  enabled: true
-
 # Dashboard/API security. Leave auth_token empty for an open localhost server;
 # `xplogent token` sets one, and it's auto-generated when binding to 0.0.0.0.
 server:
@@ -91,13 +87,6 @@ tools:
   enabled:
     - shell
     - filesystem
-    - python_exec
-    - web
-    - gui
-    - browser
-    - browser_extension
-    - vision
-    - documents
     - memory
 
 # ─── Execution backend for `shell` / `python_exec` ────────────────────
@@ -123,25 +112,10 @@ skills:
   reflect_min_steps: 1        # min tools used before reflecting (1 = skip plain chat; 0 = always)
   reflect_every: 1            # only reflect every Nth qualifying task (higher = cheaper)
 
-# ─── Multi-agent orchestration ────────────────────────────────────────
-orchestrator:
-  max_concurrent_agents: 3    # how many agents may run at the same time
-  default_mode: auto          # "auto" (decompose a goal) or "manual" (named agents)
-  enable_collab_tools: true   # give agents broadcast/send_message/read_inbox tools
-  max_task_retries: 2         # retry a failed subtask on transient errors
-  max_delegation_depth: 2     # how deep an agent may spawn sub-agents (delegate_task)
-
-# ─── Scheduler (recurring / timed agent jobs) ─────────────────────────
-# Define jobs in plain English ("every day at 9am") or 5-field cron (needs the
-# optional 'croniter' package). Jobs run unattended inside the server process.
-scheduler:
-  enabled: true
-  tick_seconds: 30            # how often the loop checks for due jobs
-
 # ─── Per-agent rights (role profiles) ─────────────────────────────────
 # Each role limits which tools an agent may use, its risk policy, the
-# filesystem paths it may touch, and network access. Assign roles to agents
-# when orchestrating. "*" means "all".
+# filesystem paths it may touch, and network access. A runtime can be
+# scoped to a role profile. "*" means "all".
 roles:
   orchestrator:
     allowed_tools: "*"
@@ -183,17 +157,6 @@ roles:
     network: false
     max_steps: 10
 
-# ─── Expose Xplogent as an MCP server ─────────────────────────────────
-# Lets MCP clients (Claude Desktop/Code, other agents) call into Xplogent.
-mcp:
-  server:
-    agent_role: operator        # role profile applied to MCP-driven runs
-    auto_approve: false         # allow confirm-tier actions without a human
-    expose_raw_tools: true      # expose individual PC-control tools as MCP tools
-    transport: stdio            # stdio | sse | streamable-http
-    host: 127.0.0.1
-    port: 8766
-
 # ─── Phone calling agent (inbound/outbound over a SIP/telephony provider) ───
 # Off by default. Needs `pip install 'xplogent[voip]'`, a Telnyx number, and a public
 # HTTPS/WSS address that points at this server. See extension-free setup in docs/voip.md.
@@ -221,7 +184,8 @@ voip:
   webhook_secret: ""               # random string; carrier webhook = {public_url}/telephony/webhook/<secret>
   api_key_env: TELNYX_API_KEY      # env var holding the carrier API key
   company: "our company"
-  greeting: "Hello, thanks for calling {company}. You're speaking with an AI assistant, and this call may be recorded. How can I help you?"
+  greeting: "Hello, thanks for calling {company}. You're speaking with an AI assistant, and this call is transcribed so we can help you better. How can I help you?"
+  disclose_ai: true                # system injects the AI disclosure into the greeting if the greeting text doesn't already contain it (UK/EU transparency); set false only where disclosure is handled another way
   model: ""                        # LLM for calls; blank = use `model`. Pick a small fast streaming model.
   transfer_number: ""              # human hand-off number (E.164), e.g. +15551234567
   connection_id: ""                # Telnyx Voice API (Call Control) application ID
@@ -232,6 +196,15 @@ voip:
   cost_per_minute: 0.012           # your estimate: carrier + LLM (shown in the Calls view)
   knowledge_top_k: 3
   vad: { threshold: 500, silence_ms: 700, min_speech_ms: 200, max_utterance_ms: 15000 }
+  silence: { prompt_after_s: 12, hangup_after_s: 30, max_prompts: 2 }   # caller gone quiet: up to max_prompts short prompts, then a polite goodbye and hang up
+  template: ""                     # built-in template pack: kingsbury_inbound | kingsbury_outbound_screener (supplies greeting + playbook + field schema)
+  crm:                             # post-call summary push (Laravel CRM, brief Part 3a)
+    enabled: false
+    base_url: ""                   # e.g. https://crm.example.com — POSTs go to {base_url}/api/xplogent/call-summary
+    api_token_env: XPLOGENT_CRM_API_TOKEN   # env var / secrets-store name holding the bearer token (also the HMAC key)
+  fields: []                       # mandatory fields: the call CANNOT close successfully while a required field is missing (Part D enforcement). Example — uncomment to require a read-back-confirmed callback number:
+    # - { name: callback_number, label: "best callback number", validator: phone, required: true, require_confirmed: true, default_country: "+44" }
+    # - { name: caller_name, label: "caller's name", validator: nonempty, required: true }
   dtmf:                            # phone keypad
     enabled: true                  # keys pressed reach the agent as [keypad: …]; it can press keys too
     keys: {}                       # instant keys, e.g. {"0": "transfer", "*": "repeat"}

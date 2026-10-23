@@ -65,5 +65,4 @@ change every setting in **Settings**, and read this guide.
 Setup is **one time** — your choices are saved under `~/.xplogent`, so `start`/`up`
 just work afterward.
 
-Prefer the terminal? `xplogent chat` for a single agent, or
-`xplogent orchestrate "your goal" --max 3` for a team.
+Prefer the terminal? `xplogent chat` for a single agent.

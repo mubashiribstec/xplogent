@@ -4,28 +4,14 @@ from __future__ import annotations
 
 from xplogent.providers.base import ToolSpec
 from xplogent.tools.base import Tool
-from xplogent.tools.browser import browser_tools
-from xplogent.tools.browser_extension import browser_extension_tools
-from xplogent.tools.documents import documents_tools
 from xplogent.tools.filesystem import filesystem_tools
-from xplogent.tools.gui import gui_tools
 from xplogent.tools.memory import memory_tools
-from xplogent.tools.python_exec import PythonExecTool
 from xplogent.tools.shell import ShellTool
-from xplogent.tools.vision import vision_tools
-from xplogent.tools.web import web_tools
 
 # Maps a config group name to a factory producing its tools.
 _BUILTIN_GROUPS = {
     "shell": lambda: [ShellTool()],
     "filesystem": filesystem_tools,
-    "python_exec": lambda: [PythonExecTool()],
-    "web": web_tools,
-    "gui": gui_tools,
-    "browser": browser_tools,
-    "browser_extension": browser_extension_tools,
-    "vision": vision_tools,
-    "documents": documents_tools,
     "memory": memory_tools,
 }
 

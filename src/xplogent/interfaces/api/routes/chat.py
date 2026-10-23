@@ -1,4 +1,4 @@
-"""Dashboard chat WebSocket (agent runs, approvals) and the computer-use operator."""
+"""Dashboard chat WebSocket (agent runs, approvals)."""
 
 from __future__ import annotations
 
@@ -127,79 +127,3 @@ async def ws(websocket: WebSocket) -> None:
         forwarder.cancel()
         if current["runtime"] is not None:
             await current["runtime"].aclose()
-
-
-# ── Computer-use operator ────────────────────────────────────────────────
-
-
-@router.websocket("/ws/operator")
-async def ws_operator(websocket: WebSocket) -> None:
-    if not deps.ws_authorized(websocket):
-        await websocket.close(code=1008)
-        return
-    await websocket.accept()
-    bus = EventBus()
-    chan = WsChannel(websocket)
-    send = chan.send
-    runtime_box: dict = {"rt": None}
-
-    async def forward() -> None:
-        async for ev in bus.stream():
-            await send({"type": ev.type.value, **ev.data})
-
-    forwarder = asyncio.create_task(forward())
-
-    async def handle(msg: dict) -> None:
-        from xplogent.core.operator import build_operator
-
-        rt = None
-        try:
-            rt = build_operator(bus=bus, approve=chan.approve,
-                                max_steps=int(msg.get("max_steps", 30)))
-            runtime_box["rt"] = rt
-            await rt.agent.run(str(msg.get("goal", "")))
-        except Exception as exc:  # noqa: BLE001 - always end the run for the UI
-            await send({"type": "error", "message": f"operator failed: {exc}"})
-        finally:
-            runtime_box["rt"] = None
-            if rt is not None:
-                await rt.aclose()
-            await send({"type": "done"})
-
-    try:
-        while True:
-            msg = await websocket.receive_json()
-            kind = msg.get("type")
-            if kind == "start":
-                # One computer-use run per socket: two would fight over the mouse.
-                if chan.busy():
-                    await send({"type": "error", "message": "an operator run is already active"})
-                else:
-                    chan.spawn(handle(msg))
-            elif kind == "cancel" and runtime_box["rt"] is not None:
-                runtime_box["rt"].agent.cancel()
-            elif kind == "approval":
-                chan.resolve(str(msg.get("id", "")), bool(msg.get("allowed")))
-    except WebSocketDisconnect:
-        pass
-    finally:
-        await chan.close()
-        await bus.close()
-        forwarder.cancel()
-        if runtime_box["rt"] is not None:
-            await runtime_box["rt"].aclose()
-
-
-@router.get("/operator/screen")
-async def operator_screen():
-    """Serve the most recent screenshot the operator captured (for a live preview)."""
-    from fastapi.responses import FileResponse, Response
-
-    from xplogent.core.config import xplogent_home
-
-    shots = sorted(xplogent_home().glob("screenshot_*.png"),
-                   key=lambda p: p.stat().st_mtime, reverse=True)
-    if not shots:
-        return Response(status_code=204)
-    return FileResponse(str(shots[0]), media_type="image/png",
-                        headers={"Cache-Control": "no-store"})

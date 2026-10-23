@@ -8,10 +8,10 @@ from xplogent.core import config as cfgmod
 def test_save_and_load_user_config(tmp_path, monkeypatch):
     monkeypatch.setenv("XPLOGENT_HOME", str(tmp_path))
     monkeypatch.delenv("XPLOGENT_MODEL", raising=False)
-    cfgmod.save_user_config({"model": "openai:gpt-4o", "orchestrator": {"max_concurrent_agents": 5}})
+    cfgmod.save_user_config({"model": "openai:gpt-4o", "memory": {"enabled": False}})
     cfg = cfgmod.load_config()
     assert cfg.model == "openai:gpt-4o"
-    assert cfg.orchestrator["max_concurrent_agents"] == 5
+    assert cfg.memory["enabled"] is False
 
 
 def test_save_user_config_deep_merges(tmp_path, monkeypatch):

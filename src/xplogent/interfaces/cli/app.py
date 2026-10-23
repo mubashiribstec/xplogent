@@ -20,14 +20,12 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
-from rich.table import Table
 
 from xplogent.core.config import load_config, save_env, save_user_config
 from xplogent.core.events import EventBus, EventType
-from xplogent.core.orchestrator import AgentSpec
 from xplogent.memory.store import Store
 from xplogent.providers.registry import available_providers
-from xplogent.runtime import build_orchestrator, build_runtime
+from xplogent.runtime import build_runtime
 from xplogent.safety.approval import ApprovalRequest
 
 app = typer.Typer(add_completion=False, help="Xplogent — your self-improving AI agent.")
@@ -295,38 +293,6 @@ def setup() -> None:
 
 
 @app.command()
-def update() -> None:
-    """Update Xplogent from its git repo (pull + reinstall)."""
-    from xplogent.core import updater
-
-    check = updater.check_update()
-    if not check.get("git"):
-        console.print(f"[red]{check.get('error', 'not a git checkout')}[/]")
-        raise typer.Exit(1)
-    if not check["update_available"]:
-        console.print(f"[green]Already up to date[/] ({check['current']}).")
-        return
-    console.print(f"[cyan]{check['behind_by']} new commit(s):[/]\n{check['changelog']}")
-    # Safety net: snapshot data before changing code (same as the GUI update).
-    try:
-        from xplogent.core.backup import create_backup
-        bak = create_backup()
-        console.print(f"[dim]backed up to {bak['path']}[/]")
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"[yellow]backup skipped: {exc}[/]")
-    pulled = updater.pull()
-    console.print(pulled["output"])
-    if pulled["ok"]:
-        console.print("[cyan]reinstalling…[/]")
-        updater.reinstall()
-        console.print("[cyan]rebuilding dashboard…[/]")
-        web = updater.rebuild_web()
-        if web.get("skipped"):
-            console.print(f"[dim]dashboard: {web['skipped']}[/]")
-        console.print("[green]Updated.[/] Restart [bold]xplogent up[/] (or 'xplogent restart') to apply.")
-
-
-@app.command()
 def backup(out: str = typer.Option("", help="Output .tar.gz path (default: ~/.xplogent/backups)."),
            include_secrets: bool = typer.Option(False, help="Also back up API keys (.env).")) -> None:
     """Back up the database, skills, and config to a .tar.gz."""
@@ -345,142 +311,15 @@ def restore(path: str) -> None:
     console.print(res if res["ok"] else f"[red]{res.get('error')}[/]")
 
 
-@app.command()
-def mcp(
-    transport: str = typer.Option("stdio", help="stdio | streamable-http | sse"),
-    host: str = "127.0.0.1",
-    port: int = 8766,
-    role: str | None = typer.Option(None, help="Role profile for MCP-driven runs."),
-    auto_approve: bool = typer.Option(False, "--auto-approve",
-                                      help="Allow confirm-tier actions without a human."),
-) -> None:
-    """Run Xplogent as an MCP server (needs the 'mcp' extra)."""
-    from xplogent.interfaces.mcp_server import run_server
-
-    run_server(transport=transport, host=host, port=port,
-               role=role, auto_approve=auto_approve if auto_approve else None)
-
-
-@app.command()
-def voice(seconds: int = 6) -> None:
-    """Talk to Xplogent (needs the 'voice' extra)."""
-    from xplogent.interfaces.voice.audio import voice_loop
-
-    async def _go() -> None:
-        bus = EventBus()
-        runtime = build_runtime(bus=bus, approve=_make_approver())
-        try:
-            await voice_loop(runtime, seconds=seconds)
-        finally:
-            await bus.close()
-            await runtime.aclose()
-
-    asyncio.run(_go())
 
 
 # ── multi-agent ───────────────────────────────────────────────────────────────
-async def _render_multi(bus: EventBus) -> None:
-    """Concise per-agent rendering for multi-agent runs (token streams omitted)."""
-    async for ev in bus.stream():
-        d = ev.data
-        who = d.get("agent_name", "?")
-        if ev.type == EventType.RUN_PROGRESS:
-            console.print(f"[bold cyan]🧭 planned {d.get('planned_tasks')} subtasks[/]")
-        elif ev.type == EventType.AGENT_SPAWN:
-            console.print(f"[green]🟢 {who}[/] ([dim]{d.get('role')}[/]) started")
-        elif ev.type == EventType.TASK_UPDATE:
-            console.print(f"[blue]📋 {escape(str(d.get('title')))}[/]: {d.get('status')}")
-        elif ev.type == EventType.AGENT_MESSAGE:
-            to = d.get("recipient") or "all"
-            console.print(f"[magenta]💬 {escape(str(d.get('sender')))} → {escape(str(to))}:[/] "
-                          f"{escape(str(d.get('content')))}")
-        elif ev.type == EventType.TOOL_CALL:
-            console.print(f"   [cyan]{who} → {d.get('tool')}[/]")
-        elif ev.type == EventType.TOOL_RESULT:
-            mark = "[green]✓[/]" if d.get("ok") else "[red]✗[/]"
-            console.print(f"   {mark} [dim]{escape(str(d.get('output',''))[:200])}[/]")
-        elif ev.type == EventType.MESSAGE:
-            console.print(f"[bold]{who}:[/] {escape(str(d.get('content')))}")
-        elif ev.type == EventType.SKILL:
-            console.print(f"[magenta]✨ {who} learned {d.get('facts',0)} fact(s)[/]")
-        elif ev.type == EventType.ERROR:
-            console.print(f"[red]error ({who}):[/] {d.get('message')}")
-
-
-def _print_taskboard(tasks: list[dict]) -> None:
-    if not tasks:
-        return
-    table = Table(title="task board", show_lines=False)
-    table.add_column("task")
-    table.add_column("role")
-    table.add_column("status")
-    for t in tasks:
-        color = {"done": "green", "failed": "red", "active": "yellow"}.get(t["status"], "white")
-        table.add_row(t["title"], t["role"], f"[{color}]{t['status']}[/]")
-    console.print(table)
-
-
-@app.command()
-def orchestrate(goal: str, max: int = 0, mode: str = "auto") -> None:
-    """Run a multi-agent team on a goal (auto-decomposed into subtasks)."""
-
-    async def _go() -> None:
-        bus = EventBus()
-        runtime = build_orchestrator(bus=bus, approve=_make_approver())
-        console.print(Panel(f"Goal: [bold]{escape(goal)}[/]\nmax concurrent: "
-                            f"{max or runtime.orchestrator.default_max}",
-                            title="🧠 Xplogent orchestrator", border_style="cyan"))
-        consumer = asyncio.create_task(_render_multi(bus))
-        result = await runtime.orchestrator.run_goal(goal, max_concurrent=max or None, mode=mode)
-        await bus.close()
-        await consumer
-        _print_taskboard(result.get("tasks", []))
-        console.print(f"[dim]peak concurrency: {result.get('peak_concurrency')} · "
-                      f"run {result.get('run_id')}[/]")
-        await runtime.aclose()
-
-    asyncio.run(_go())
-
-
-@app.command()
-def team(agent: list[str] = typer.Option(None, "--agent", "-a",
-         help="Repeatable. Format: name:role:task"), max: int = 0) -> None:
-    """Run named agents concurrently. Example:
-    xplogent team -a "researcher:researcher:find facts about X" -a "writer:coder:write a summary"
-    """
-    if not agent:
-        console.print("[red]provide at least one --agent name:role:task[/]")
-        raise typer.Exit(1)
-    specs = []
-    for spec in agent:
-        parts = spec.split(":", 2)
-        if len(parts) != 3:
-            console.print(f"[red]bad --agent '{spec}', expected name:role:task[/]")
-            raise typer.Exit(1)
-        specs.append(AgentSpec(name=parts[0], role=parts[1], task=parts[2]))
-
-    async def _go() -> None:
-        bus = EventBus()
-        runtime = build_orchestrator(bus=bus, approve=_make_approver())
-        consumer = asyncio.create_task(_render_multi(bus))
-        result = await runtime.orchestrator.run_team(specs, max_concurrent=max or None)
-        await bus.close()
-        await consumer
-        for name, answer in result.get("results", {}).items():
-            console.print(Panel(answer or "(no answer)", title=name, border_style="green"))
-        await runtime.aclose()
-
-    asyncio.run(_go())
-
-
 memory_app = typer.Typer(help="Inspect memory.")
 skills_app = typer.Typer(help="Inspect learned skills.")
-schedule_app = typer.Typer(help="Schedule recurring / timed agent jobs.")
 knowledge_app = typer.Typer(help="Export/import learned facts + skills (JSON).")
 docs_app = typer.Typer(help="Ingest documents for RAG (the agent answers from them).")
 app.add_typer(memory_app, name="memory")
 app.add_typer(skills_app, name="skills")
-app.add_typer(schedule_app, name="schedule")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(docs_app, name="docs")
 
@@ -561,80 +400,6 @@ def knowledge_import(path: str) -> None:
     console.print(f"[green]imported[/] +{res['facts_added']} facts, +{res['skills_added']} skills")
     for w in res.get("warnings", []):
         console.print(f"[yellow]⚠ {w}[/]")
-
-
-@schedule_app.command("add")
-def schedule_add(
-    when: str = typer.Argument(..., help='e.g. "every day at 9am" or a 5-field cron'),
-    prompt: str = typer.Argument(..., help="What the agent should do."),
-    mode: str = typer.Option("agent", help="agent | team"),
-    name: str = typer.Option("", help="Optional label."),
-    tz: str = typer.Option("", help="IANA timezone, e.g. Europe/London (default: local)."),
-) -> None:
-    """Add a scheduled job. Example:
-    xplogent schedule add "every day at 9am" "summarize my unread email"
-    """
-    import time
-
-    from xplogent.core.scheduler import parse_schedule
-
-    try:
-        spec, next_run = parse_schedule(when, tz)
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(1) from exc
-    store = Store(load_config().db_path)
-    sid = store.add_schedule(name or prompt[:40], prompt, mode, spec, tz, next_run)
-    store.close()
-    console.print(f"[green]scheduled[/] #{sid} ({spec}) — next run "
-                  f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(next_run))}")
-
-
-@schedule_app.command("list")
-def schedule_list() -> None:
-    """List scheduled jobs."""
-    import time
-
-    store = Store(load_config().db_path)
-    jobs = store.list_schedules()
-    store.close()
-    if not jobs:
-        console.print("[dim]no schedules[/]")
-        return
-    table = Table(title="schedules")
-    table.add_column("id")
-    table.add_column("name")
-    table.add_column("spec")
-    table.add_column("on")
-    table.add_column("next run")
-    for j in jobs:
-        nxt = time.strftime("%Y-%m-%d %H:%M", time.localtime(j["next_run"])) if j["next_run"] else "—"
-        on = "[green]yes[/]" if j["enabled"] else "[dim]no[/]"
-        table.add_row(str(j["id"]), j["name"], j["spec"], on, nxt)
-    console.print(table)
-
-
-@schedule_app.command("remove")
-def schedule_remove(schedule_id: int) -> None:
-    """Delete a scheduled job by id."""
-    store = Store(load_config().db_path)
-    store.delete_schedule(schedule_id)
-    store.close()
-    console.print(f"[green]removed[/] #{schedule_id}")
-
-
-@schedule_app.command("toggle")
-def schedule_toggle(schedule_id: int) -> None:
-    """Enable/disable a scheduled job by id."""
-    store = Store(load_config().db_path)
-    job = store.get_schedule(schedule_id)
-    if not job:
-        console.print("[red]no such schedule[/]")
-        store.close()
-        raise typer.Exit(1)
-    store.set_schedule_enabled(schedule_id, not job["enabled"])
-    store.close()
-    console.print(f"[green]{'disabled' if job['enabled'] else 'enabled'}[/] #{schedule_id}")
 
 
 @memory_app.command("search")

@@ -22,10 +22,59 @@ from xplogent.voip.control import (
     clean_number,
     resolve_transfer_number,
 )
+from xplogent.voip.crm import build_payload, crm_enabled, enqueue_delivery
 from xplogent.voip.engine import CallSession
+from xplogent.voip.fields import build_collector
 from xplogent.voip.providers import build_stt, build_tts
+from xplogent.voip.templates import get_template
 
 _log = get_logger("voip.service")
+
+
+AI_DISCLOSURE = ("You're speaking with an AI assistant, and this call is "
+                  "transcribed so we can help you better.")
+
+
+def effective_greeting(v: dict[str, Any]) -> str:
+    """The greeting the caller actually hears.
+
+    The AI disclosure is injected by the system, not left to editable greeting
+    text: if ``disclose_ai`` is on (the default) and the configured greeting
+    doesn't already say it, the disclosure sentence goes in front. An operator
+    editing the greeting can therefore never silently remove the disclosure
+    (vs-Retell brief C3).
+    """
+    greeting = str(v.get("greeting", "")).replace(
+        "{company}", str(v.get("company", "our company")))
+    if v.get("disclose_ai", True) and "ai assistant" not in greeting.lower():
+        greeting = f"{AI_DISCLOSURE} {greeting}".strip()
+    return greeting
+
+
+def render_template(text: str, variables: dict[str, Any]) -> str:
+    """Fill ``{{name}}`` / ``{name}`` placeholders from ``variables`` (C9 dynamic
+    variables). Unknown placeholders are left untouched so a typo is visible in
+    testing rather than silently blanked."""
+    out = text or ""
+    for key, value in variables.items():
+        if value is None:
+            continue
+        out = out.replace("{{" + key + "}}", str(value)).replace("{" + key + "}", str(value))
+    return out
+
+
+def call_variables(v: dict[str, Any], info: dict[str, Any],
+                   contact: dict[str, Any] | None, customer: str) -> dict[str, Any]:
+    """The variables available to greeting/persona/playbook templates on a call."""
+    variables: dict[str, Any] = {
+        "company": v.get("company", "our company"),
+        "caller_name": (contact or {}).get("name", ""),
+        "caller_phone": customer,
+        "direction": "outbound" if is_outbound(info) else "inbound",
+    }
+    for key, value in ((contact or {}).get("fields") or {}).items():
+        variables.setdefault(str(key), value)
+    return variables
 
 
 def load_playbook() -> str:
@@ -96,16 +145,28 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         retrieve = _make_retriever(cfg, store, int(v.get("knowledge_top_k", 3)))
 
     persona = f"You work for {v.get('company', 'our company')}."
+    silence_cfg = v.get("silence") or {}
+    session_kw.setdefault("idle_prompt_s", float(silence_cfg.get("prompt_after_s", 12.0)))
+    session_kw.setdefault("idle_hangup_s", float(silence_cfg.get("hangup_after_s", 30.0)))
+    session_kw.setdefault("idle_max_prompts", int(silence_cfg.get("max_prompts", 2)))
     dtmf_cfg = v.get("dtmf") or {}
     dtmf_on = bool(dtmf_cfg.get("enabled", True))
     if dtmf_on:
         session_kw.setdefault("dtmf_keys", dtmf_cfg.get("keys") or {})
     can_transfer = transfer is not None and bool(
         resolve_transfer_number(v, transport=str(info.get("transport", ""))))
-    brain = CallBrain(provider, persona=persona, playbook=load_playbook(),
+    variables = call_variables(v, info, contact, customer)
+    template = get_template(v.get("template"))
+    playbook_text = template["playbook"] if template else load_playbook()
+    field_configs = list(template["fields"]) if template else []
+    field_configs += list(v.get("fields") or [])
+    brain = CallBrain(provider, persona=render_template(persona, variables),
+                      playbook=render_template(playbook_text, variables),
+                      fields=build_collector(field_configs),
                       contact=contact, retrieve=retrieve, store=store, can_transfer=can_transfer,
                       can_send_dtmf=send_dtmf is not None and dtmf_on)
-    greeting = str(v.get("greeting", "")).replace("{company}", str(v.get("company", "our company")))
+    greeting_v = {**v, "greeting": template["greeting"]} if template else v
+    greeting = render_template(effective_greeting(greeting_v), variables)
     vad_cfg = v.get("vad", {}) or {}
     session = CallSession(
         brain=brain, stt=stt or _speech_stt(v), tts=tts or _speech_tts(v),
@@ -122,20 +183,63 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
     return session, call_id, brain
 
 
+def knowledge_gap_path():
+    """Where unanswered caller questions are logged (C10): one JSON object per
+    line, ``{"ts": ..., "query": ...}`` — the raw material for the knowledge-gap
+    report (which questions callers ask that the knowledge base can't answer)."""
+    return data_dir() / "voip" / "knowledge_gaps.jsonl"
+
+
+def top_knowledge_gaps(limit: int = 20) -> list[dict[str, Any]]:
+    """The knowledge-gap report: most-asked questions the knowledge base
+    could not answer, most frequent first."""
+    import json
+    from collections import Counter
+
+    try:
+        lines = knowledge_gap_path().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    counts = Counter()
+    for line in lines:
+        try:
+            counts[str(json.loads(line).get("query", "")).strip()] += 1
+        except Exception:  # noqa: BLE001 - skip a corrupt line, keep the report
+            continue
+    counts.pop("", None)
+    return [{"query": q, "count": n} for q, n in counts.most_common(limit)]
+
+
+def log_knowledge_gap(query: str) -> None:
+    """Best-effort: a logging failure must never break a live call."""
+    import json
+    import time
+
+    try:
+        path = knowledge_gap_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": time.time(), "query": query}) + "\n")
+    except Exception:  # noqa: BLE001
+        _log.exception("could not log knowledge gap")
+
+
 class _Retriever:
     """Knowledge lookup for one call; owns an embedding client that must be closed."""
 
-    def __init__(self, cfg: Config, store: Store, k: int) -> None:
+    def __init__(self, cfg: Config, store: Store, k: int, *, embedder=None) -> None:
         from xplogent.memory.vector import Embedder
         from xplogent.providers.registry import build_provider
 
         self.store, self.k = store, k
-        self.embedder = Embedder(build_provider(cfg.embedding_model))
+        self.embedder = embedder or Embedder(build_provider(cfg.embedding_model))
 
     async def __call__(self, query: str) -> list[str]:
         from xplogent.core.rag import hybrid_search
 
         hits = await hybrid_search(self.store, self.embedder, query, k=self.k)
+        if not hits:
+            log_knowledge_gap(query)
         return [h["content"] for h in hits]
 
     async def aclose(self) -> None:
@@ -155,11 +259,27 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
     outcome = st.outcome or ("callback" if st.callback else
                              "transfer_failed" if st.transfer_failed else "abandoned")
     summary = st.summary or (f"Callback requested: {st.callback}" if st.callback else "")
+    fields_report = brain.fields.report() if getattr(brain, "fields", None) is not None else None
+    if fields_report is not None:
+        bits = [f"{k}={v}" for k, v in fields_report["values"].items()]
+        if fields_report["missing_required"]:
+            bits.append("missing: " + ", ".join(fields_report["missing_required"]))
+        if st.exit_path:
+            bits.append(f"exit: {st.exit_path}")
+        if bits:
+            summary = (summary + " | Fields: " + "; ".join(bits)).strip(" |")
     store.end_call(call_id, outcome=outcome, summary=summary, cost=cost)
     call = store.get_call(call_id) or {}
+
+    def _deliver(result: dict[str, Any]) -> dict[str, Any]:
+        # Post-call CRM push (Part 3a): fire-and-forget, retried in crm.deliver;
+        # a CRM outage never blocks or loses the call record.
+        if crm_enabled(cfg):
+            enqueue_delivery(cfg, build_payload(cfg, store, call_id, result, brain, session))
+        return result
     if call.get("test"):        # a test call never changes customer records
-        return {"call_id": call_id, "outcome": outcome, "cost": cost, "test": True,
-                "latency_ms": session.latencies_ms}
+        return _deliver({"call_id": call_id, "outcome": outcome, "cost": cost, "test": True,
+                         "fields": fields_report, "latency_ms": session.latencies_ms})
     if st.do_not_call and contact_phone:
         store.add_dnc(contact_phone, "asked on call")
     if call.get("contact_id"):
@@ -167,7 +287,8 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
                   "not_interested": "not_interested", "callback": "callback"}.get(outcome)
         if status or st.callback:
             store.update_contact_status(call["contact_id"], status or "callback", st.callback)
-    return {"call_id": call_id, "outcome": outcome, "cost": cost, "latency_ms": session.latencies_ms}
+    return _deliver({"call_id": call_id, "outcome": outcome, "cost": cost,
+                     "fields": fields_report, "latency_ms": session.latencies_ms})
 
 
 class VoipService:

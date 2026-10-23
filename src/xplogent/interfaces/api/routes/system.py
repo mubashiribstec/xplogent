@@ -1,4 +1,4 @@
-"""Health, status, providers, vision, analytics, audit, budget, backup, update, guide."""
+"""Health, status, providers, analytics, audit, budget, backup, guide."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 
 from fastapi import APIRouter, Request
 
-from xplogent.core import guide, updater
+from xplogent.core import guide, repo_info
 from xplogent.core.config import load_config, save_env, save_user_config, secret_status
 from xplogent.core.events import EventBus
 from xplogent.interfaces.api import deps
@@ -56,8 +56,8 @@ async def status() -> dict:
         "ollama": {"host": ollama_host, "reachable": probe["ok"], "auth": bool(token),
                    "error": probe.get("error", "")},
         # What this install can do, so the dashboard can disable what can't work here.
-        "capabilities": {"display": has_display(), "docker": updater.in_docker(),
-                         "git": updater.repo_root() is not None and not updater.in_docker()},
+        "capabilities": {"display": has_display(), "docker": repo_info.in_docker(),
+                         "git": repo_info.repo_root() is not None and not repo_info.in_docker()},
     }
 
 
@@ -245,55 +245,6 @@ async def provider_models(name: str) -> dict:
     return {"models": sorted(models), "error": error}
 
 
-# ── Vision: one-click local model + self-test ────────────────────────────
-
-
-@router.post("/vision/enable-local")
-async def vision_enable_local(body: dict | None = None) -> dict:
-    """Pull a local vision model (default llava) and set it as the vision model."""
-    import shutil
-    import subprocess
-
-    model = str((body or {}).get("model", "") or "llava").strip()
-    if shutil.which("ollama") is None:
-        return {"ok": False, "error": "the 'ollama' CLI isn't installed"}
-
-    def _pull() -> tuple[int, str]:
-        proc = subprocess.run(["ollama", "pull", model],
-                              capture_output=True, text=True, timeout=1800)
-        return proc.returncode, (proc.stdout + proc.stderr)[-2000:]
-
-    rc, out = await asyncio.to_thread(_pull)
-    if rc != 0:
-        return {"ok": False, "error": f"ollama pull failed: {out[-400:]}"}
-    save_user_config({"vision_model": f"ollama:{model}"})
-    return {"ok": True, "vision_model": f"ollama:{model}", "output": out}
-
-
-@router.post("/vision/test")
-async def vision_test() -> dict:
-    """Run analyze_image on a tiny generated image to verify the vision model."""
-    import base64
-    import tempfile
-
-    from xplogent.tools.vision import AnalyzeImageTool
-
-    cfg = load_config()
-    model = (cfg.vision_model or "").strip() or cfg.model
-    # A minimal 1x1 red PNG — enough to confirm the vision pipeline responds.
-    png = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fh:
-        fh.write(png)
-        path = fh.name
-    try:
-        res = await AnalyzeImageTool().run(path=path, question="What color is this image?")
-    finally:
-        os.unlink(path)
-    return {"ok": res.ok, "model": model,
-            "reply": res.output if res.ok else res.error}
-
-
 @router.get("/config")
 async def config() -> dict:
     cfg = load_config()
@@ -457,33 +408,6 @@ async def import_knowledge(body: dict) -> dict:
         return _import(store, body)
     finally:
         store.close()
-
-
-# ── One-click update ─────────────────────────────────────────────────────
-
-
-@router.get("/update/check")
-async def update_check() -> dict:
-    return await asyncio.to_thread(updater.check_update)
-
-
-@router.post("/update")
-async def update_apply() -> dict:
-    # Safety net: snapshot data before changing code.
-    try:
-        from xplogent.core.backup import create_backup
-        backed_up = (await asyncio.to_thread(create_backup)).get("path")
-    except Exception:  # noqa: BLE001
-        backed_up = None
-    pulled = await asyncio.to_thread(updater.pull)
-    if not pulled["ok"]:
-        return {"ok": False, "stage": "pull", "output": pulled["output"], "backup": backed_up}
-    installed = await asyncio.to_thread(updater.reinstall)
-    web = await asyncio.to_thread(updater.rebuild_web)  # so GUI changes deploy
-    # Re-exec shortly after this response flushes so new code loads.
-    asyncio.get_event_loop().call_later(0.5, lambda: updater.restart(deps.SERVE_ARGS))
-    return {"ok": True, "restarting": True, "backup": backed_up, "pull": pulled["output"],
-            "install": installed["output"], "web": web.get("output") or web.get("skipped")}
 
 
 # ── In-app guide ─────────────────────────────────────────────────────────

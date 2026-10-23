@@ -116,33 +116,3 @@ async def test_hybrid_search_results_unchanged(tmp_path):
     store.close()
 
 
-# ── trace recorder batching ───────────────────────────────────────────────────
-@pytest.mark.asyncio
-async def test_recorder_merges_tokens_and_flushes_on_stop(tmp_path):
-    import time as _time
-
-    from xplogent.core.events import Event, EventBus, EventType
-    from xplogent.monitor.recorder import TraceRecorder
-
-    store = Store(tmp_path / "e.db")
-    store.add_events([("old", "_", "token", {"text": "x"})])
-    with store._lock:
-        store.conn.execute("UPDATE events SET created_at=?", (_time.time() - 90 * 86400,))
-        store.conn.commit()
-    bus = EventBus()
-    rec = TraceRecorder(bus, store, "run1")
-    rec.start()                                   # prunes the 90-day-old event
-    assert store.run_events("old") == []
-    await bus.publish(Event(type=EventType.STEP_START, data={"agent_id": "a"}))
-    words = [f"w{i} " for i in range(500)]
-    for w in words:
-        await bus.publish(Event(type=EventType.TOKEN, data={"agent_id": "a", "text": w}))
-    await bus.publish(Event(type=EventType.RUN_END, data={"agent_id": "a", "answer": "ok"}))
-    await rec.stop()
-    events = store.run_events("run1")
-    tokens = [e for e in events if e["type"] == str(EventType.TOKEN)]
-    assert "".join(e["data"]["text"] for e in tokens) == "".join(words)
-    assert len(tokens) < 50                       # merged, not one row per token
-    assert events[-1]["type"] == str(EventType.RUN_END)
-    assert rec.snapshot()[0]["steps"] == 1
-    store.close()

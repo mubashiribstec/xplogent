@@ -191,17 +191,6 @@ def test_compose_layout():
     assert local["xplogent"]["ports"] == ["${XPLOGENT_BIND:-127.0.0.1}:${XPLOGENT_PORT:-8765}:8765"]
 
 
-def test_dashboard_update_check_explains_docker(monkeypatch):
-    from xplogent.core import updater
-
-    monkeypatch.setenv("XPLOGENT_IN_DOCKER", "1")
-    monkeypatch.setenv("XPLOGENT_VERSION", "v1.2.3")
-    info = updater.check_update()
-    assert info["docker"] is True and info["version"] == "v1.2.3"
-    assert "xplogent-docker update" in info["error"]
-    assert updater.pull()["ok"] is False
-
-
 @_bash
 def test_installer_flags_apply_to_an_existing_install(tmp_path):
     """Re-running with --no-ollama used to be ignored ("keeping its settings")."""

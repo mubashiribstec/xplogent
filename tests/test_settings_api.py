@@ -22,7 +22,7 @@ def client(tmp_path, monkeypatch):
 
 def test_config_full_shape(client):
     body = client.get("/config/full").json()
-    for key in ("model", "safety", "orchestrator", "roles", "tools_enabled", "secrets"):
+    for key in ("model", "safety", "roles", "tools_enabled", "secrets"):
         assert key in body
 
 

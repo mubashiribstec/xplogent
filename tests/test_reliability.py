@@ -13,10 +13,6 @@ from tests.conftest import ScriptedProvider
 from xplogent.core.config import load_config
 from xplogent.core.context import ShortTermMemory
 from xplogent.core.events import EventBus
-from xplogent.core.extension import ExtensionBridge
-from xplogent.core.orchestrator import AgentSpec, Orchestrator
-from xplogent.core.retry import RetryPolicy
-from xplogent.core.taskboard import Task, TaskStatus
 from xplogent.interfaces.api.wschannel import WsChannel
 from xplogent.memory.store import Store
 from xplogent.memory.vector import Embedder
@@ -27,78 +23,6 @@ from xplogent.safety.approval import ApprovalRequest, RiskLevel, SafetyManager
 from xplogent.tools.registry import ToolRegistry
 
 _AUTO = {"low": "auto", "medium": "auto", "high": "auto", "critical": "deny"}
-
-
-def _orchestrator(cfg, monkeypatch, provider_factory) -> Orchestrator:
-    import xplogent.core.orchestrator as orch_mod
-
-    monkeypatch.setattr(orch_mod, "build_provider", provider_factory)
-    return Orchestrator(
-        cfg, bus=EventBus(), store=Store(":memory:"),
-        embedder=Embedder(ScriptedProvider([])),
-        base_tools=ToolRegistry.from_config(["filesystem"]),
-        base_safety=SafetyManager(policy=dict(_AUTO)),
-    )
-
-
-# ── orchestrator ──────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
-async def test_sync_delegate_with_one_slot_does_not_deadlock(monkeypatch):
-    """max_concurrent=1 + a worker waiting on its own helper used to hang forever."""
-    cfg = load_config()
-    cfg.roles = {"operator": {"allowed_tools": "*", "policy": dict(_AUTO)}}
-    counter = {"n": 0}
-
-    def provider(_spec, **_kw):
-        counter["n"] += 1
-        if counter["n"] == 1:
-            return ScriptedProvider([
-                Message(role=Role.ASSISTANT, content="",
-                        tool_calls=[ToolCall(id="c1", name="delegate_task",
-                                             arguments={"task": "sub job"})]),
-                Message(role=Role.ASSISTANT, content="lead done"),
-            ])
-        return ScriptedProvider([Message(role=Role.ASSISTANT, content="sub result")])
-
-    orch = _orchestrator(cfg, monkeypatch, provider)
-    result = await asyncio.wait_for(
-        orch.run_team([AgentSpec(name="lead", task="go")], max_concurrent=1), timeout=10)
-    assert result["results"]["lead"] == "lead done"
-    await orch.aclose()
-
-
-class _FlakyProvider(Provider):
-    name = "flaky"
-
-    async def stream(self, messages, tools=None, **kwargs):  # type: ignore[override]
-        raise ConnectionError("connection reset by peer")
-        yield  # pragma: no cover
-
-
-@pytest.mark.asyncio
-async def test_failed_worker_is_retried(monkeypatch):
-    """A worker whose provider failed used to be marked complete with the error text."""
-    cfg = load_config()
-    cfg.roles = {"operator": {"allowed_tools": "*", "policy": dict(_AUTO)}}
-    cfg.agent["provider_retries"] = 0
-    cfg.orchestrator["max_task_retries"] = 1
-    monkeypatch.setattr(RetryPolicy, "delay_for", lambda self, attempt: 0)
-    made = {"n": 0}
-
-    def provider(_spec, **_kw):
-        made["n"] += 1
-        if made["n"] == 1:
-            return _FlakyProvider("x")
-        return ScriptedProvider([Message(role=Role.ASSISTANT, content="second try ok")])
-
-    orch = _orchestrator(cfg, monkeypatch, provider)
-    orch._sem = asyncio.Semaphore(1)
-    task = Task(id="t1", title="t", description="do it")
-    orch.board.add(task)
-    await orch._run_task(task)
-    assert orch.board.tasks["t1"].status == TaskStatus.DONE
-    assert orch.board.tasks["t1"].result == "second try ok"
-    await orch.aclose()
 
 
 # ── context trimming ──────────────────────────────────────────────────────────
@@ -248,25 +172,6 @@ async def test_ws_send_failure_marks_closed_and_denies():
     chan = WsChannel(ws)
     assert await chan.approve(_req()) is False
     assert chan.closed
-
-
-# ── extension bridge ──────────────────────────────────────────────────────────
-@pytest.mark.asyncio
-async def test_extension_detach_only_fails_its_own_requests():
-    bridge = ExtensionBridge()
-    old, new = _FakeWs(), _FakeWs()
-    bridge.attach(old)
-    old_req = asyncio.create_task(bridge.request("tabs", timeout=2))
-    await asyncio.sleep(0.01)
-    bridge.attach(new)           # extension reconnected
-    new_req = asyncio.create_task(bridge.request("tabs", timeout=2))
-    await asyncio.sleep(0.01)
-    bridge.detach(old)           # the old handler finally exits
-    with pytest.raises(ConnectionError):
-        await old_req
-    assert bridge.connected
-    bridge.resolve(new.sent[0]["id"], True, ["tab"])
-    assert (await new_req) == {"ok": True, "data": ["tab"]}
 
 
 # ── embeddings ────────────────────────────────────────────────────────────────

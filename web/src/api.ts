@@ -333,20 +333,6 @@ export async function addDnc(phone: string) {
   await fetch("/voip/dnc", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone }) });
 }
 
-// ── Proactive triggers ────────────────────────────────────────────────────────
-export interface Trigger {
-  id: number; name: string; type: "webhook" | "file"; spec: string;
-  prompt: string; mode: string; enabled: number; last_fired: number | null; last_status: string | null;
-}
-export async function getTriggers(): Promise<{ triggers: Trigger[] }> {
-  return (await fetch("/triggers")).json();
-}
-export async function createTrigger(body: { name: string; type: string; prompt: string; spec?: string; mode?: string }): Promise<{ ok: boolean; trigger: Trigger }> {
-  return (await fetch("/triggers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
-}
-export async function toggleTrigger(id: number) { await fetch(`/triggers/${id}/toggle`, { method: "POST" }); }
-export async function deleteTrigger(id: number) { await fetch(`/triggers/${id}`, { method: "DELETE" }); }
-
 // ── Audit log ─────────────────────────────────────────────────────────────────
 export interface AuditEntry {
   actor: string; action: string; target: string; risk: string;
@@ -366,15 +352,6 @@ export async function getSkillLibrary(): Promise<{ packs: SkillPack[] }> {
 }
 export async function installSkill(body: { src?: string; skill_md?: string }): Promise<any> {
   return (await fetch("/skills/install", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
-}
-
-// ── Update ────────────────────────────────────────────────────────────────────
-export async function checkUpdate(): Promise<Record<string, any>> {
-  return (await fetch("/update/check")).json();
-}
-
-export async function applyUpdate(): Promise<Record<string, any>> {
-  return (await fetch("/update", { method: "POST" })).json();
 }
 
 export async function health(): Promise<boolean> {
@@ -538,42 +515,6 @@ export async function restoreBackup(file: ArrayBuffer): Promise<any> {
 }
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
-export interface Schedule {
-  id: number;
-  name: string;
-  prompt: string;
-  mode: string;
-  spec: string;
-  tz: string;
-  enabled: number;
-  next_run: number | null;
-  last_run: number | null;
-  last_status: string | null;
-}
-
-export async function getSchedules(): Promise<{ schedules: Schedule[] }> {
-  return (await fetch("/schedules")).json();
-}
-
-export async function addSchedule(body: {
-  prompt: string; schedule: string; mode?: string; name?: string; tz?: string;
-}): Promise<Record<string, any>> {
-  const r = await fetch("/schedules", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return r.json();
-}
-
-export async function toggleSchedule(id: number) {
-  await fetch(`/schedules/${id}/toggle`, { method: "POST" });
-}
-
-export async function deleteSchedule(id: number) {
-  await fetch(`/schedules/${id}`, { method: "DELETE" });
-}
-
 // ── Guide ─────────────────────────────────────────────────────────────────────
 export async function getGuidePages(): Promise<{ pages: { slug: string; title: string }[] }> {
   return (await fetch("/guide")).json();

@@ -8,11 +8,9 @@ import {
   consolidateMemory, deleteSession, getSessionMessages, getSessions, getSkills, newSession,
   renameSession, searchMemory, undoTurns,
 } from "../api";
-import { LayoutDashboard } from "lucide-react";
 import { GenChoice, ModelBar } from "../ModelBar";
 import { Markdown } from "../Markdown";
 import { useToast } from "../components/Toast";
-import { CanvasPanel } from "../components/CanvasPanel";
 import { downloadJSON, downloadMarkdown, shareHTML } from "../lib/exportChat";
 import { useVoice } from "../hooks/useVoice";
 
@@ -52,8 +50,6 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
   const autoChat = useRef(false);
   const autoSession = useRef(false);
   const [autoScope, setAutoScope] = useState<"" | "chat" | "session">("");
-  const [canvas, setCanvas] = useState<{ html: string; title: string } | null>(null);
-  const [canvasOpen, setCanvasOpen] = useState(false);
   const lastTask = useRef<string>("");
   const sock = useRef<XplogentSocket | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -115,10 +111,6 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
         } else setApproval(req);
         break;
       }
-      case "canvas":
-        setCanvas({ html: String(ev.html ?? ""), title: String(ev.title ?? "Canvas") });
-        setCanvasOpen(true);
-        break;
       case "error": toast(String(ev.message ?? "error"), "error"); break;
       case "done":
         busyRef.current = false; setBusy(false); refreshSkills(); refreshSessions();
@@ -344,10 +336,6 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
               title={micAllowed ? "Hands-free voice conversation" : MIC_NEEDS_HTTPS}
               onClick={toggleHandsFree}><Volume2 size={15} /> {handsFree ? "Hands-free on" : "Hands-free"}</button>
           )}
-          {canvas && (
-            <button className={`btn ghost sm ${canvasOpen ? "active" : ""}`} title="Toggle Canvas"
-              onClick={() => setCanvasOpen((o) => !o)}><LayoutDashboard size={15} /> Canvas</button>
-          )}
           <button className="btn ghost sm" title="Undo the last exchange (/undo [N])" disabled={!log.length || busy}
             onClick={() => undo(1)}><Undo2 size={15} /> Undo</button>
           <button className="btn ghost sm" title="Download as Markdown" disabled={!log.length}
@@ -434,10 +422,6 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
           </div>
         </div>
       </main>
-
-      {canvasOpen && canvas && (
-        <CanvasPanel html={canvas.html} title={canvas.title} onClose={() => setCanvasOpen(false)} />
-      )}
 
       {approval && (
         <div className="overlay center" onClick={() => resolve(false)}>

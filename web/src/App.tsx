@@ -7,18 +7,13 @@ import { Login } from "./components/Login";
 import { useIsMobile } from "./hooks/useMediaQuery";
 import { UNAUTHORIZED_EVENT, checkAuth, getSessions, getStatus, setToken } from "./api";
 import { Chat } from "./views/Chat";
-import { Runs } from "./views/Runs";
 import { Persona } from "./views/Persona";
 import { Knowledge } from "./views/Knowledge";
 import { Analytics } from "./views/Analytics";
 import { Audit } from "./views/Audit";
-import { Operator } from "./views/Operator";
-import { Browser } from "./views/Browser";
 import { Calls } from "./views/Calls";
 import { Contacts } from "./views/Contacts";
 import { Training } from "./views/Training";
-import { Triggers } from "./views/Triggers";
-import { Schedules } from "./Schedules";
 import { Settings } from "./Settings";
 import { Guide } from "./Guide";
 
@@ -28,13 +23,11 @@ const initialTheme = (): "dark" | "light" => {
   return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 };
 
-const NO_SCREEN = "Needs a screen; not available on this server";
 
 export function App() {
   const [tab, setTab] = useState<Tab>("chat");
   const [theme, setTheme] = useState<"dark" | "light">(initialTheme);
   const [online, setOnline] = useState(true);
-  const [caps, setCaps] = useState<{ display: boolean; docker: boolean; git: boolean } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [onboard, setOnboard] = useState(false);
@@ -56,7 +49,7 @@ export function App() {
   useEffect(() => {
     if (!authed) return;
     const poll = () => getStatus()
-      .then((st) => { setOnline(true); if (st?.capabilities) setCaps(st.capabilities); })
+      .then(() => setOnline(true))
       .catch(() => setOnline(false));
     poll();
     const id = setInterval(poll, 15000);
@@ -100,7 +93,6 @@ export function App() {
   return (
     <div className="shell">
       <NavRail tab={tab} onSelect={go} online={online} theme={theme} onTheme={toggleTheme}
-               unavailable={caps && !caps.display ? { operator: NO_SCREEN } : undefined}
                className={navOpen ? "open" : ""} />
       {isMobile && navOpen && <div className="scrim" onClick={() => setNavOpen(false)} />}
 
@@ -113,23 +105,12 @@ export function App() {
           </div>
         )}
         {tab === "chat" && <Chat />}
-        {tab === "operator" && (caps && !caps.display
-          ? <div className="pane"><div className="pane-wide"><div className="card">
-              <h3>Operator isn't available on this server</h3>
-              <p className="dim">{NO_SCREEN}. The Operator drives a real desktop (screenshots, mouse,
-                keyboard); a Docker server has no screen. Install Xplogent on a desktop computer to use it.</p>
-            </div></div></div>
-          : <Operator />)}
-        {tab === "browser" && <Browser />}
         {tab === "calls" && <Calls />}
         {tab === "contacts" && <Contacts />}
         {tab === "training" && <Training />}
-        {tab === "runs" && <Runs />}
         {tab === "knowledge" && <Knowledge />}
         {tab === "analytics" && <Analytics />}
         {tab === "persona" && <Persona />}
-        {tab === "schedules" && <Schedules />}
-        {tab === "triggers" && <Triggers />}
         {tab === "audit" && <Audit />}
         {tab === "settings" && <Settings />}
         {tab === "guide" && <Guide />}

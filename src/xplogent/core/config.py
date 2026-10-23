@@ -112,12 +112,10 @@ class Config:
     tools: dict[str, Any] = field(default_factory=dict)
     execution: dict[str, Any] = field(default_factory=dict)
     skills: dict[str, Any] = field(default_factory=dict)
-    orchestrator: dict[str, Any] = field(default_factory=dict)
     scheduler: dict[str, Any] = field(default_factory=dict)
     budget: dict[str, Any] = field(default_factory=dict)
     voip: dict[str, Any] = field(default_factory=dict)
     roles: dict[str, Any] = field(default_factory=dict)
-    mcp: dict[str, Any] = field(default_factory=dict)
     models: list[dict[str, Any]] = field(default_factory=list)
     home: Path = field(default_factory=xplogent_home)
     raw: dict[str, Any] = field(default_factory=dict)
@@ -321,12 +319,10 @@ def load_config(overrides: dict[str, Any] | None = None) -> Config:
         tools=data.get("tools", {}),
         execution=data.get("execution", {}),
         skills=data.get("skills", {}),
-        orchestrator=data.get("orchestrator", {}),
         scheduler=data.get("scheduler", {}),
         budget=data.get("budget", {}),
         voip=data.get("voip", {}),
         roles=data.get("roles", {}),
-        mcp=data.get("mcp", {}),
         models=data.get("models", []),
         raw=data,
     )

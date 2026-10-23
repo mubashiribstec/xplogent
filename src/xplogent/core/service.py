@@ -46,7 +46,7 @@ def _read_state() -> dict:
 
 def _workdir() -> Path:
     """A stable working directory for the background server (repo root or home)."""
-    from xplogent.core.updater import repo_root
+    from xplogent.core.repo_info import repo_root
 
     return repo_root() or xplogent_home()
 

@@ -1,8 +1,9 @@
 # Roadmap & advanced ideas
 
 Xplogent already covers local + hosted models, memory with self-improvement,
-multi-agent orchestration, scheduling, vision, sandboxed execution, backup, and a
-phone agent. Here are researched next steps, roughly by value/effort.
+sandboxed shell execution, backup, and a phone agent with mandatory-field
+enforcement, recruitment templates and CRM delivery. Here are researched next
+steps, roughly by value/effort.
 
 ## Near-term, high value
 - **RAG over your documents** — a `documents` tool + loader (PDF/markdown/text) that
@@ -21,10 +22,6 @@ phone agent. Here are researched next steps, roughly by value/effort.
 - **Skill hub** — import/share skills with a community registry (export/import already exists).
 
 ## Larger bets
-- **Browser-use vision loop** — combine `screenshot` + `analyze_image` + `browser` into a
-  built-in "operate this website" macro with ret/replay.
-- **Distributed agents** — run a team across machines (the orchestrator is already
-  concurrency-bounded; this adds a transport).
 - **Trajectory export for fine-tuning** — dump successful runs as training data.
 
 Have a request? These are starting points, not commitments — open an issue or just ask
