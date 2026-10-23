@@ -112,7 +112,6 @@ class Config:
     tools: dict[str, Any] = field(default_factory=dict)
     execution: dict[str, Any] = field(default_factory=dict)
     skills: dict[str, Any] = field(default_factory=dict)
-    scheduler: dict[str, Any] = field(default_factory=dict)
     budget: dict[str, Any] = field(default_factory=dict)
     voip: dict[str, Any] = field(default_factory=dict)
     roles: dict[str, Any] = field(default_factory=dict)
@@ -149,8 +148,24 @@ class Config:
 def _load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    with path.open("r", encoding="utf-8") as fh:
-        return yaml.safe_load(fh) or {}
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except yaml.YAMLError as exc:
+        # A hand-edited config with a typo must say *which file* is broken and how
+        # to recover, not die with a raw parser traceback at startup.
+        raise ValueError(
+            f"Invalid YAML in config file {path}: {exc} — "
+            "fix the file (or delete it to go back to defaults) and try again."
+        ) from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Config file {path} must hold key: value pairs, "
+            f"not a {type(data).__name__} — fix the file (or delete it) and try again."
+        )
+    return data
 
 
 # ─── dotenv + writable config (used by the setup wizard and the GUI) ──────────
@@ -320,7 +335,6 @@ def load_config(overrides: dict[str, Any] | None = None) -> Config:
         tools=data.get("tools", {}),
         execution=data.get("execution", {}),
         skills=data.get("skills", {}),
-        scheduler=data.get("scheduler", {}),
         budget=data.get("budget", {}),
         voip=data.get("voip", {}),
         roles=data.get("roles", {}),

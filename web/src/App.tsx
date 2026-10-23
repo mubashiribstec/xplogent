@@ -5,7 +5,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { Onboarding } from "./components/Onboarding";
 import { Login } from "./components/Login";
 import { useIsMobile } from "./hooks/useMediaQuery";
-import { UNAUTHORIZED_EVENT, checkAuth, getSessions, getStatus, setToken } from "./api";
+import { UNAUTHORIZED_EVENT, checkAuth, getSessions, getStatus, setToken, type StatusInfo } from "./api";
 import { Chat } from "./views/Chat";
 import { Persona } from "./views/Persona";
 import { Knowledge } from "./views/Knowledge";
@@ -28,6 +28,8 @@ export function App() {
   const [tab, setTab] = useState<Tab>("chat");
   const [theme, setTheme] = useState<"dark" | "light">(initialTheme);
   const [online, setOnline] = useState(true);
+  const [status, setStatus] = useState<StatusInfo | null>(null);
+  const [bannerOff, setBannerOff] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [onboard, setOnboard] = useState(false);
@@ -49,7 +51,7 @@ export function App() {
   useEffect(() => {
     if (!authed) return;
     const poll = () => getStatus()
-      .then(() => setOnline(true))
+      .then((st) => { setOnline(true); setStatus(st); })
       .catch(() => setOnline(false));
     poll();
     const id = setInterval(poll, 15000);
@@ -64,7 +66,12 @@ export function App() {
       .then(([st, ss]) => {
         const anyKey = Object.values(st?.secrets ?? {}).some(Boolean);
         const usingLocal = st?.model?.startsWith("ollama");
-        if (!anyKey && !usingLocal && (ss.sessions?.length ?? 0) === 0) setOnboard(true);
+        const noSessions = (ss.sessions?.length ?? 0) === 0;
+        // Also onboard when the (default) local model can't answer: the wizard is
+        // the flow that tests the connection and pulls the model — without this a
+        // fresh install just lands in a chat whose every message fails.
+        const localDown = usingLocal && st?.ollama != null && !st.ollama.reachable;
+        if (noSessions && ((!anyKey && !usingLocal) || localDown)) setOnboard(true);
       });
   }, [authed]);
 
@@ -87,7 +94,7 @@ export function App() {
 
   const go = (t: Tab) => { setTab(t); setNavOpen(false); };
 
-  if (authed === null) return null;  // the boot "Loading…" is replaced by an empty frame briefly
+  if (authed === null) return <div className="overlay center"><p className="dim">Loading…</p></div>;
   if (!authed) return <Login onAuthed={() => { setAuthed(true); location.reload(); }} />;
 
   return (
@@ -102,6 +109,16 @@ export function App() {
             <button className="icon-btn" aria-label="menu" onClick={() => setNavOpen(true)}><Menu size={20} /></button>
             <div className="brand">X</div>
             <b>{TABS.find((t) => t.id === tab)?.label}</b>
+          </div>
+        )}
+        {tab === "chat" && !bannerOff && status?.model?.startsWith("ollama")
+          && status.ollama && !status.ollama.reachable && (
+          <div className="warn-banner" style={{ margin: "12px 16px 0" }}>
+            ⚠ Your local model isn't answering ({status.ollama.host}). Chat will fail until
+            Ollama is running and the model is pulled — start Ollama, or{" "}
+            <button className="linklike" onClick={() => go("settings")}>switch provider in Settings</button>.
+            Running <code>xplogent doctor</code> in a terminal pinpoints it.{" "}
+            <button className="linklike" onClick={() => setBannerOff(true)}>Dismiss</button>
           </div>
         )}
         {tab === "chat" && <Chat />}

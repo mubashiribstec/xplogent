@@ -20,7 +20,7 @@ reflection_model: "ollama:llama3.1"
 # Embedding model used by the memory subsystem (local by default).
 embedding_model: "ollama:nomic-embed-text"
 
-# Vision model for the 'analyze_image' tool (seeing screenshots/images).
+# Vision model for image turns in chat (attached pictures/screenshots).
 # Empty = reuse `model` if it's vision-capable. Examples: openai:gpt-4o,
 # anthropic:claude-sonnet-4-6, ollama:llava.
 vision_model: ""
@@ -89,7 +89,7 @@ tools:
     - filesystem
     - memory
 
-# ─── Execution backend for `shell` / `python_exec` ────────────────────
+# ─── Execution backend for the `shell` tool ───────────────────────────
 # Where commands run. "local" = this machine (default). "docker" runs them
 # inside a container; "ssh" runs them on a remote host. Isolating execution
 # limits the agent's reach without changing any tool. The deny-list still
@@ -124,22 +124,19 @@ roles:
     network: true
     max_steps: 30
   researcher:
-    allowed_tools: [web_search, web_fetch, read_file, list_dir, analyze_image,
-                    broadcast, send_message, read_inbox, list_agents]
+    allowed_tools: [read_file, list_dir, memory]
     policy: { low: auto, medium: confirm, high: deny, critical: deny }
     allowed_paths: []
     network: true
     max_steps: 20
   coder:
-    allowed_tools: [read_file, write_file, edit_file, list_dir, shell, python_exec,
-                    broadcast, send_message, read_inbox, list_agents]
+    allowed_tools: [read_file, write_file, edit_file, list_dir, shell, memory]
     policy: { low: auto, medium: auto, high: confirm, critical: deny }
     allowed_paths: []         # set to e.g. ["./workspace"] to sandbox writes
     network: false
     max_steps: 25
   reviewer:
-    allowed_tools: [read_file, list_dir, web_search, web_fetch, analyze_image,
-                    broadcast, send_message, read_inbox, list_agents]
+    allowed_tools: [read_file, list_dir, memory]
     policy: { low: auto, medium: confirm, high: deny, critical: deny }
     allowed_paths: []
     network: true

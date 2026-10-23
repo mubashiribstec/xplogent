@@ -131,7 +131,30 @@ class DockerBackend(TerminalBackend):
 
     async def run(self, command: str, timeout: int = 120,
                   cwd: str | None = None) -> tuple[int, str, str]:
+        # The cwd comes from the model: bind-mounting it read-write would let a
+        # prompt-injected agent open ANY host folder (e.g. ~/.ssh) inside the
+        # "isolated" container. Only home/tmp/data folders may be mounted.
+        if cwd and not self.container and not _mount_allowed(cwd):
+            return 1, "", (f"docker backend: refusing to mount {cwd} — only folders "
+                           "under your home directory, /tmp, or the Xplogent data "
+                           "folder can be mounted into the container.")
+        for value, what in ((self.image, "image"), (self.container, "container")):
+            if value.startswith("-"):
+                return 1, "", f"docker backend: invalid {what} '{value}' (must not start with '-')"
         return await _exec(self.argv(command, cwd), timeout)
+
+
+def _mount_allowed(cwd: str) -> bool:
+    from pathlib import Path
+
+    from xplogent.core.config import xplogent_home
+
+    try:
+        target = Path(cwd).expanduser().resolve()
+    except OSError:
+        return False
+    roots = [Path.home().resolve(), Path("/tmp").resolve(), xplogent_home().resolve()]
+    return any(target == r or r in target.parents for r in roots)
 
 
 class SSHBackend(TerminalBackend):
@@ -158,6 +181,11 @@ class SSHBackend(TerminalBackend):
                   cwd: str | None = None) -> tuple[int, str, str]:
         if not self.host:
             return 1, "", "SSH backend selected but no host configured (execution.ssh.host)."
+        # host/user are single argv items: a leading '-' would be parsed by ssh
+        # as a flag (e.g. -oProxyCommand=...) instead of a destination.
+        for value, what in ((self.host, "host"), (self.user, "user")):
+            if value.startswith("-"):
+                return 1, "", f"ssh backend: invalid {what} '{value}' (must not start with '-')"
         return await _exec(self.argv(command, cwd), timeout)
 
 

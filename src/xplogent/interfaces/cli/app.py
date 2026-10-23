@@ -8,8 +8,7 @@ Commands:
     xplogent skills list          list learned skills
     xplogent providers            list available providers
     xplogent serve                start the REST + WebSocket API
-    xplogent orchestrate "<goal>" run a multi-agent team on a goal
-    xplogent team --agent ...     run named agents concurrently
+    xplogent doctor               check config, keys, model and ports; print fixes
 """
 
 from __future__ import annotations
@@ -224,7 +223,32 @@ def stop() -> None:
     from xplogent.core import service
 
     res = service.stop()
-    console.print("[green]stopped[/]" if res.get("stopped") else f"[dim]{res.get('reason','not running')}[/]")
+    if res.get("stopped"):
+        console.print("[green]stopped[/]")
+    elif res.get("ok") is False:
+        console.print(f"[red]{res.get('error', 'could not stop the server')}[/]")
+    else:
+        console.print(f"[dim]{res.get('reason', 'not running')}[/]")
+
+
+@app.command()
+def doctor(port: int = 8765) -> None:
+    """Check config, keys, model, database and ports; print plain-English fixes."""
+    from xplogent.core.doctor import run_checks
+
+    checks = run_checks(port=port)
+    marks = {"ok": "[green]✓[/]", "warn": "[yellow]⚠[/]", "fail": "[red]✗[/]"}
+    failures = 0
+    for check in checks:
+        console.print(f"{marks[check.status]} [bold]{check.name}[/] — {escape(check.detail)}")
+        if check.fix and check.status != "ok":
+            console.print(f"    [dim]fix: {escape(check.fix)}[/]")
+        failures += check.status == "fail"
+    if failures:
+        console.print(f"\n[red]{failures} problem(s) to fix before Xplogent can run.[/]")
+        raise typer.Exit(1)
+    console.print("\n[green]All essential checks passed.[/] "
+                  "Run [bold]xplogent up[/] to launch the dashboard.")
 
 
 @app.command()
@@ -245,8 +269,12 @@ def restart(port: int = 8765, host: str = "127.0.0.1") -> None:
     """Restart the background server."""
     from xplogent.core import service
 
-    service.restart(port=port, host=host)
-    console.print("[green]restarted[/]")
+    res = service.restart(port=port, host=host)
+    if res.get("ok", True):
+        console.print("[green]restarted[/]")
+    else:
+        console.print(f"[red]restart failed: {res.get('error', res)}[/]")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -256,11 +284,18 @@ def service(action: str) -> None:
 
     if action == "install":
         res = svc.install_service()
-        console.print(res)
     elif action == "uninstall":
-        console.print(svc.uninstall_service())
+        res = svc.uninstall_service()
     else:
         console.print("[red]use: xplogent service install | uninstall[/]")
+        raise typer.Exit(2)
+    if isinstance(res, dict) and res.get("ok") is False:
+        console.print(f"[red]{res.get('error', res)}[/]")
+        raise typer.Exit(1)
+    console.print(f"[green]{action} done[/]" if not isinstance(res, dict)
+                  else res.get("message", f"{action} done"))
+    if isinstance(res, dict) and res.get("next"):
+        console.print(f"next: {res['next']}")
 
 
 @app.command()
@@ -268,28 +303,57 @@ def setup() -> None:
     """Interactive first-run wizard: pick a provider/model and save settings."""
     console.print(Panel("Let's set up Xplogent.", title="⚙ setup", border_style="cyan"))
     provider = console.input(
-        "Provider [bold]\\[ollama][/] / openai / anthropic / openrouter: "
-    ).strip() or "ollama"
+        "Provider [bold]\\[ollama][/] / openai / anthropic / gemini / openrouter: "
+    ).strip().lower() or "ollama"
     defaults = {
         "ollama": "llama3.1", "openai": "gpt-4o",
-        "anthropic": "claude-sonnet-4-6", "openrouter": "meta-llama/llama-3.1-70b-instruct",
+        "anthropic": "claude-sonnet-4-6", "gemini": "gemini-2.0-flash",
+        "openrouter": "meta-llama/llama-3.1-70b-instruct",
     }
+    if provider not in defaults:
+        console.print(f"[yellow]Unknown provider '{provider}'[/] — "
+                      "continuing anyway; fix it later in Settings if chats fail.")
     model = console.input(f"Model [bold]\\[{defaults.get(provider, '')}][/]: ").strip() \
         or defaults.get(provider, "")
     save_user_config({"model": f"{provider}:{model}"})
 
     if provider != "ollama":
         key_env = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
+                   "gemini": "GOOGLE_API_KEY",
                    "openrouter": "OPENROUTER_API_KEY"}.get(provider)
         if key_env:
             key = console.input(f"{key_env} (leave blank to skip): ").strip()
             if key:
                 save_env({key_env: key})
+            else:
+                console.print(f"[yellow]No key saved[/] — chats will fail until you add "
+                              f"{key_env} (Settings → Providers, or re-run setup).")
     else:
-        console.print("[dim]Ollama selected. Make sure it's running:[/] "
-                      f"ollama pull {model} && ollama pull nomic-embed-text")
+        _setup_check_ollama(model)
 
-    console.print("[green]Saved.[/] Run [bold]xplogent up[/] to launch the dashboard.")
+    console.print("[green]Saved.[/] Run [bold]xplogent doctor[/] to verify everything, "
+                  "then [bold]xplogent up[/] to launch the dashboard.")
+
+
+def _setup_check_ollama(model: str) -> None:
+    """After picking Ollama, say right away whether it's reachable and pulled."""
+    from xplogent.core.doctor import _model_present, _ollama_tags
+    from xplogent.providers.ollama import ollama_settings
+
+    host, _token = ollama_settings()
+    try:
+        tags = _ollama_tags(host)
+    except Exception:  # noqa: BLE001 - setup must continue; doctor has the full check
+        console.print(f"[yellow]Ollama isn't answering at {host} yet.[/] Install it from "
+                      "ollama.com, start it, then run:\n"
+                      f"  ollama pull {model} && ollama pull nomic-embed-text")
+        return
+    missing = [m for m in (model, "nomic-embed-text") if not _model_present(tags, m)]
+    if missing:
+        console.print("[yellow]Ollama is running[/] — pull the missing model(s) first:\n"
+                      + "\n".join(f"  ollama pull {m}" for m in missing))
+    else:
+        console.print("[green]Ollama is running and your models are pulled.[/]")
 
 
 @app.command()
@@ -305,15 +369,26 @@ def backup(out: str = typer.Option("", help="Output .tar.gz path (default: ~/.xp
 @app.command()
 def restore(path: str) -> None:
     """Restore from a backup .tar.gz (overwrites current data)."""
+    import tarfile
+
     from xplogent.core.backup import restore_backup
 
-    res = restore_backup(path)
-    console.print(res if res["ok"] else f"[red]{res.get('error')}[/]")
+    try:
+        res = restore_backup(path)
+    except (tarfile.ReadError, OSError, EOFError) as exc:
+        console.print(f"[red]could not read {path}: {exc}[/] "
+                      "(is it an Xplogent backup .tar.gz?)")
+        raise typer.Exit(1) from exc
+    if res["ok"]:
+        console.print("[green]restored[/] — restart the server to use the restored data.")
+    else:
+        console.print(f"[red]{res.get('error')}[/]")
+        raise typer.Exit(1)
 
 
 
 
-# ── multi-agent ───────────────────────────────────────────────────────────────
+# ── sub-commands ──────────────────────────────────────────────────────────────
 memory_app = typer.Typer(help="Inspect memory.")
 skills_app = typer.Typer(help="Inspect learned skills.")
 knowledge_app = typer.Typer(help="Export/import learned facts + skills (JSON).")
@@ -394,8 +469,13 @@ def knowledge_import(path: str) -> None:
 
     from xplogent.core.backup import import_knowledge
 
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        console.print(f"[red]could not read {path}: {exc}[/]")
+        raise typer.Exit(1) from exc
     store = Store(load_config().db_path)
-    res = import_knowledge(store, json.loads(Path(path).read_text(encoding="utf-8")))
+    res = import_knowledge(store, data)
     store.close()
     console.print(f"[green]imported[/] +{res['facts_added']} facts, +{res['skills_added']} skills")
     for w in res.get("warnings", []):
@@ -472,12 +552,13 @@ def skills_new(name: str) -> None:
     """Scaffold a new SKILL.md you can edit."""
     from pathlib import Path
 
-    from xplogent.skills.pack import render_skill_md
+    from xplogent.skills.pack import _norm_name, render_skill_md
 
     cfg = load_config()
-    md = render_skill_md(name, "one sentence: when to use this skill",
+    safe = _norm_name(name)  # "My Skill!" -> my_skill; "../../x" can't escape
+    md = render_skill_md(safe, "one sentence: when to use this skill",
                          "1. first step\n2. second step", tools=[], trigger="when ...")
-    path: Path = cfg.skills_dir / f"{name}.md"
+    path: Path = cfg.skills_dir / f"{safe}.md"
     path.write_text(md, encoding="utf-8")
     console.print(f"[green]scaffolded[/] {path}")
 

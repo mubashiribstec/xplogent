@@ -31,7 +31,9 @@ def register_provider(name: str, cls: type[Provider]) -> None:
 
 
 def _make(spec: str, **kwargs: Any) -> Provider:
-    provider_name, _, model = spec.partition(":")
+    provider_name, sep, model = spec.partition(":")
+    if sep and not model:
+        raise ValueError(f"no model in spec '{spec}' — write it as 'provider:model'")
     if not model:
         model = provider_name
     if provider_name not in _PROVIDERS:

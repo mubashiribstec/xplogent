@@ -2,9 +2,10 @@
 
 A :class:`PermissionProfile` captures what an individual agent is allowed to do:
 which tools it may call, its per-risk approval policy, which filesystem paths it
-may touch, whether it has network access, and its step budget. The orchestrator
-assigns a profile (by role) to each worker; the :class:`~xplogent.safety.approval.SafetyManager`
-enforces it, and the tool registry is filtered to the allowed tools.
+may touch, whether it has network access, and its step budget. A runtime is
+scoped to a profile (by role) when it is built; the
+:class:`~xplogent.safety.approval.SafetyManager` enforces it, and the tool
+registry is filtered to the allowed tools.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from typing import Any
 NETWORK_TOOLS = {"web_search", "web_fetch", "browser"}
 
 # Filesystem-writing tools whose path arguments are checked against allowed_paths.
-PATH_WRITE_TOOLS = {"write_file", "edit_file", "screenshot", "browser"}
+PATH_WRITE_TOOLS = {"write_file", "edit_file"}
 
 
 @dataclass

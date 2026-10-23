@@ -11,10 +11,9 @@ Then run `xplogent up` again. Without Node.js, run the API (`xplogent serve`) an
 the dev server (`cd web && npm run dev`) separately.
 
 ## "confirmation required but no approver" / actions blocked
-Over the API and MCP there's no human to approve `confirm`-tier actions, so they
-are blocked by default. Either lower the risk policy for that tier in **Settings
-→ Safety**, use a role whose policy is `auto` for it, or enable auto-approval for
-MCP.
+Over the API there's no human to approve `confirm`-tier actions, so they are
+blocked by default. Either lower the risk policy for that tier in **Settings
+→ Safety**, or use a role whose policy is `auto` for it.
 
 ## Ollama errors / no response
 Make sure Ollama is running and the models are pulled:
@@ -26,10 +25,11 @@ ollama pull nomic-embed-text
 
 Check `OLLAMA_HOST` if it isn't on the default `http://localhost:11434`.
 
-## GUI automation does nothing (headless server)
-Mouse/keyboard/screenshot tools need a real display. On a headless machine they
-report "no display available" — drive Xplogent through the dashboard/API instead.
+## Something's off but you're not sure what
+Run `xplogent doctor`. It checks your config files, saved API keys, whether
+your model answers, the database, the dashboard build and the server port,
+and prints a plain-English fix for anything it finds.
 
-## Update says "not a git checkout"
-One-click update only works for git-clone/editable installs. Reinstall from the
-repository, or update via your package manager.
+## Updating
+See **Updating** (guide 06) — Docker installs update with `xplogent-docker
+update`; git installs with `git pull` + reinstall.

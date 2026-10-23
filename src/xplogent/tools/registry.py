@@ -1,4 +1,4 @@
-"""Tool registry — one unified catalog of built-in, plugin, and MCP tools."""
+"""Tool registry — one unified catalog of built-in and plugin tools."""
 
 from __future__ import annotations
 

@@ -30,6 +30,8 @@ def parse_skill_md(text: str) -> dict[str, Any]:
             meta = yaml.safe_load(m.group(1)) or {}
         except yaml.YAMLError:
             meta = {}
+        if not isinstance(meta, dict):
+            meta = {}  # frontmatter that's a list/scalar is not metadata
         body = m.group(2).strip()
         name = str(meta.get("name", "")).strip()
         description = str(meta.get("description", "")).strip()

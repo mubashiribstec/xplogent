@@ -42,7 +42,17 @@ def api(method: str, path: str, url: str | None = None, body: dict[str, Any] | N
         console.print("[red]The server refused the access token.[/] Set XPLOGENT_AUTH_TOKEN or run "
                       "this on the server itself.")
         raise typer.Exit(2)
-    return resp.json()
+    try:
+        data = resp.json()
+    except ValueError:
+        # A proxy/Caddy 502 page or a bare 500: report it, don't traceback.
+        console.print(f"[red]The server answered HTTP {resp.status_code} with a non-JSON "
+                      "response.[/] Check the server log.")
+        raise typer.Exit(2) from None
+    if resp.status_code >= 400:
+        console.print(f"[red]HTTP {resp.status_code}[/]: {data.get('error') or data}")
+        raise typer.Exit(2)
+    return data
 
 
 @voip_app.command("status")

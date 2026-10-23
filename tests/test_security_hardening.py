@@ -268,11 +268,12 @@ def test_websocket_from_another_site_is_refused():
         assert ws.receive_json()["type"] == "session"
 
 
-def test_extension_origin_only_for_its_own_socket():
+def test_extension_origins_are_refused():
+    # The browser extension was removed; its origins get no special pass any more.
     from xplogent.interfaces.api.security import origin_allowed
 
     ext = "chrome-extension://abcdef"
-    assert origin_allowed(ext, "localhost:8765", "/ws/extension", set())
+    assert not origin_allowed(ext, "localhost:8765", "/ws/extension", set())
     assert not origin_allowed(ext, "localhost:8765", "/ws", set())
 
 

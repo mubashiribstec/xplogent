@@ -1,6 +1,6 @@
 [Unit]
 Description=Xplogent AI agent server
-Documentation=https://github.com/mubashiribstec/Ai-agent
+Documentation=https://github.com/mubashiribstec/xplogent
 After=network-online.target
 Wants=network-online.target
 
@@ -17,7 +17,7 @@ RestartSec=3
 TimeoutStopSec=20
 
 # Moderate hardening. Deliberately NOT ProtectHome/ProtectSystem=strict: the agent's
-# shell and python tools need to work, and the in-app updater writes to /opt/xplogent.
+# shell tools need to work in the user's folders and write to its data directory.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

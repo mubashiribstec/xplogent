@@ -13,15 +13,9 @@ anyio==4.15.1
     #   anthropic
     #   httpx
     #   httpx2
-    #   mcp
     #   openai
-    #   sse-starlette
     #   starlette
     #   watchfiles
-attrs==26.1.0
-    # via
-    #   jsonschema
-    #   referencing
 audioop-lts==0.2.2 ; python_full_version >= '3.13'
     # via xplogent (pyproject.toml)
 av==18.1.0 ; python_full_version < '3.12'
@@ -44,12 +38,9 @@ colorama==0.4.6 ; sys_platform == 'win32'
     # via
     #   tqdm
     #   typer
-croniter==6.2.4
-    # via xplogent (pyproject.toml)
 cryptography==50.0.2
     # via
     #   xplogent (pyproject.toml)
-    #   pyjwt
     #   secretstorage
 ctranslate2==4.8.3
     # via faster-whisper
@@ -79,11 +70,7 @@ httpcore2==2.13.1 ; sys_platform != 'emscripten'
 httptools==0.9.0
     # via uvicorn
 httpx==0.28.1
-    # via
-    #   xplogent (pyproject.toml)
-    #   mcp
-httpx-sse==0.4.3
-    # via mcp
+    # via xplogent (pyproject.toml)
 httpx2==2.13.1
     # via
     #   anthropic
@@ -116,16 +103,10 @@ jiter==0.17.0
     # via
     #   anthropic
     #   openai
-jsonschema==4.26.0
-    # via mcp
-jsonschema-specifications==2025.9.1
-    # via jsonschema
 keyring==25.7.0
     # via xplogent (pyproject.toml)
 markdown-it-py==4.2.0
     # via rich
-mcp==1.30.0
-    # via xplogent (pyproject.toml)
 mdurl==0.1.2
     # via markdown-it-py
 more-itertools==11.2.0
@@ -161,33 +142,22 @@ pydantic==2.14.1
     #   xplogent (pyproject.toml)
     #   anthropic
     #   fastapi
-    #   mcp
     #   openai
     #   pydantic-settings
 pydantic-core==2.50.1
     # via pydantic
 pydantic-settings==2.15.0
-    # via
-    #   xplogent (pyproject.toml)
-    #   mcp
+    # via xplogent (pyproject.toml)
 pygments==2.21.0
     # via rich
-pyjwt==2.15.1
-    # via mcp
 pypdf==6.20.1
     # via xplogent (pyproject.toml)
-python-dateutil==2.9.0.post0
-    # via croniter
 python-dotenv==1.2.4
     # via
     #   pydantic-settings
     #   uvicorn
 python-multipart==0.0.32
-    # via
-    #   mcp
-    #   xplogent (pyproject.toml)
-pywin32==312 ; sys_platform == 'win32'
-    # via mcp
+    # via xplogent (pyproject.toml)
 pywin32-ctypes==0.2.3 ; sys_platform == 'win32'
     # via keyring
 pyyaml==6.0.3
@@ -196,35 +166,20 @@ pyyaml==6.0.3
     #   ctranslate2
     #   huggingface-hub
     #   uvicorn
-referencing==0.37.0
-    # via
-    #   jsonschema
-    #   jsonschema-specifications
 rich==15.0.0
     # via
     #   xplogent (pyproject.toml)
     #   typer
-rpds-py==2026.9.1
-    # via
-    #   jsonschema
-    #   referencing
 secretstorage==3.5.0 ; sys_platform == 'linux'
     # via keyring
 shellingham==1.5.4
     # via typer
-six==1.17.0
-    # via python-dateutil
 sniffio==1.3.1
     # via
     #   anthropic
     #   openai
-sse-starlette==3.5.0
-    # via mcp
 starlette==1.8.0
-    # via
-    #   fastapi
-    #   mcp
-    #   sse-starlette
+    # via fastapi
 tokenizers==0.23.3
     # via faster-whisper
 tqdm==4.70.1
@@ -244,24 +199,19 @@ typing-extensions==4.16.0
     #   fastapi
     #   httpx2
     #   huggingface-hub
-    #   mcp
     #   openai
     #   opentelemetry-api
     #   pydantic
     #   pydantic-core
-    #   referencing
     #   starlette
     #   typing-inspection
 typing-inspection==0.4.4
     # via
     #   fastapi
-    #   mcp
     #   pydantic
     #   pydantic-settings
 uvicorn==0.54.0
-    # via
-    #   xplogent (pyproject.toml)
-    #   mcp
+    # via xplogent (pyproject.toml)
 uvloop==0.23.0 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
     # via uvicorn
 watchfiles==1.3.0

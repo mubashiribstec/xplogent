@@ -1,6 +1,6 @@
-# Persona, skills hub & Live Canvas
+# Persona & skills hub
 
-OpenClaw-inspired ways to shape your agent and let it do more than chat.
+Ways to shape who your agent is and teach it reusable ways of working.
 
 ## SOUL.md — who your agent is
 
@@ -32,11 +32,3 @@ xplogent skills new my_skill       # scaffold a SKILL.md to edit
 A `SKILL.md` has YAML frontmatter (`name`, `description`, `trigger`, `tools`) and a
 markdown body. When a skill is relevant, the agent sees its trigger and the tools it
 expects. Skills also gain a ★ proficiency level as they're used successfully.
-
-## Live Canvas
-
-Ask the agent to build a dashboard, chart, table, or form and it can render real
-**HTML/CSS/JS** into a Canvas panel beside the chat instead of dribbling out text —
-e.g. *"show my disk usage as a bar chart on the canvas"*. The HTML runs in a
-**sandboxed iframe** (isolated from the app), and you can download it. Toggle it off
-with `canvas.enabled: false` in config.

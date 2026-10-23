@@ -215,7 +215,8 @@ def export_knowledge(store: Store) -> dict[str, Any]:
         "skills": [
             {"name": s.name, "description": s.description, "body": s.body,
              "embedding": s.embedding, "uses": s.uses, "successes": s.successes,
-             "failures": s.failures, "embed_model": s.embed_model}
+             "failures": s.failures, "embed_model": s.embed_model,
+             "tools": s.tools, "trigger": s.trigger, "source": s.source}
             for s in store.all_skills()
         ],
     }
@@ -228,19 +229,34 @@ def import_knowledge(store: Store, data: dict[str, Any]) -> dict[str, Any]:
     models = {s.embed_model for s in store.all_skills() if s.embed_model}
     models |= {f.embed_model for f in store.all_facts() if f.embed_model}
 
+    from xplogent.skills.pack import _norm_name
+
     added_f = added_s = 0
     warn: list[str] = []
     for f in data.get("facts", []):
+        if not isinstance(f, dict) or not str(f.get("content") or "").strip():
+            warn.append("skipped a malformed fact entry (no content)")
+            continue
         if f["content"] in existing_facts:
             continue
         store.add_fact(f["content"], f.get("embedding") or [], f.get("source", "import"),
                        embed_model=f.get("embed_model", ""))
         added_f += 1
     for s in data.get("skills", []):
-        if s["name"] in existing_skills:
+        if not isinstance(s, dict) or not str(s.get("name") or "").strip():
+            warn.append("skipped a malformed skill entry (no name)")
             continue
-        store.upsert_skill(s["name"], s.get("description", ""), s.get("body", ""),
-                           s.get("embedding") or [], embed_model=s.get("embed_model", ""))
+        # Names are normalised exactly like a SKILL.md install: an imported
+        # "../x" must never become a file path on a later export.
+        name = _norm_name(str(s["name"]))
+        if name in existing_skills:
+            continue
+        raw_tools = s.get("tools") or []
+        store.upsert_skill(
+            name, s.get("description", ""), s.get("body", ""),
+            s.get("embedding") or [], embed_model=s.get("embed_model", ""),
+            tools=[str(t) for t in raw_tools] if isinstance(raw_tools, list) else [],
+            trigger=str(s.get("trigger", "")), source=str(s.get("source", "import")))
         added_s += 1
 
     imported_models = {x.get("embed_model") for x in

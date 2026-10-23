@@ -57,6 +57,7 @@ class Embedder:
             if self._retry_at is None or time.monotonic() < self._retry_at:
                 return [[] for _ in texts]
             self.available = True  # cool-down over: try again
+            self._fails = 0  # fresh budget: one blip must not re-disable at once
         try:
             out = await self.provider.embed(texts)
         except NotImplementedError:

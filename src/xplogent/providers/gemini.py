@@ -120,6 +120,9 @@ class GeminiProvider(Provider):
                 if not line or not line.startswith("data:"):
                     continue
                 chunk = json.loads(line[len("data:"):].strip())
+                if err := chunk.get("error"):
+                    msg = err.get("message", "") if isinstance(err, dict) else str(err)
+                    raise RuntimeError(f"gemini stream error: {msg}")
                 if meta := chunk.get("usageMetadata"):
                     usage = {"input_tokens": int(meta.get("promptTokenCount", 0)),
                              "output_tokens": int(meta.get("candidatesTokenCount", 0))}

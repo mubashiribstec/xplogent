@@ -13,7 +13,14 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from xplogent.core.logging import get_logger
-from xplogent.providers.base import Message, Provider, StreamEvent, StreamKind, ToolSpec
+from xplogent.providers.base import (
+    Message,
+    Provider,
+    Role,
+    StreamEvent,
+    StreamKind,
+    ToolSpec,
+)
 
 _log = get_logger("fallback")
 
@@ -38,19 +45,36 @@ class FallbackProvider(Provider):
                      **kwargs: Any) -> AsyncIterator[StreamEvent]:
         self.used_backup = False
         emitted = False
+        saw_done = False
+        parts: list[str] = []
         try:
             async for ev in self.primary.stream(messages, tools, **dict(kwargs)):
                 if ev.kind == StreamKind.TOKEN:
                     emitted = True
+                    parts.append(ev.text or "")
+                if ev.kind == StreamKind.DONE:
+                    saw_done = True
                 yield ev
-            return
+            if saw_done:
+                return
+            if emitted:
+                # The primary ended mid-answer without a DONE (truncated stream,
+                # gateway cut): hand the caller the partial answer as a proper
+                # completion instead of no DONE at all (which read as empty).
+                _log.warning("main model %s ended without DONE; keeping partial answer",
+                             self.primary.model)
+                yield StreamEvent(kind=StreamKind.DONE, message=Message(
+                    role=Role.ASSISTANT, content="".join(parts)))
+                return
+            _log.warning("main model %s ended without answering; using backup %s",
+                         self.primary.model, self.backup_spec)
         except Exception as exc:  # noqa: BLE001 - decide below whether the backup may answer
             if emitted:
                 raise
             _log.warning("main model %s failed (%s); answering with backup %s",
                          self.primary.model, exc, self.backup_spec)
-        self.used_backup = True
         async for ev in self._backup_provider().stream(messages, tools, **dict(kwargs)):
+            self.used_backup = True  # only once the backup actually answers
             yield ev
 
     async def embed(self, texts: list[str]) -> list[list[float]]:

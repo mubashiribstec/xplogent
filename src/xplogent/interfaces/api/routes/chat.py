@@ -27,11 +27,13 @@ async def ws(websocket: WebSocket) -> None:
     approve = chan.approve
 
     # Persistent session: reuse the one the client passes, else create one.
+    # An invented/stale id must not silently collect orphan messages that no
+    # session list will ever show — fall back to a fresh session instead.
     cfg = load_config()
     qs_session = websocket.query_params.get("session_id")
     session_id = int(qs_session) if qs_session and qs_session.isdigit() else None
-    if session_id is None:
-        with Store(cfg.db_path) as s:
+    with Store(cfg.db_path) as s:
+        if session_id is None or not s.session_exists(session_id):
             session_id = s.create_session(title="chat")
     await send({"type": "session", "id": session_id})
 

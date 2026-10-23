@@ -2,8 +2,8 @@
 
 Transient failures (network blips, timeouts, rate limits) shouldn't sink a whole
 task or agent turn. :func:`classify_error` buckets an exception/message, and
-:class:`RetryPolicy` provides exponential backoff. The orchestrator retries failed
-tasks and the agent retries transient provider errors using these.
+:class:`RetryPolicy` provides exponential backoff. The agent retries transient
+provider errors using these.
 """
 
 from __future__ import annotations
@@ -41,8 +41,8 @@ def classify_error(err: Any) -> ErrorClass:
             code = err.response.status_code
             if code == 429:
                 return ErrorClass.RATE_LIMIT
-            if code >= 500:
-                return ErrorClass.TRANSIENT
+            if code == 408 or code >= 500:
+                return ErrorClass.TRANSIENT  # 408 (request timeout) is worth a retry
             return ErrorClass.FATAL
     except Exception:  # noqa: BLE001 - httpx missing/odd; fall back to text
         pass

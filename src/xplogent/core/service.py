@@ -249,8 +249,19 @@ def install_service(port: int = 8765) -> dict:
         "Restart=on-failure\n\n"
         "[Install]\nWantedBy=default.target\n"
     )
-    return {"ok": True, "kind": "systemd-user", "unit": str(unit),
-            "next": "systemctl --user enable --now xplogent  (and: loginctl enable-linger)"}
+    # "install" should install: reload systemd and enable the unit (best effort —
+    # no user session in some environments; the hint below covers those).
+    enabled = False
+    try:
+        subprocess.run(["systemctl", "--user", "daemon-reload"],
+                       capture_output=True, timeout=15)
+        enabled = subprocess.run(["systemctl", "--user", "enable", "xplogent"],
+                                 capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return {"ok": True, "kind": "systemd-user", "unit": str(unit), "enabled": enabled,
+            "next": ("systemctl --user start xplogent" if enabled else
+                     "systemctl --user enable --now xplogent  (and: loginctl enable-linger)")}
 
 
 def uninstall_service() -> dict:

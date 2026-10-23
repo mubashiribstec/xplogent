@@ -221,7 +221,7 @@ Caddy forwards WebSockets automatically, which the call audio stream needs.
   Regenerate with `make lock`; review the diff and run the tests before committing.
 - `web/package-lock.json` pins the dashboard build (`npm ci`).
 - Installing without the lock (`pip install xplogent[server]`) works too but picks the newest
-  allowed versions. `mcp` is capped below 2 because the 2.x SDK changed its API.
+  allowed versions.
 
 ## Troubleshooting
 

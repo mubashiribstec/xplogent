@@ -81,11 +81,22 @@ def is_sensitive(path: Path) -> bool:
 
 def _iter_files(path: Path) -> list[Path]:
     if path.is_file():
-        return [] if is_sensitive(path) else [path]
+        # A single file gets the same rules as a walked one: the extension
+        # allowlist applies too (ingesting "/etc/passwd" or a config file by
+        # direct path was possible when only the name denylist checked it).
+        if is_sensitive(path) or is_sensitive(path.resolve()):
+            return []
+        if path.suffix.lower() not in _TEXT_EXT and path.suffix.lower() != ".pdf":
+            return []
+        return [path]
     files: list[Path] = []
     for p in path.rglob("*"):
+        # Never follow symlinks: a link's *name* can look harmless while its
+        # target is a credential file the guard above exists to keep out.
+        if p.is_symlink():
+            continue
         if p.is_file() and (p.suffix.lower() in _TEXT_EXT or p.suffix.lower() == ".pdf") \
-                and not is_sensitive(p.relative_to(path)):
+                and not is_sensitive(p.relative_to(path)) and not is_sensitive(p):
             files.append(p)
             if len(files) >= 500:  # safety bound
                 break
@@ -116,6 +127,7 @@ async def ingest_path(store, embedder: Embedder, path: str) -> dict[str, Any]:
         if store.doc_exists(h):
             skipped += 1
             continue
+        store.delete_stale_documents(str(fp), h)  # an edited file replaces its old version
         doc_id = store.add_document(str(fp), fp.name, h)
         pieces = chunk_text(text)
         vecs = await embedder.embed(pieces)

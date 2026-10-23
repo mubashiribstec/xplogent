@@ -18,7 +18,7 @@ ARG VERSION=dev
 ARG REVISION=unknown
 # Links the GHCR package to the repository (README, visibility) and records the build.
 LABEL org.opencontainers.image.title="Xplogent" \
-      org.opencontainers.image.description="Self-improving AI agent framework (dashboard, multi-agent, phone agent)" \
+      org.opencontainers.image.description="Self-improving AI agent with memory, skills and a phone-calling agent (dashboard + VoIP)" \
       org.opencontainers.image.source="https://github.com/mubashiribstec/xplogent" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}" \

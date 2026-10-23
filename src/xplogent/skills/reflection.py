@@ -82,10 +82,15 @@ class Reflector:
         raw_skill = data.get("skill")
         if isinstance(raw_skill, dict) and raw_skill.get("name") and raw_skill.get("body"):
             skill = SkillDraft(
-                name=re.sub(r"[^a-z0-9_]+", "_", str(raw_skill["name"]).lower()).strip("_"),
+                # Same fallback as pack._norm_name: a name like "!!!" normalises
+                # to "" and would otherwise create an empty-named skill (".md").
+                name=re.sub(r"[^a-z0-9_]+", "_", str(raw_skill["name"]).lower()).strip("_")
+                or "skill",
                 description=str(raw_skill.get("description", "")),
                 body=str(raw_skill["body"]),
             )
         facts = [str(f) for f in data.get("facts", []) if str(f).strip()]
-        return ReflectionResult(success=bool(data.get("success", True)), facts=facts,
-                                skill=skill)
+        raw_success = data.get("success", True)
+        success = raw_success if isinstance(raw_success, bool) else \
+            str(raw_success).strip().lower() not in ("false", "no", "0", "")
+        return ReflectionResult(success=success, facts=facts, skill=skill)

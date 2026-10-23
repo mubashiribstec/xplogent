@@ -9,10 +9,26 @@ Also stores and retrieves **skills** (used by the self-improvement subsystem).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from xplogent.memory.store import SkillRow, Store
 from xplogent.memory.vector import Embedder, cosine, top_k
+
+
+def _keyword_rank(query: str, texts: list[str]) -> list[int]:
+    """Indices of ``texts`` ranked by how many distinct query words they
+    contain. The old fallback tested whether the WHOLE query string appeared
+    verbatim inside a fact/skill, which almost never happens with natural
+    questions — semantic-off recall silently returned nothing."""
+    tokens = {w for w in re.findall(r"[a-z0-9]+", query.lower()) if len(w) > 2}
+    if not tokens:
+        return []
+    scored = [(sum(1 for t in tokens if t in text.lower()), i)
+              for i, text in enumerate(texts)]
+    scored = [s for s in scored if s[0] > 0]
+    scored.sort(key=lambda s: (-s[0], s[1]))
+    return [i for _hits, i in scored]
 
 
 @dataclass
@@ -80,9 +96,9 @@ class MemoryManager:
                       if f.embedding and self._embed_match(f.embed_model)]
             ranked = top_k(qvec, usable, k)
             return [f.content for f, score in ranked if score > 0.2]  # type: ignore[attr-defined]
-        # keyword fallback
-        q = query.lower()
-        return [f.content for f in facts if q in f.content.lower()][:k]
+        # keyword fallback (embeddings unavailable)
+        return [facts[i].content
+                for i in _keyword_rank(query, [f.content for f in facts])[:k]]
 
     # -- episodic --------------------------------------------------------------
     def search_history(self, query: str, limit: int = 10) -> list[dict]:
@@ -112,8 +128,9 @@ class MemoryManager:
             ranked.sort(key=lambda t: t[1] + 0.03 * t[0].stars, reverse=True)  # type: ignore[attr-defined]
             picked = [(s, score) for s, score in ranked[:k] if score > 0.25]
         else:
-            q = query.lower()
-            picked = [(s, 1.0) for s in skills if q in (s.name + s.description).lower()][:k]
+            idx = _keyword_rank(query, [f"{s.name} {s.description} {s.trigger}"
+                                        for s in skills])
+            picked = [(skills[i], 1.0) for i in idx[:k]]
         out = []
         for s, score in picked:
             if counted is None or s.name not in counted:  # type: ignore[attr-defined]

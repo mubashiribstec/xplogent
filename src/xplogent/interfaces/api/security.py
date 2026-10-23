@@ -53,16 +53,13 @@ def origin_allowed(origin: str | None, host: str | None, path: str,
                    allowed_origins: set[str]) -> bool:
     """True if a request carrying ``origin`` may use the API.
 
-    Same-origin (Origin's host:port equals the request Host) is always fine. The Chrome
-    extension connects from ``chrome-extension://`` and may only use its own socket.
+    Same-origin (Origin's host:port equals the request Host) is always fine.
     """
     if not origin:
         return True
     o = origin.strip().rstrip("/").lower()
     if o in allowed_origins:
         return True
-    if o.startswith(("chrome-extension://", "moz-extension://")):
-        return path == "/ws/extension"
     netloc = urlsplit(o).netloc
     return bool(netloc) and netloc == (host or "").strip().lower()
 

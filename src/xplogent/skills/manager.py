@@ -49,18 +49,20 @@ class SkillManager:
                 "skill_stars": skill_stars}
 
     def _write_markdown(self, name: str, description: str, body: str) -> None:
-        from xplogent.skills.pack import render_skill_md
+        from xplogent.skills.pack import _norm_name, render_skill_md
 
-        path = self.skills_dir / f"{name}.md"
+        # The on-disk name is always the normalised one: a stored name with
+        # "../" in it (e.g. from a hand-edited import) must not escape the dir.
+        path = self.skills_dir / f"{_norm_name(name)}.md"
         path.write_text(render_skill_md(name, description, body), encoding="utf-8")
 
     def export_all(self) -> int:
         """Write every stored skill out as a SKILL.md (folder mirrors the DB)."""
         n = 0
         for s in self.memory.store.all_skills():
-            from xplogent.skills.pack import render_skill_md
+            from xplogent.skills.pack import _norm_name, render_skill_md
 
-            path = self.skills_dir / f"{s.name}.md"
+            path = self.skills_dir / f"{_norm_name(s.name)}.md"
             path.write_text(
                 render_skill_md(s.name, s.description, s.body, tools=s.tools, trigger=s.trigger),
                 encoding="utf-8")

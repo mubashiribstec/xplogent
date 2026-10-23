@@ -107,6 +107,15 @@ def _mount_dashboard(app) -> None:
     """Mount the built React dashboard at '/' if it exists (declared after the API)."""
     dist = _dashboard_dir()
     if not dist:
+        # API-only mode: say so at '/', instead of a bare 404 that reads
+        # like the server is broken.
+        @app.get("/")
+        async def _no_dashboard() -> dict:
+            return {"service": "xplogent", "dashboard": "not built",
+                    "detail": "The API is running, but no dashboard build was found. "
+                              "Build it once: cd web && npm install && npm run build "
+                              "(or use the Docker install, which includes it). "
+                              "API docs pattern: /health, /status, /config."}
         return
     from fastapi.staticfiles import StaticFiles
 

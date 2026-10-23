@@ -7,7 +7,7 @@ const PROVIDERS = [
   { id: "ollama", label: "Ollama", note: "Your own Ollama server (or this machine)", model: "ollama:llama3.1", keyEnv: "" },
   { id: "openai", label: "OpenAI", note: "GPT-4o and o-series", model: "openai:gpt-4o", keyEnv: "OPENAI_API_KEY" },
   { id: "anthropic", label: "Anthropic", note: "Claude via API key", model: "anthropic:claude-sonnet-4-6", keyEnv: "ANTHROPIC_API_KEY" },
-  { id: "gemini", label: "Google Gemini", note: "Gemini 1.5/2.x", model: "gemini:gemini-1.5-pro", keyEnv: "GEMINI_API_KEY" },
+  { id: "gemini", label: "Google Gemini", note: "Gemini 2.x", model: "gemini:gemini-2.0-flash", keyEnv: "GEMINI_API_KEY" },
   { id: "openrouter", label: "OpenRouter", note: "200+ models, one key", model: "openrouter:meta-llama/llama-3.1-70b-instruct", keyEnv: "OPENROUTER_API_KEY" },
 ];
 

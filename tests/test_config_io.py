@@ -43,3 +43,51 @@ def test_secret_status(tmp_path, monkeypatch):
     status = cfgmod.secret_status()
     assert status["OPENAI_API_KEY"] is True
     assert status["OPENROUTER_API_KEY"] is False
+
+
+def test_default_roles_only_name_existing_tools():
+    """Every tool named in the shipped role profiles must be a real built-in
+    tool (the slim-down removed web/team tools, leaving roles silently empty)."""
+    from xplogent.core.config import _DEFAULT_CONFIG, _load_yaml
+    from xplogent.tools.registry import ToolRegistry
+
+    known = {t.name for t in ToolRegistry.from_config().all()}
+    roles = _load_yaml(_DEFAULT_CONFIG).get("roles") or {}
+    assert roles, "default.yaml must ship role profiles"
+    for role, spec in roles.items():
+        allowed = (spec or {}).get("allowed_tools", "*")
+        if allowed == "*":
+            continue
+        missing = [name for name in allowed if name not in known]
+        assert not missing, f"role '{role}' names tools that do not exist: {missing}"
+
+
+def test_load_yaml_malformed_file_names_the_file(tmp_path):
+    import pytest
+
+    from xplogent.core.config import _load_yaml
+
+    bad = tmp_path / "config.yaml"
+    bad.write_text("model: [unclosed\n  bad indent: :\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid YAML in config file"):
+        _load_yaml(bad)
+
+
+def test_load_yaml_non_mapping_is_a_clear_error(tmp_path):
+    import pytest
+
+    from xplogent.core.config import _load_yaml
+
+    bad = tmp_path / "config.yaml"
+    bad.write_text("- just\n- a\n- list\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="must hold key: value pairs"):
+        _load_yaml(bad)
+
+
+def test_load_yaml_empty_and_missing_files_are_empty(tmp_path):
+    from xplogent.core.config import _load_yaml
+
+    assert _load_yaml(tmp_path / "missing.yaml") == {}
+    empty = tmp_path / "empty.yaml"
+    empty.write_text("", encoding="utf-8")
+    assert _load_yaml(empty) == {}

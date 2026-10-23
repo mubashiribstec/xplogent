@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "mubashiribstec" }]
-keywords = ["ai", "agent", "llm", "ollama", "memory", "automation", "mcp"]
+keywords = ["ai", "agent", "llm", "ollama", "memory", "automation", "voip", "freepbx"]
 
 dependencies = [
     "httpx>=0.27",
@@ -24,11 +24,8 @@ providers = [
     "openai>=1.30",
     "anthropic>=0.34",
 ]
-# Local embeddings for memory (offline)
-memory = [
-    "sqlite-vec>=0.1.1",
-    "sentence-transformers>=3.0",
-]
+# (Embeddings run through the configured provider — Ollama/OpenAI — so memory
+# needs no extra dependencies.)
 # REST/WebSocket API + web dashboard backend
 api = [
     "fastapi>=0.111",
@@ -61,7 +58,7 @@ server = [
     "xplogent[providers,api,voip,rag,security]",
 ]
 all = [
-    "xplogent[providers,memory,api,voip,rag,security,dev]",
+    "xplogent[providers,api,voip,rag,security,dev]",
 ]
 
 [project.scripts]

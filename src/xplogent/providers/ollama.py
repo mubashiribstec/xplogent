@@ -111,6 +111,8 @@ class OllamaProvider(Provider):
                 if not line.strip():
                     continue
                 chunk = json.loads(line)
+                if chunk.get("error"):
+                    raise RuntimeError(f"ollama stream error: {chunk['error']}")
                 if chunk.get("done") and ("eval_count" in chunk or "prompt_eval_count" in chunk):
                     usage = {"input_tokens": int(chunk.get("prompt_eval_count", 0)),
                              "output_tokens": int(chunk.get("eval_count", 0))}

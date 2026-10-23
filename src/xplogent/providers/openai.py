@@ -100,6 +100,12 @@ class OpenAIProvider(Provider):
                 if data == "[DONE]":
                     break
                 chunk = json.loads(data)
+                if err := chunk.get("error"):
+                    # Mid-stream error payload (OpenAI-compatible gateways send
+                    # these): raise like the Anthropic provider does, so retry /
+                    # backup applies instead of an empty "successful" answer.
+                    msg = err.get("message", "") if isinstance(err, dict) else str(err)
+                    raise RuntimeError(f"openai stream error: {msg}")
                 if u := chunk.get("usage"):
                     usage = {"input_tokens": int(u.get("prompt_tokens", 0)),
                              "output_tokens": int(u.get("completion_tokens", 0))}
@@ -119,7 +125,10 @@ class OpenAIProvider(Provider):
                     if fn.get("name"):
                         slot["name"] = fn["name"]
                     if fn.get("arguments"):
-                        slot["args"] += fn["arguments"]
+                        # Some compatible endpoints send arguments as an object,
+                        # not a JSON string; += would TypeError on a dict.
+                        slot["args"] += fn["arguments"] if isinstance(
+                            fn["arguments"], str) else json.dumps(fn["arguments"])
 
         tool_calls = []
         for slot in tc_acc.values():
@@ -138,7 +147,9 @@ class OpenAIProvider(Provider):
             "/embeddings", json={"model": self.model, "input": texts}
         )
         resp.raise_for_status()
-        return [item["embedding"] for item in resp.json()["data"]]
+        # The API contract is the per-item `index`, not response order.
+        data = sorted(resp.json()["data"], key=lambda i: i.get("index", 0))
+        return [item["embedding"] for item in data]
 
     async def list_models(self) -> list[str]:
         resp = await self._client.get("/models")

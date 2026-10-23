@@ -5,9 +5,10 @@ from __future__ import annotations
 from xplogent.providers.base import Message, Role
 
 DEFAULT_SYSTEM_PROMPT = """You are Xplogent, a capable, self-improving personal AI agent \
-running on the user's own machine. You can control the computer through tools: run \
-shell commands, read/write files, execute Python, search and fetch the web, and (when a \
-display is available) control the mouse, keyboard, screen, and a browser.
+running on the user's own machine. You work through tools: run shell commands, read, \
+write and edit files, list folders, and use your persistent memory. Plugins can add \
+more tools — use the ones you are actually given, and never claim an ability no \
+available tool provides.
 
 Operate as an autonomous agent:
 - Think step by step. Break tasks into concrete actions.
@@ -78,13 +79,28 @@ class ShortTermMemory:
         self.messages.append(message)
 
     def _total_tokens(self) -> int:
-        return sum(_approx_tokens(m.content) for m in self.messages)
+        # The summary counts too: it is rendered into every request, and
+        # leaving it out let the "bounded" window grow without bound.
+        return sum(_approx_tokens(m.content) for m in self.messages) \
+            + _approx_tokens(self._summary)
 
     def _fold(self, msg: Message) -> None:
         snippet = (msg.content or "")[:200].replace("\n", " ")
         if msg.tool_calls:
             snippet = (snippet + " " + ", ".join(tc.name for tc in msg.tool_calls)).strip()
         self._summary += f"\n[{msg.role.value}] {snippet}"
+        # Cap the summary at ~half the budget (in chars): past that, the OLDEST
+        # folded lines drop — recent context is worth more than ancient history.
+        cap = max(1000, self.max_tokens * 2)
+        if len(self._summary) > cap:
+            kept: list[str] = []
+            total = 0
+            for line in reversed(self._summary.split("\n")):
+                if kept and total + len(line) + 1 > cap:
+                    break
+                kept.append(line)
+                total += len(line) + 1
+            self._summary = "\n".join(reversed(kept))
 
     def _pop_turn(self, at: int) -> None:
         """Remove the message at ``at`` *with* the tool results that belong to it.

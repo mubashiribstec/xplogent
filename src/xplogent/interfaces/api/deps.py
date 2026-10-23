@@ -46,7 +46,7 @@ def spawn(coro: Any) -> asyncio.Task:
 # check stay public so the browser can load and prompt for the token.
 _STATIC_EXT = (".js", ".css", ".svg", ".png", ".ico", ".woff", ".woff2", ".map", ".webmanifest")
 # Server-to-server callbacks: no browser Origin, authenticated by the secret in the path.
-WEBHOOK_PREFIXES = ("/telephony/webhook/", "/triggers/webhook/")
+WEBHOOK_PREFIXES = ("/telephony/webhook/",)
 
 
 _server_cache: dict[str, Any] = {"key": None, "value": {}}
@@ -86,8 +86,14 @@ def is_public(path: str, method: str) -> bool:
         return True
     if path.startswith(WEBHOOK_PREFIXES):
         return True
+    # Static files are public (the dashboard shell has to load before login),
+    # but only where the dashboard actually serves them: /assets/* and
+    # single-segment root files (favicon.ico, robots.txt). Any GET ending in
+    # ".js"/".css"/... used to be public at ANY depth — the first future
+    # route like /things/{id}.json would have inherited the bypass.
     return method == "GET" and (
-        path == "/" or path.startswith("/assets") or path.endswith(_STATIC_EXT))
+        path == "/" or path.startswith("/assets")
+        or (path.endswith(_STATIC_EXT) and path.count("/") == 1))
 
 
 def request_token(request: Any) -> str:

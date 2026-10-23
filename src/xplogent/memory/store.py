@@ -290,6 +290,8 @@ class Store:
             if self.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION:
                 self._fts = bool(self.conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE name='doc_chunks_fts'").fetchone())
+                if self._fts:
+                    self._backfill_fts()  # heal an index emptied/never filled
                 return
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(_SCHEMA)
@@ -329,14 +331,30 @@ class Store:
         except sqlite3.OperationalError:
             self._fts = False
             return
-        # Backfill once if the index is empty but messages already exist.
-        have = self.conn.execute("SELECT COUNT(*) FROM messages_fts").fetchone()[0]
-        if not have and self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]:
-            self.conn.execute(
-                "INSERT INTO messages_fts (rowid, content, session_id, role) "
-                "SELECT id, content, session_id, role FROM messages"
-            )
-            self.conn.commit()
+        self._backfill_fts()
+
+    def _backfill_fts(self) -> None:
+        """Fill an FTS index that is empty while its source table is not
+        (content that predates FTS, or an index lost/rebuilt since)."""
+        try:
+            have = self.conn.execute("SELECT COUNT(*) FROM messages_fts").fetchone()[0]
+            if not have and self.conn.execute(
+                    "SELECT COUNT(*) FROM messages").fetchone()[0]:
+                self.conn.execute(
+                    "INSERT INTO messages_fts (rowid, content, session_id, role) "
+                    "SELECT id, content, session_id, role FROM messages"
+                )
+                self.conn.commit()
+            have = self.conn.execute("SELECT COUNT(*) FROM doc_chunks_fts").fetchone()[0]
+            if not have and self.conn.execute(
+                    "SELECT COUNT(*) FROM doc_chunks").fetchone()[0]:
+                self.conn.execute(
+                    "INSERT INTO doc_chunks_fts (rowid, content, doc_id) "
+                    "SELECT id, content, doc_id FROM doc_chunks"
+                )
+                self.conn.commit()
+        except sqlite3.OperationalError:
+            pass  # one of the FTS tables is absent; search falls back gracefully
 
     def _write(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         with self._lock:
@@ -349,6 +367,9 @@ class Store:
             return self.conn.execute(sql, params).fetchall()
 
     # -- sessions --------------------------------------------------------------
+    def session_exists(self, session_id: int) -> bool:
+        return bool(self._query("SELECT 1 FROM sessions WHERE id=?", (session_id,)))
+
     def create_session(self, title: str = "") -> int:
         cur = self._write(
             "INSERT INTO sessions (title, summary, created_at) VALUES (?,?,?)",
@@ -683,6 +704,16 @@ class Store:
                 "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM doc_chunks").fetchone()
         return (int(ver[0]) if ver else 0, int(count), int(max_id))
 
+    def delete_stale_documents(self, source: str, keep_hash: str) -> int:
+        """Drop earlier versions of the document at ``source`` (any hash other
+        than ``keep_hash``) so re-ingesting an edited file replaces it instead
+        of leaving the stale text searchable next to the new."""
+        rows = self._query("SELECT id FROM documents WHERE source=? AND hash<>?",
+                           (source, keep_hash))
+        for r in rows:
+            self.delete_document(r["id"])
+        return len(rows)
+
     def list_documents(self) -> list[dict[str, Any]]:
         return [dict(r) for r in self._query(
             "SELECT id, source, title, chunks, created_at FROM documents ORDER BY id DESC")]
@@ -829,15 +860,24 @@ class Store:
             out.append(d)
         return out
 
+    @staticmethod
+    def _phone_match(stored: str, key: str) -> bool:
+        """Suffix match on digit keys: a 7–9 digit key matches the stored number
+        whose digits END with it (and vice versa). Plain equality could never
+        hit for short keys, so DNC/contact lookups silently failed for them."""
+        sk = Store.phone_key(stored)
+        return bool(sk) and (sk.endswith(key) or key.endswith(sk))
+
     def find_contact_by_phone(self, phone: str) -> dict[str, Any] | None:
         # Match on the last 10 digits so +1-555... and 555... both hit. Too-short input
         # ("123", a withheld caller ID) must not match whichever contact ends that way.
         key = self.phone_key(phone)
         if len(key) < 7:
             return None
-        for r in self._query("SELECT * FROM contacts WHERE phone LIKE ? ORDER BY id DESC",
-                             (f"%{key}",)):
-            if self.phone_key(r["phone"]) != key:
+        # No LIKE pre-filter: a stored "+1 (212) 555-0100" does not END with the
+        # digit key, so SQL would never hand the row to the matcher.
+        for r in self._query("SELECT * FROM contacts ORDER BY id DESC"):
+            if not self._phone_match(r["phone"], key):
                 continue
             d = dict(r)
             d["fields"] = json.loads(d.get("fields") or "{}")
@@ -914,8 +954,8 @@ class Store:
         key = self.phone_key(phone)
         if len(key) < 7:
             return False
-        rows = self._query("SELECT phone FROM dnc WHERE phone LIKE ?", (f"%{key}",))
-        return any(self.phone_key(r["phone"]) == key for r in rows)
+        rows = self._query("SELECT phone FROM dnc")
+        return any(self._phone_match(r["phone"], key) for r in rows)
 
     # -- phone agent training material ------------------------------------------
     _TRAINING_FIELDS = {"status", "progress", "error", "transcript", "doc_id", "chunks", "path",

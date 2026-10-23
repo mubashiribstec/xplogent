@@ -71,7 +71,9 @@ async def _probe_ollama(host: str, token: str, timeout: float = 8.0) -> dict:
         async with httpx.AsyncClient(timeout=timeout, headers=ollama_headers(token),
                                      follow_redirects=True) as client:
             resp = await client.get(f"{host.rstrip('/')}/api/tags")
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
+        # InvalidURL is not an HTTPError in current httpx: a malformed saved host
+        # (bad port, stray characters) must read as "fix the address", not a 500.
         return {"ok": False, "models": [], "error": f"cannot reach {host}: {type(exc).__name__}"}
     if resp.status_code in (401, 403):
         return {"ok": False, "models": [],
@@ -166,7 +168,7 @@ async def backup_model_pull(body: dict) -> dict:
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(3600.0, connect=10.0)) as client:
             resp = await client.post(f"{host}/api/pull", json={"model": model, "stream": False})
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         return {"ok": False, "error": f"local Ollama not reachable at {host} ({type(exc).__name__}): "
                                       "on the server run `xplogent-docker backup-model on`"}
     if resp.status_code != 200:
@@ -217,7 +219,7 @@ async def ollama_pull(body: dict) -> dict:
         async with httpx.AsyncClient(timeout=httpx.Timeout(1800.0, connect=10.0),
                                      headers=ollama_headers(token)) as client:
             resp = await client.post(f"{host}/api/pull", json={"model": model, "stream": False})
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         return {"ok": False, "error": f"cannot reach {host}: {type(exc).__name__}"}
     if resp.status_code != 200:
         return {"ok": False, "error": f"pull failed: HTTP {resp.status_code} {resp.text[:300]}"}
@@ -284,8 +286,10 @@ async def run(req: RunRequest) -> dict:
     """One-shot run. Confirmation-tier tools are blocked (no interactive approver)."""
     bus = EventBus()
     runtime = deps.build_runtime(bus=bus)
-    answer = await runtime.agent.run(req.task)
-    await runtime.aclose()
+    try:
+        answer = await runtime.agent.run(req.task)
+    finally:
+        await runtime.aclose()  # provider clients + Store leak if run() raises
     return {"answer": answer}
 
 
@@ -367,6 +371,8 @@ async def backup_download(include_secrets: bool = False):
     from fastapi.responses import FileResponse
 
     from xplogent.core import backup as backup_mod
+    deps.audit_event("backup_download",
+                     target=f"include_secrets={str(include_secrets).lower()}")
     res = await asyncio.to_thread(backup_mod.create_backup, None, include_secrets=include_secrets)
     return FileResponse(res["path"], filename="xplogent-backup.tar.gz",
                         media_type="application/gzip")
@@ -381,11 +387,16 @@ async def backup_restore(request: Request) -> dict:
     data = await request.body()
     if not data:
         return {"ok": False, "error": "empty upload"}
+    if len(data) > 1_000_000_000:
+        return {"ok": False, "error": "upload too large (limit 1 GB)"}
+    deps.audit_event("backup_restore", target=f"{len(data)} bytes uploaded")
     with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
         tmp.write(data)
         tmp_path = tmp.name
     try:
-        return await asyncio.to_thread(backup_mod.restore_backup, tmp_path)
+        result = await asyncio.to_thread(backup_mod.restore_backup, tmp_path)
+        deps.audit_event("backup_restore_result", target=f"ok={result.get('ok')}")
+        return result
     finally:
         os.unlink(tmp_path)  # may hold API keys when the backup included secrets
 

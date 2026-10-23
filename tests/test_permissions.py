@@ -18,7 +18,8 @@ def _profile(role: str) -> PermissionProfile:
 
 def test_researcher_role_blocks_shell():
     assert _profile("researcher").allows_tool("shell") is False
-    assert _profile("researcher").allows_tool("web_search") is True
+    assert _profile("researcher").allows_tool("read_file") is True
+    assert _profile("researcher").allows_tool("write_file") is False
 
 
 def test_registry_filter_respects_allowed_tools():

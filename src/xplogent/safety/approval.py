@@ -78,7 +78,7 @@ def _merge_patterns(user: list[str] | None, base: list[str] | None = None) -> li
 
 
 def auto_approve_up_to_high() -> ApprovalCallback:
-    """Approver for unattended runs (scheduler, triggers): everything but CRITICAL."""
+    """Approver for unattended runs (background/API): everything but CRITICAL."""
 
     async def approve(req: ApprovalRequest) -> bool:
         return req.risk != RiskLevel.CRITICAL

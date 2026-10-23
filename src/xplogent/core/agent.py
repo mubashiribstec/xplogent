@@ -173,7 +173,7 @@ class Agent:
         tool_steps = 0
         final_answer = ""
         nudged = False
-        # Callers (e.g. the orchestrator's retry loop) need to know the run *failed*,
+        # Callers need to know the run *failed*,
         # since run() always returns a string instead of raising.
         self.failed = False
         self.last_exception: BaseException | None = None

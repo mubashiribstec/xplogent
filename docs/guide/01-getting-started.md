@@ -2,8 +2,9 @@
 
 Xplogent is a personal, self-improving AI agent you run yourself. It works with
 any LLM provider (including local **Ollama**, fully offline), keeps its own
-memory, can run **many agents at once**, and can control your PC behind a safety
-layer.
+persistent memory, learns reusable skills from its work, and can answer and
+place **phone calls** (Telnyx or your own FreePBX/Asterisk) — all behind a
+configurable safety/approval layer.
 
 ## Install
 
@@ -40,8 +41,10 @@ xplogent setup
 ```
 
 It asks for your provider (Ollama / OpenAI / Anthropic / OpenRouter), the model,
-and an API key if you chose a hosted provider. For Ollama it can pull the models
-for you. Everything is saved under `~/.xplogent/`.
+and an API key if you chose a hosted provider. For Ollama it prints the exact
+`ollama pull` commands for the models you picked. Everything is saved under
+`~/.xplogent/`. If anything looks off afterwards, run `xplogent doctor` — it
+checks your config, keys, model and ports and tells you how to fix each problem.
 
 ## Launch
 

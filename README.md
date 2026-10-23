@@ -15,6 +15,13 @@ queue lands on the AI), with transcripts, training-data upload, a test-call
 panel, mandatory-field enforcement (a call cannot close "successfully" with
 required data missing), and a signed post-call webhook to your CRM.
 
+> **In one line:** a learning AI agent that lives on your phone system — and
+> chats, remembers, and improves itself the rest of the time.
+>
+> New here? **[SETUP.md](SETUP.md)** walks every install path, the first-run
+> wizard, connecting an LLM (including free local Ollama) and telephony, and
+> troubleshooting.
+
 It's inspired by [Hermes](https://github.com/NousResearch/hermes-agent) and the
 OpenClaw ecosystem, but built as a leaner, cleanly-architected core that's easy
 to extend with drop-in plugins. It runs on **Windows and Linux** (and macOS).
@@ -78,8 +85,32 @@ xplogent up                   # opens the dashboard in your browser
 | **CRM delivery** | Signed (HMAC-SHA256) post-call webhook with retries and a delivery log: outcome, summary, fields, transcript |
 | **Resilience** | Transient errors (network/timeout/429) auto-retry with backoff; STT/TTS fallbacks per call |
 | **Safety** | Every risky action is risk-classified and gated (`auto` / `confirm` / `deny`) |
-| **Interfaces** | CLI/TUI, REST + WebSocket API, Web dashboard (Chat · Calls · Test · Training · Settings) |
+| **Interfaces** | CLI, REST + WebSocket API, Web dashboard (Chat · Calls · Contacts · Call training · Knowledge · Analytics · Persona & Skills · Audit · Settings · Guide) |
 | **Extensible** | Drop-in Python plugins via one unified tool registry |
+
+## How it compares
+
+Honest version — the neighbours are bigger and more battle-tested; Xplogent's
+bet is telephony + product completeness in one box.
+
+| | Xplogent | Hermes Agent | OpenClaw |
+|---|---|---|---|
+| Licence | MIT | MIT | MIT |
+| Learning loop (skills + memory) | ✅ built in | ✅ built in | via skills/plugins |
+| Native telephony (SIP) | ✅ registers as a **FreePBX extension** + Telnyx trunk, queue-overflow to AI | ❌ core (a third-party SIP plugin exists) | ❌ core (voice via Twilio/Telnyx/Plivo webhooks) |
+| Dashboard, test-call panel, transcripts, CRM webhook | ✅ in the box | partial (CLI-first) | partial (gateway-first) |
+| Chat gateways (WhatsApp/Telegram/…) | ❌ not yet | ✅ | ✅ |
+| Community / maturity | 🌱 young | large | very large |
+
+## Screenshots
+
+<!-- OWNER: drop real captures in docs/screenshots/ and link them here.
+     Suggested: 1) Chat with the model switcher, 2) Calls readiness view,
+     3) Persona & Skills, 4) Call training. A 60–90s demo GIF under the title
+     does more than any of these. -->
+_Screenshots coming with the first release — the dashboard views are Chat,
+Calls, Contacts, Call training, Knowledge, Analytics, Persona & Skills,
+Audit, Settings and Guide._
 
 ## Architecture
 
@@ -135,7 +166,6 @@ cd web && npm install && npm run dev    # dashboard on :5173 (hot reload)
 | Extra | Adds |
 |---|---|
 | `providers` | OpenAI + Anthropic SDKs |
-| `memory` | `sqlite-vec` + local embeddings |
 | `api` | FastAPI + Uvicorn (REST/WebSocket) |
 | `voip` | Phone-call agent dependencies (server side: faster-whisper, no audio devices) |
 | `server` | Headless Linux server set: providers, api, voip, rag, security |
@@ -159,6 +189,16 @@ the agent emits an `approval_required` event your UI resolves.
 
 Releases: pushing a `v*` tag publishes `ghcr.io/mubashiribstec/xplogent:<version>`; `main`
 publishes `:latest`.
+
+## Roadmap
+
+- Call recording (with retention controls) and post-call QA scoring
+- Streaming speech (lower call latency), voicemail detection (AMD) and a
+  campaign dialler on top of the existing batch/TPS gates
+- Chat gateways (WhatsApp/Telegram) for the chat agent
+- Per-line transfer targets for multi-PBX setups
+- A community skill registry (export/import packs already work)
+- Trajectory export for fine-tuning
 
 ## Contributing
 

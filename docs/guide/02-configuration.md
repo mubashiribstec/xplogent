@@ -21,8 +21,8 @@ editing files under `~/.xplogent/`.
 - **Memory** — enable/disable, short-term token budget, retrieval depth.
 - **Safety policy** — per risk tier (`low`/`medium`/`high`/`critical`) choose
   `auto`, `confirm`, or `deny`.
-- **Orchestrator** — `max_concurrent_agents` (how many agents run at once).
-- **Tools** — enable/disable tool groups (shell, filesystem, web, gui, browser…).
+- **Tools** — enable/disable tool groups (shell, filesystem, memory). Plugins
+  can add more tools to the same registry.
 
 ## API keys
 
