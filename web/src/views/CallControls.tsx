@@ -107,7 +107,7 @@ export function CallNow({ toast, via, onCalled }: { toast: Toaster; via: string[
       <div className="row wrap" style={{ gap: 8 }}>
         <input value={number} placeholder="+15551234567" onChange={(e) => setNumber(e.target.value)} style={{ width: 200 }} />
         {via.length > 1 && <select value={line} onChange={(e) => setLine(e.target.value)}>
-          {via.map((v) => <option key={v} value={v}>{v === "sip" ? "SIP trunk" : "Telnyx API"}</option>)}</select>}
+          {via.map((v) => <option key={v} value={v}>{v === "sip" ? "SIP trunk" : v === "extension" ? "PBX extension" : "Telnyx API"}</option>)}</select>}
         <button className="btn primary" disabled={busy || !number.trim()} onClick={() => call(number, false)}>Call</button>
       </div>
       <p className="dim" style={{ fontSize: 12 }}>The AI agent places the call. Numbers on the do-not-call list are refused;

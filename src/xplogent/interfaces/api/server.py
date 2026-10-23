@@ -40,11 +40,16 @@ def create_app():
         from xplogent.voip.telephony import sip as sip_mod
         if sip_mod.wants_sip(cfg.voip or {}):
             sip_task = asyncio.create_task(sip_mod.apply_settings(cfg))
+        ext_task = None
+        if sip_mod.wants_extension(cfg.voip or {}):
+            ext_task = asyncio.create_task(sip_mod.apply_settings(cfg, line="extension"))
         try:
             yield
         finally:
             if sip_task is not None:
                 sip_task.cancel()
+            if ext_task is not None:
+                ext_task.cancel()
             await sip_mod.shutdown()
 
     app = FastAPI(title="Xplogent Agent API", version="0.1.0", lifespan=lifespan)

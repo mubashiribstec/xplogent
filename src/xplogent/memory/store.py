@@ -223,6 +223,7 @@ _MIGRATIONS = [
     ("skills", "source", "TEXT DEFAULT ''"),    # learned | installed | pack id
     ("calls", "test", "INTEGER DEFAULT 0"),     # test calls: not counted, no contact updates
     ("calls", "transport", "TEXT DEFAULT ''"),  # telnyx | sip | browser
+    ("calls", "line", "TEXT DEFAULT ''"),       # SIP line: trunk | extension ('' otherwise)
 ]
 # Stored in the database (PRAGMA user_version): changes whenever the schema text or
 # the migration list changes, so existing databases get upgraded automatically.
@@ -863,12 +864,12 @@ class Store:
 
     def start_call(self, direction: str, from_number: str, to_number: str,
                    provider_call_id: str = "", contact_id: int | None = None, *,
-                   test: bool = False, transport: str = "") -> int:
+                   test: bool = False, transport: str = "", line: str = "") -> int:
         cur = self._write(
             "INSERT INTO calls (direction, contact_id, from_number, to_number, provider_call_id, "
-            "status, started_at, test, transport) VALUES (?,?,?,?,?,'active',?,?,?)",
+            "status, started_at, test, transport, line) VALUES (?,?,?,?,?,'active',?,?,?,?)",
             (direction, contact_id, from_number, to_number, provider_call_id, time.time(),
-             int(test), transport))
+             int(test), transport, line))
         return int(cur.lastrowid)
 
     def add_call_turn(self, call_id: int, speaker: str, text: str) -> None:

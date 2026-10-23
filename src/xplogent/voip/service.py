@@ -71,6 +71,7 @@ def call_variables(v: dict[str, Any], info: dict[str, Any],
         "caller_name": (contact or {}).get("name", ""),
         "caller_phone": customer,
         "direction": "outbound" if is_outbound(info) else "inbound",
+        "line": str(info.get("line", "")),
     }
     for key, value in ((contact or {}).get("fields") or {}).items():
         variables.setdefault(str(key), value)
@@ -136,7 +137,8 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
     call_id = store.start_call(direction, info.get("from", ""), info.get("to", ""),
                                provider_call_id=info.get("call_control_id", ""),
                                contact_id=contact["id"] if contact else None,
-                               test=bool(info.get("test")), transport=str(info.get("transport", "")))
+                               test=bool(info.get("test")), transport=str(info.get("transport", "")),
+                               line=str(info.get("line", "")))
 
     if provider is None:
         from xplogent.providers.registry import build_provider
@@ -145,6 +147,12 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         retrieve = _make_retriever(cfg, store, int(v.get("knowledge_top_k", 3)))
 
     persona = f"You work for {v.get('company', 'our company')}."
+    if str(info.get("line", "")) == "extension":
+        # The extension line is the office PBX: a colleague's extension, an
+        # internal test call, or a caller the FreePBX queue overflowed to the AI.
+        persona += (" This call is on the internal PBX extension line, not a direct "
+                    "external line: the caller is a colleague, an internal test, or "
+                    "someone transferred or overflowed from the office phone system.")
     silence_cfg = v.get("silence") or {}
     session_kw.setdefault("idle_prompt_s", float(silence_cfg.get("prompt_after_s", 12.0)))
     session_kw.setdefault("idle_hangup_s", float(silence_cfg.get("hangup_after_s", 30.0)))
@@ -295,7 +303,8 @@ class VoipService:
     """Transport-agnostic call service: live-call registry and outbound policy.
 
     Telnyx specifics live in :class:`~xplogent.voip.telephony.telnyx_trunk.TelnyxTrunk`,
-    SIP in :class:`~xplogent.voip.telephony.sip.SipTrunk` (which sets ``sip_dialer``).
+    SIP in :class:`~xplogent.voip.telephony.sip.SipTrunk` (the running lines set
+    ``sip_dialer`` / ``sip_extension_dialer``).
     """
 
     def __init__(self) -> None:
@@ -303,8 +312,9 @@ class VoipService:
 
         self.active: dict[int, LiveCall] = {}             # call row id -> live call controls
         self.telnyx = TelnyxTrunk(self)
-        # Set by the SIP trunk when it is running: async (number, meta) -> result.
-        self.sip_dialer: Any = None
+        # Set by the SIP lines when they are running: async (number, meta) -> result.
+        self.sip_dialer: Any = None                       # trunk line (via="sip")
+        self.sip_extension_dialer: Any = None             # extension line (via="extension")
 
     # -- outbound ---------------------------------------------------------------------
     async def dial(self, to_number: str, cfg: Config | None = None, *, contact_id: int | None = None,
@@ -319,7 +329,7 @@ class VoipService:
             return {"ok": False, "error": "the phone agent is switched off (Calls → Setup); "
                                           "test calls still work"}
         number = clean_number(to_number)
-        if not number and via == "sip":         # PBX extensions are short: 100, *43, 2001
+        if not number and via in ("sip", "extension"):   # PBX extensions are short: 100, *43, 2001
             short = re.sub(r"[\s()-]", "", to_number or "")
             number = short if re.fullmatch(r"[0-9*#+]{2,15}", short) else ""
         if not number:
@@ -335,11 +345,17 @@ class VoipService:
             problem = calling_hours_problem(v, contact)
             if problem:
                 return {"ok": False, "error": problem, "hours": True}
-        meta = {"contact_id": contact["id"] if contact else None, "test": test, "transport": via}
-        if via == "sip":
-            dialer = self.sip_dialer
+        # Both SIP lines share the "sip" transport; the line tag keeps them apart.
+        meta = {"contact_id": contact["id"] if contact else None, "test": test,
+                "transport": "sip" if via in ("sip", "extension") else via}
+        if via in ("sip", "extension"):
+            meta["line"] = via if via == "extension" else "trunk"
+        if via in ("sip", "extension"):
+            dialer = self.sip_dialer if via == "sip" else self.sip_extension_dialer
             if dialer is None:
-                return {"ok": False, "error": "the SIP trunk is not set up (Calls → Telephony)"}
+                return {"ok": False, "error": "the SIP trunk is not set up (Calls → Telephony)"
+                        if via == "sip" else
+                        "the PBX extension line is not set up or not switched on (Calls → Telephony)"}
             return await dialer(number, meta)
         return await self.telnyx.dial(number, meta, v)
 

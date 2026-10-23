@@ -27,6 +27,7 @@ class LiveCall:
     number: str = ""
     direction: str = "inbound"
     transport: str = "telnyx"
+    line: str = ""                       # SIP line the call is on: trunk | extension
     test: bool = False
     contact_name: str = ""
     # Transport-level transfer to a given number (None: this line can't transfer).
@@ -36,7 +37,8 @@ class LiveCall:
 
     def summary(self) -> dict[str, Any]:
         return {"call_id": self.call_id, "number": self.number,
-                "direction": self.direction, "transport": self.transport, "test": self.test,
+                "direction": self.direction, "transport": self.transport, "line": self.line,
+                "test": self.test,
                 "contact_name": self.contact_name, "started": self.started,
                 "paused": self.brain.paused, "notes": list(self.brain.notes),
                 "can_transfer": self.transfer_to is not None}

@@ -583,14 +583,22 @@ export const dialCall = (b: { number?: string; contact_id?: number; via?: string
   postJSON<CallResult>("/voip/dial", b);
 
 // ── SIP trunk ────────────────────────────────────────────────────────────────
+export interface SipExtensionStatus {
+  enabled: boolean; configured: boolean; password_set: boolean; running: boolean; registered: boolean;
+  error: string; server?: string; username?: string; local_port?: number; contact_ip?: string; rtp?: string;
+  calls?: number; last_error?: string; expires?: number; line?: string;
+}
 export interface SipStatus {
   telephony: string; configured: boolean; password_set: boolean; running: boolean; registered: boolean;
   error: string; server?: string; username?: string; local_port?: number; contact_ip?: string; rtp?: string;
   calls?: number; last_error?: string; expires?: number;
+  extension?: SipExtensionStatus;
 }
 export async function getSipStatus(): Promise<SipStatus> { return (await fetch("/voip/sip/status")).json(); }
 export const saveSip = (b: Record<string, any>) => postJSON<{ ok: boolean; error?: string; status?: SipStatus }>("/voip/sip/settings", b);
 export const testSip = () => postJSON<{ ok: boolean; error?: string; note?: string; status: SipStatus }>("/voip/sip/test");
+export const saveSipExtension = (b: Record<string, any>) => postJSON<{ ok: boolean; error?: string; status?: SipExtensionStatus }>("/voip/sip/extension/settings", b);
+export const testSipExtension = () => postJSON<{ ok: boolean; error?: string; note?: string; status: SipExtensionStatus }>("/voip/sip/extension/test");
 export async function detectSipIp(): Promise<{ lan: string; internet: string; note: string }> {
   return (await fetch("/voip/sip/detect-ip")).json();
 }

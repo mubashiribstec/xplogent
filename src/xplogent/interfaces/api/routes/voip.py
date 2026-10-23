@@ -76,11 +76,13 @@ async def voip_status() -> dict:
 async def voip_readiness() -> dict:
     """Checklist of what's missing before Telnyx calls can work (Calls view)."""
     from xplogent.voip.readiness import checklist
-    from xplogent.voip.telephony.sip import current_trunk
+    from xplogent.voip.telephony.sip import current_line, current_trunk
 
     cfg = load_config()
     trunk = current_trunk()
-    items = checklist(cfg.voip or {}, cfg.model, sip_status=trunk.status() if trunk else None)
+    ext = current_line("extension")
+    items = checklist(cfg.voip or {}, cfg.model, sip_status=trunk.status() if trunk else None,
+                      sip_extension_status=ext.status() if ext else None)
     return {"ready": all(i["ok"] for i in items if i["required"]), "items": items}
 
 
@@ -448,8 +450,8 @@ async def voip_dial(body: dict):
 
     default_via = "sip" if (load_config().voip or {}).get("telephony") == "sip" else "telnyx"
     via = str(body.get("via") or default_via)
-    if via not in ("telnyx", "sip"):
-        return {"ok": False, "error": "via must be telnyx or sip"}
+    if via not in ("telnyx", "sip", "extension"):
+        return {"ok": False, "error": "via must be telnyx, sip or extension"}
     contact_id = body.get("contact_id")
     if contact_id not in (None, ""):
         try:
@@ -493,6 +495,21 @@ _SIP_FIELDS = {"server": str, "port": int, "username": str, "auth_username": str
                "ring_timeout": int}
 
 
+def _extension_status() -> dict:
+    from xplogent.voip.telephony.sip import current_line
+
+    v = load_config().voip or {}
+    ext = v.get("sip_extension") or {}
+    trunk = current_line("extension")
+    base = {"enabled": bool(ext.get("enabled")),
+            "configured": bool(ext.get("server") and ext.get("username")),
+            "password_set": bool(os.environ.get("SIP_EXTENSION_PASSWORD"))}
+    if trunk is None:
+        return {**base, "running": False, "registered": False,
+                "error": "" if base["configured"] else "not set up"}
+    return {**base, **trunk.status()}
+
+
 def _sip_status() -> dict:
     from xplogent.voip.telephony.sip import current_trunk, wants_sip
 
@@ -501,9 +518,12 @@ def _sip_status() -> dict:
     base = {"telephony": v.get("telephony") or "telnyx", "configured": wants_sip(v),
             "password_set": bool(os.environ.get("SIP_PASSWORD"))}
     if trunk is None:
-        return {**base, "running": False, "registered": False,
-                "error": "" if base["configured"] else "not set up"}
-    return {**base, **trunk.status()}
+        out = {**base, "running": False, "registered": False,
+               "error": "" if base["configured"] else "not set up"}
+    else:
+        out = {**base, **trunk.status()}
+    out["extension"] = _extension_status()
+    return out
 
 
 @router.get("/voip/sip/status")
@@ -511,22 +531,17 @@ async def voip_sip_status() -> dict:
     return _sip_status()
 
 
-@router.post("/voip/sip/settings")
-async def voip_sip_settings(body: dict) -> dict:
-    """Save the SIP account (password goes to the encrypted secrets) and restart the trunk."""
-    import re
-
-    from xplogent.core.config import save_env, save_user_config
-    from xplogent.voip.telephony import sip as sip_mod
-
+def _sip_updates(body: dict, fields: dict) -> tuple[dict, str]:
+    """Validate a SIP settings body (shared by the trunk and extension cards).
+    Returns (updates, error): error is "" when the updates are usable."""
     updates: dict = {}
-    for key, kind in _SIP_FIELDS.items():
+    for key, kind in fields.items():
         if key not in body:
             continue
         try:
             updates[key] = kind(body[key]) if kind is not bool else bool(body[key])
         except (TypeError, ValueError):
-            return {"ok": False, "error": f"{key} must be a {kind.__name__}"}
+            return {}, f"{key} must be a {kind.__name__}"
         if kind is str:
             updates[key] = updates[key].strip()
     if "allow_from" in body:
@@ -535,21 +550,72 @@ async def voip_sip_settings(body: dict) -> dict:
                                  if str(a).strip()]
     host = updates.get("server", "")
     if host and not re.fullmatch(r"[A-Za-z0-9.\-]+", host):
-        return {"ok": False, "error": "server must be a host name or IP (no sip:, no port)"}
+        return {}, "server must be a host name or IP (no sip:, no port)"
     for key in ("port", "local_port", "rtp_start", "rtp_end"):
         if key in updates and not 1 <= updates[key] <= 65535:
-            return {"ok": False, "error": f"{key} must be a port number"}
+            return {}, f"{key} must be a port number"
     if updates.get("rtp_start", 0) and updates.get("rtp_end", 0) and updates["rtp_end"] <= updates["rtp_start"]:
-        return {"ok": False, "error": "the RTP range end must be above its start"}
+        return {}, "the RTP range end must be above its start"
+    return updates, ""
+
+
+@router.post("/voip/sip/settings")
+async def voip_sip_settings(body: dict) -> dict:
+    """Save the SIP account (password goes to the encrypted secrets) and restart the trunk."""
+    from xplogent.core.config import save_env, save_user_config
+    from xplogent.voip.telephony import sip as sip_mod
+
+    updates, error = _sip_updates(body, _SIP_FIELDS)
+    if error:
+        return {"ok": False, "error": error}
     patch: dict = {"sip": updates}
     if body.get("telephony") in ("telnyx", "sip", "both"):
         patch["telephony"] = body["telephony"]
     save_user_config({"voip": patch})
     if body.get("password"):
         save_env({"SIP_PASSWORD": str(body["password"])})
-    deps.audit_event("voip_sip_settings", target=f"{updates.get('username', '')}@{host}", risk="medium")
+    deps.audit_event("voip_sip_settings", target=f"{updates.get('username', '')}@{updates.get('server', '')}",
+                     risk="medium")
     await sip_mod.apply_settings()
     return {"ok": True, "status": _sip_status()}
+
+
+@router.post("/voip/sip/extension/settings")
+async def voip_sip_extension_settings(body: dict) -> dict:
+    """Save the PBX extension login (its own secret) and rebuild ONLY that line."""
+    from xplogent.core.config import save_env, save_user_config
+    from xplogent.voip.telephony import sip as sip_mod
+
+    updates, error = _sip_updates(body, {**_SIP_FIELDS, "enabled": bool})
+    if error:
+        return {"ok": False, "error": error}
+    save_user_config({"voip": {"sip_extension": updates}})
+    if body.get("password"):
+        save_env({"SIP_EXTENSION_PASSWORD": str(body["password"])})
+    deps.audit_event("voip_sip_extension_settings",
+                     target=f"{updates.get('username', '')}@{updates.get('server', '')}", risk="medium")
+    await sip_mod.apply_settings(line="extension")
+    return {"ok": True, "status": _sip_status()["extension"]}
+
+
+@router.post("/voip/sip/extension/test")
+async def voip_sip_extension_test() -> dict:
+    """Restart the extension line and wait for the registration result."""
+    from xplogent.voip.telephony import sip as sip_mod
+
+    trunk = await sip_mod.apply_settings(line="extension")
+    if trunk is None:
+        return {"ok": False, "error": "switch the extension line on and enter the PBX address "
+                                      "and extension number first",
+                "status": _sip_status()["extension"]}
+    if not trunk.started:
+        return {"ok": False, "error": trunk.reg_error, "status": _sip_status()["extension"]}
+    if not trunk.s.register:
+        return {"ok": True, "status": _sip_status()["extension"],
+                "note": "registration is off: calls are accepted from the server"}
+    ok = await trunk.wait_registered(10.0)
+    st = _sip_status()["extension"]
+    return {"ok": ok, "status": st, "error": "" if ok else (st.get("error") or "no answer from the server")}
 
 
 @router.post("/voip/sip/test")

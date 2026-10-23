@@ -7,6 +7,7 @@ import {
 import { useToast } from "../components/Toast";
 import { CallNow, LiveCalls, TestCall } from "./CallControls";
 import { SipCard } from "./SipCard";
+import { SipExtensionCard } from "./SipExtensionCard";
 
 const fmtTime = (t?: number | null) => (t ? new Date(t * 1000).toLocaleString() : "—");
 const fmtDur = (c: CallRow) => {
@@ -76,7 +77,8 @@ export function Calls() {
         <LiveCalls active={status?.active ?? []} toast={toast} onChange={reload} />
 
         {loaded && <CallNow toast={toast} onCalled={reload}
-          via={cfg.telephony === "sip" ? ["sip"] : cfg.telephony === "both" ? ["telnyx", "sip"] : ["telnyx"]} />}
+          via={[...(cfg.telephony === "sip" ? ["sip"] : cfg.telephony === "both" ? ["telnyx", "sip"] : ["telnyx"]),
+                ...(cfg.sip_extension?.enabled && cfg.sip_extension?.server ? ["extension"] : [])]} />}
         <TestCall contacts={contacts} />
 
         <div className="card">
@@ -162,6 +164,7 @@ export function Calls() {
         {cfg.telephony !== "sip" && <TelnyxCard cfg={cfg} keySet={telnyxKeySet} save={save} toast={toast}
           onKeySaved={() => { setTelnyxKeySet(true); loadReady(); }} />}
         {(cfg.telephony === "sip" || cfg.telephony === "both") && <SipCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} />}
+        <SipExtensionCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} />
         <SpeechCard cfg={cfg} save={save} toast={toast} />
 
         <div className="card">

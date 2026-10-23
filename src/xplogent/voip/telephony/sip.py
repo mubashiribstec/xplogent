@@ -1,8 +1,11 @@
-"""Built-in SIP trunk client: register with a PBX or carrier and handle calls over RTP.
+"""Built-in SIP client: register with a PBX or carrier and handle calls over RTP.
 
-A small SIP user agent (RFC 3261 subset) for one trunk, so the phone agent can work
+A small SIP user agent (RFC 3261 subset) per SIP account, so the phone agent can work
 with FreePBX/Asterisk, Telnyx SIP connections and other providers without the
-Telnyx Voice API or a public HTTPS address:
+Telnyx Voice API or a public HTTPS address. Two accounts ("lines") can run at once:
+the **trunk** (``voip.sip`` — e.g. a Telnyx SIP connection for external calls) and
+the **extension** (``voip.sip_extension`` — a FreePBX extension for internal calls
+and queue overflow), each with its own registration, ports and call set:
 
 * **REGISTER** with digest authentication (401/407), refreshed before it expires;
 * **inbound calls**: answers an INVITE (100 Trying, 180 Ringing, 200 OK with an
@@ -11,12 +14,14 @@ Telnyx Voice API or a public HTTPS address:
 * **transfer** with REFER (the PBX/carrier connects the caller to the number);
 * **audio**: RTP over UDP, G.711 μ-law (PCMU) or A-law (PCMA), 20 ms frames,
   symmetric RTP (we reply to where the far end actually sends from, which helps
-  behind NAT). DTMF and comfort-noise packets are ignored.
+  behind NAT). RFC 4733 DTMF telephone-events are decoded and can be sent;
+  comfort-noise packets are ignored.
 
 Each call is wired to the same :class:`~xplogent.voip.engine.CallSession` the
 Telnyx path uses (8 kHz μ-law in and out), and registered for live control.
+Calls are tagged with the line they came in on (``trunk`` | ``extension``).
 
-Limits: UDP only (no TCP/TLS/SRTP), G.711 only, one trunk.
+Limits: UDP only (no TCP/TLS/SRTP), G.711 only, two SIP accounts.
 """
 
 from __future__ import annotations
@@ -82,10 +87,19 @@ class SipSettings:
     max_calls: int = 4
     ring_timeout: float = 45.0
     strict_source: bool = False          # accept calls only from the server / allow_from addresses
+    enabled: bool = False                # only the extension line uses this: off = fully inert
 
     @classmethod
-    def from_config(cls, v: dict[str, Any]) -> SipSettings:
-        s = dict(v.get("sip") or {})
+    def from_config(cls, v: dict[str, Any], block: str = "sip", *,
+                    password_env: str = "SIP_PASSWORD",
+                    local_port_default: int = 5060, rtp_lo: int = 10000, rtp_hi: int = 10100,
+                    port_envs: tuple[str, str, str] = ("XPLOGENT_SIP_PORT", "XPLOGENT_RTP_START",
+                                                       "XPLOGENT_RTP_END")) -> SipSettings:
+        """Parse one SIP account block (``voip.sip`` for the trunk,
+        ``voip.sip_extension`` for the extension line). The password never lives
+        in the config file: it is the named secret, loaded into the environment
+        from the encrypted secrets store."""
+        s = dict(v.get(block) or {})
 
         def num(key: str, env: str, default: int) -> int:
             # In Docker the published ports (env) are what is reachable: they win.
@@ -99,17 +113,28 @@ class SipSettings:
         if isinstance(allow, str):
             allow = [a.strip() for a in allow.split(",") if a.strip()]
         return cls(server=str(s.get("server") or "").strip(), username=str(s.get("username") or "").strip(),
-                   password=os.environ.get("SIP_PASSWORD", ""), port=int(s.get("port") or 5060),
+                   password=os.environ.get(password_env, ""), port=int(s.get("port") or 5060),
                    auth_username=str(s.get("auth_username") or "").strip(),
                    domain=str(s.get("domain") or "").strip(), caller_id=str(s.get("caller_id") or "").strip(),
                    public_ip=str(s.get("public_ip") or os.environ.get("XPLOGENT_HOST_IP") or "").strip(),
-                   local_port=num("local_port", "XPLOGENT_SIP_PORT", 5060),
-                   rtp_start=num("rtp_start", "XPLOGENT_RTP_START", 10000),
-                   rtp_end=num("rtp_end", "XPLOGENT_RTP_END", 10100),
+                   local_port=num("local_port", port_envs[0], local_port_default),
+                   rtp_start=num("rtp_start", port_envs[1], rtp_lo),
+                   rtp_end=num("rtp_end", port_envs[2], rtp_hi),
                    register=bool(s.get("register", True)), expires=int(s.get("expires") or 300),
                    allow_from=list(allow), max_calls=int(s.get("max_calls") or 4),
                    strict_source=bool(s.get("strict_source", False)),
-                   ring_timeout=float(s.get("ring_timeout") or 45))
+                   ring_timeout=float(s.get("ring_timeout") or 45),
+                   enabled=bool(s.get("enabled", False)))
+
+    @classmethod
+    def extension_from_config(cls, v: dict[str, Any]) -> SipSettings:
+        """The second line (``voip.sip_extension``): a PBX extension login whose
+        default ports sit clear of the trunk's (5062, RTP 10200-10300) and whose
+        password is the separate SIP_EXTENSION_PASSWORD secret."""
+        return cls.from_config(v, "sip_extension", password_env="SIP_EXTENSION_PASSWORD",
+                               local_port_default=5062, rtp_lo=10200, rtp_hi=10300,
+                               port_envs=("XPLOGENT_SIP_EXT_PORT", "XPLOGENT_RTP_EXT_START",
+                                         "XPLOGENT_RTP_EXT_END"))
 
 
 # ── calls ────────────────────────────────────────────────────────────────────
@@ -146,8 +171,10 @@ class SipTrunk(asyncio.DatagramProtocol):
     """One SIP account: registration, calls and their media."""
 
     def __init__(self, settings: SipSettings, *, service: Any = None,
-                 session_kw: dict[str, Any] | None = None, cfg: Any = None) -> None:
+                 session_kw: dict[str, Any] | None = None, cfg: Any = None,
+                 line: str = "trunk") -> None:
         self.s = settings
+        self.line = line                      # "trunk" | "extension": tags every call
         self.service = service
         self.session_kw = session_kw or {}      # tests inject fake STT/TTS/LLM here
         self.cfg = cfg
@@ -175,6 +202,12 @@ class SipTrunk(asyncio.DatagramProtocol):
 
     # -- lifecycle ---------------------------------------------------------------------
     @property
+    def via_name(self) -> str:
+        """How dialling through this line is named in results: the trunk keeps its
+        historical ``sip`` name; the extension line is ``extension``."""
+        return "sip" if self.line == "trunk" else self.line
+
+    @property
     def domain(self) -> str:
         return self.s.domain or self.s.server
 
@@ -196,8 +229,8 @@ class SipTrunk(asyncio.DatagramProtocol):
         if self.s.register:
             self._spawn(self._register_loop())
         self._spawn(self._keepalive_loop())
-        _log.info("SIP trunk on udp/%s → %s:%s as %s", self.s.local_port, self.s.server, self.s.port,
-                  self.s.username)
+        _log.info("SIP %s line on udp/%s → %s:%s as %s", self.line, self.s.local_port,
+                  self.s.server, self.s.port, self.s.username)
 
     async def stop(self) -> None:
         # Hang up every call at once and unregister, but never block shutdown for long
@@ -222,7 +255,8 @@ class SipTrunk(asyncio.DatagramProtocol):
         self.started = False
 
     def status(self) -> dict[str, Any]:
-        return {"running": self.started, "registered": self.registered, "error": self.reg_error,
+        return {"line": self.line,
+                "running": self.started, "registered": self.registered, "error": self.reg_error,
                 "registered_at": self.reg_ok_at, "expires": self.reg_expires,
                 "server": f"{self.s.server}:{self.s.port}", "username": self.s.username,
                 "local_port": self.s.local_port, "contact_ip": self.contact_ip,
@@ -552,7 +586,7 @@ class SipTrunk(asyncio.DatagramProtocol):
                          body=build_sdp(self.contact_ip, call.rtp.port, (codec,), dtmf_pt=call.rtp.dtmf_pt))
         call.state = "confirmed"
         info = {"direction": "inbound", "from": call.number, "to": user_of(req.get("To")),
-                "call_control_id": call.call_id, "transport": "sip"}
+                "call_control_id": call.call_id, "transport": "sip", "line": self.line}
         # Retransmit the 200 OK until the ACK arrives (UDP may drop it).
         data, wait = ok.encode(), T1
         deadline = time.monotonic() + self.ack_timeout
@@ -595,7 +629,7 @@ class SipTrunk(asyncio.DatagramProtocol):
     async def dial(self, number: str, meta: dict[str, Any] | None = None) -> dict[str, Any]:
         """Call ``number`` through the trunk. Returns once it rings (or fails early)."""
         if len(self.calls) >= self.s.max_calls:
-            return {"ok": False, "error": "too many calls on the SIP trunk right now"}
+            return {"ok": False, "error": f"too many calls on the SIP {self.line} line right now"}
         target = re.sub(r"[^\d+*#]", "", number)
         caller = self.s.caller_id or self.s.username
         call = SipCall(call_id=f"{secrets.token_hex(10)}@xplogent", local_tag=new_tag(), outbound=True,
@@ -611,7 +645,8 @@ class SipTrunk(asyncio.DatagramProtocol):
         try:
             return await asyncio.wait_for(asyncio.shield(early), timeout=6.0)
         except TimeoutError:
-            return {"ok": True, "via": "sip", "call": {"sip_call_id": call.call_id}, "state": "calling"}
+            return {"ok": True, "via": self.via_name, "call": {"sip_call_id": call.call_id},
+                    "state": "calling"}
 
     async def _outbound(self, call: SipCall, early: asyncio.Future) -> None:
         uri = f"sip:{call.number}@{self.domain}"
@@ -636,7 +671,8 @@ class SipTrunk(asyncio.DatagramProtocol):
         def provisional(resp: SipMessage) -> None:
             if resp.status in (180, 183):
                 call.remote_tag = header_param(resp.get("To"), "tag") or call.remote_tag
-                settle({"ok": True, "via": "sip", "call": {"sip_call_id": call.call_id}, "state": "ringing"})
+                settle({"ok": True, "via": self.via_name, "call": {"sip_call_id": call.call_id},
+                        "state": "ringing"})
 
         def ack_error(req: SipMessage, resp: SipMessage) -> None:
             ack = SipMessage(method="ACK", uri=req.uri)
@@ -687,9 +723,10 @@ class SipTrunk(asyncio.DatagramProtocol):
         call.rtp.dtmf_pt = answer.get("dtmf_pt")
         if answer.get("ip") and answer.get("port"):
             call.rtp.remote = (answer["ip"], int(answer["port"]))
-        settle({"ok": True, "via": "sip", "call": {"sip_call_id": call.call_id}, "state": "answered"})
+        settle({"ok": True, "via": self.via_name, "call": {"sip_call_id": call.call_id},
+                "state": "answered"})
         info = {"direction": "outbound", "from": self.s.caller_id or self.s.username, "to": call.number,
-                "call_control_id": call.call_id, "transport": "sip", **call.meta}
+                "call_control_id": call.call_id, "transport": "sip", **call.meta, "line": self.line}
         await self._start_session(call, info)
 
     async def _ring_timeout(self, call: SipCall) -> None:
@@ -804,7 +841,7 @@ class SipTrunk(asyncio.DatagramProtocol):
                 call_id=row_id, session=session, brain=brain, number=call.number,
                 direction="outbound" if call.outbound else "inbound", transport="sip",
                 test=bool(info.get("test")), contact_name=str((brain.contact or {}).get("name") or ""),
-                transfer_to=transfer_to, ref=call.call_id))
+                transfer_to=transfer_to, ref=call.call_id, line=self.line))
         await session.start()
 
         async def supervise() -> None:
@@ -853,51 +890,82 @@ def _route_ip(dest: str) -> str:
         return "127.0.0.1"
 
 
-# ── the running trunk (one per server) ───────────────────────────────────────
-_TRUNK: SipTrunk | None = None
-_LOCK: asyncio.Lock | None = None
+# ── the running lines (trunk + extension, independently managed) ─────────────
+_LINES: dict[str, SipTrunk | None] = {"trunk": None, "extension": None}
+_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _line_lock(line: str) -> asyncio.Lock:
+    return _LOCKS.setdefault(line, asyncio.Lock())
 
 
 def current_trunk() -> SipTrunk | None:
-    return _TRUNK
+    """The trunk line (``voip.sip``); existing callers keep this name."""
+    return _LINES["trunk"]
+
+
+def current_line(line: str = "trunk") -> SipTrunk | None:
+    return _LINES.get(line)
 
 
 def wants_sip(v: dict[str, Any]) -> bool:
     return str(v.get("telephony") or "telnyx") in ("sip", "both") and bool((v.get("sip") or {}).get("server"))
 
 
-async def apply_settings(cfg: Any = None) -> SipTrunk | None:
-    """(Re)start or stop the trunk to match the configuration."""
-    global _TRUNK, _LOCK
+def wants_extension(v: dict[str, Any]) -> bool:
+    """The extension line runs only when it is switched on and filled in; it is
+    independent of the ``telephony`` mode that governs the trunk."""
+    s = SipSettings.extension_from_config(v)
+    return bool(s.enabled and s.server and s.username)
+
+
+async def apply_settings(cfg: Any = None, line: str = "trunk") -> SipTrunk | None:
+    """(Re)start or stop ONE line to match the configuration.
+
+    Rebuilding a line never touches the other: the extension line can be saved
+    and reconnected while trunk calls are live, and vice versa."""
     from xplogent.core.config import load_config
     from xplogent.voip.service import get_service
 
-    _LOCK = _LOCK or asyncio.Lock()
-    async with _LOCK:
+    if line not in _LINES:
+        raise ValueError(f"unknown SIP line: {line!r}")
+    async with _line_lock(line):
         cfg = cfg or load_config()
         v = cfg.voip or {}
         service = get_service()
-        if _TRUNK is not None:
-            await _TRUNK.stop()
-            _TRUNK = None
-            service.sip_dialer = None
-        if not wants_sip(v):
-            return None
-        trunk = SipTrunk(SipSettings.from_config(v), service=service)
+        dialer_attr = "sip_dialer" if line == "trunk" else "sip_extension_dialer"
+        if _LINES[line] is not None:
+            await _LINES[line].stop()
+            _LINES[line] = None
+            setattr(service, dialer_attr, None)
+        if line == "trunk":
+            if not wants_sip(v):
+                return None
+            settings = SipSettings.from_config(v)
+        else:
+            settings = SipSettings.extension_from_config(v)
+            if not (settings.enabled and settings.server and settings.username):
+                return None
+        trunk = SipTrunk(settings, service=service, line=line)
         try:
             await trunk.start()
         except Exception as exc:  # noqa: BLE001 - reported in the status
             trunk.reg_error = f"could not start: {exc}"
-            _log.warning("SIP trunk not started: %s", exc)
-            _TRUNK = trunk
+            _log.warning("SIP %s line not started: %s", line, exc)
+            _LINES[line] = trunk
             return trunk
-        _TRUNK = trunk
-        service.sip_dialer = trunk.dial
+        _LINES[line] = trunk
+        setattr(service, dialer_attr, trunk.dial)
         return trunk
 
 
 async def shutdown() -> None:
-    global _TRUNK
-    if _TRUNK is not None:
-        await _TRUNK.stop()
-        _TRUNK = None
+    from xplogent.voip.service import get_service
+
+    service = get_service()
+    for line, trunk in list(_LINES.items()):
+        if trunk is not None:
+            await trunk.stop()
+            _LINES[line] = None
+    service.sip_dialer = None
+    service.sip_extension_dialer = None

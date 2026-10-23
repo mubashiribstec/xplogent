@@ -8,14 +8,16 @@ and steer live calls from the dashboard.
 
 ```
 phone line ──► Telnyx Voice API (webhook + wss media stream)    ─┐
-           └─► SIP trunk: FreePBX/Asterisk, Telnyx SIP, … (RTP) ─┤
+           ├─► SIP trunk: Telnyx SIP, FreePBX, … (RTP)          ─┤
+           └─► SIP extension: a FreePBX extension login (RTP)   ─┤
                                                                  ▼
    VAD -> speech-to-text -> CallBrain (fast LLM + playbook + knowledge + customer record + tools)
        -> text-to-speech -> audio back to the caller            (interrupt it any time: barge-in)
 ```
 
-Both phone lines feed the same call engine, so greeting, playbook, knowledge, tools, live
-control and call records behave the same whichever line a call uses.
+All phone lines feed the same call engine, so greeting, playbook, knowledge, tools, live
+control and call records behave the same whichever line a call uses. Every call record
+says which line it used (`trunk` or `extension`).
 
 ## Choose the phone line (Calls → Setup → Phone line)
 
@@ -58,7 +60,29 @@ Who can ring the AI: the SIP server (any of its addresses), the "Also accept cal
 list, and calls addressed to this extension (Docker and multi-server carriers need that).
 Tick "only accept calls from these addresses" for the strict rule.
 
-Limits: UDP only (no TCP/TLS/SRTP), G.711 μ-law/A-law, one SIP account. DTMF is ignored.
+### PBX extension (second SIP login)
+
+The trunk above is one SIP account. If it is spoken for — the usual setup is a Telnyx
+SIP connection for external calls — the agent can hold a **second, independent login**:
+an extension on your FreePBX. Switch it on in the **PBX extension (FreePBX)** card
+(Calls → Setup), with the PBX address, the extension number and its secret (stored
+encrypted as `SIP_EXTENSION_PASSWORD`). It registers exactly like the trunk but on its
+own ports — SIP UDP **5062**, RTP **10200–10300** — so both lines run at once; in
+Docker, publish those ports too (`XPLOGENT_SIP_EXT_PORT` / `XPLOGENT_RTP_EXT_START` /
+`XPLOGENT_RTP_EXT_END` override them).
+
+With it, anyone in the office can **dial the agent's extension** from another extension
+to test it, the agent can **call extensions back** (choose "PBX extension" as the line
+in *Call now*), and a FreePBX **queue can overflow to it**: point the queue's fail-over
+destination at the agent's extension. Calls on this line are tagged `extension`, and
+the agent knows it is on an internal/PBX call. **FreePBX side**: Applications →
+Extensions → add a **PJSIP** extension for the AI; keep NAT on (rtp_symmetric,
+force_rport, rewrite_contact) and allow ulaw/alaw.
+
+Limits: UDP only (no TCP/TLS/SRTP), G.711 μ-law/A-law, two SIP accounts (trunk +
+extension). DTMF uses RFC 4733 telephone-events and works both ways when the far end
+offers it: callers can use the keypad (`voip.dtmf` configures what keys do), and the
+agent can send digits (e.g. through a menu) on lines that negotiated it.
 
 ## Speech
 

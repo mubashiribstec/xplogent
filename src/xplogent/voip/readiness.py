@@ -61,7 +61,8 @@ def speech_status(v: dict[str, Any], env: dict[str, str]) -> tuple[bool, str]:
 
 
 def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
-              sip_status: dict[str, Any] | None = None) -> list[dict]:
+              sip_status: dict[str, Any] | None = None,
+              sip_extension_status: dict[str, Any] | None = None) -> list[dict]:
     """Ordered readiness items: ``{id, label, ok, detail, required}``.
 
     Which telephony items appear depends on ``voip.telephony``: ``telnyx`` (Voice API,
@@ -100,6 +101,17 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
         st = sip_status or {}
         if sip.get("register", True):
             add("sip_registered", "SIP registration", bool(st.get("registered")),
+                "registered" if st.get("registered") else (st.get("error") or "not registered yet"))
+    ext = v.get("sip_extension") or {}
+    if ext.get("enabled"):
+        configured = bool(ext.get("server") and ext.get("username"))
+        add("sip_extension_account", "PBX extension account",
+            configured and _key(env, "SIP_EXTENSION_PASSWORD"),
+            "" if configured and _key(env, "SIP_EXTENSION_PASSWORD") else
+            "enter the PBX address, extension number and password in the PBX extension card")
+        if ext.get("register", True):
+            st = sip_extension_status or {}
+            add("sip_extension_registered", "PBX extension registration", bool(st.get("registered")),
                 "registered" if st.get("registered") else (st.get("error") or "not registered yet"))
     call_model = str(v.get("model") or model)
     provider = call_model.split(":", 1)[0]
