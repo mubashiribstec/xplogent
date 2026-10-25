@@ -4,19 +4,21 @@ import { TABS, Tab } from "./NavRail";
 
 interface Cmd { id: string; label: string; run: () => void; }
 
-export function CommandPalette({ open, onClose, onTab, onNewChat }: {
+export function CommandPalette({ open, onClose, onTab, onNewChat, onTour }: {
   open: boolean;
   onClose: () => void;
   onTab: (t: Tab) => void;
   onNewChat: () => void;
+  onTour?: () => void;
 }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
 
   const cmds: Cmd[] = useMemo(() => [
     { id: "new", label: "New chat", run: onNewChat },
+    ...(onTour ? [{ id: "tour", label: "Start the product tour", run: onTour }] : []),
     ...TABS.map((t) => ({ id: t.id, label: `Go to ${t.label}`, run: () => onTab(t.id) })),
-  ], [onTab, onNewChat]);
+  ], [onTab, onNewChat, onTour]);
 
   const filtered = cmds.filter((c) => c.label.toLowerCase().includes(q.toLowerCase()));
 

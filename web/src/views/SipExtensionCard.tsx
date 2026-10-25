@@ -58,6 +58,8 @@ export function SipExtensionCard({ cfg, toast, onChange }: { cfg: Record<string,
   return (
     <div className="card">
       <h3>PBX extension (FreePBX) {badge}</h3>
+      <p className="explain" style={{ marginTop: 0 }}>A PBX extension is a phone number inside your office phone system:
+        here, one that the AI answers.</p>
       <p className="dim" style={{ marginTop: 0 }}>A second, separate login: Xplogent registers as one extension on your
         FreePBX, alongside the SIP trunk above (which stays reserved for your carrier). Call the agent by dialling its
         extension from any office phone, let a queue overflow to it, or have it call extensions back. It has its own

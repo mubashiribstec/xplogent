@@ -1,6 +1,7 @@
 """API routers, one module per dashboard area."""
 
 from xplogent.interfaces.api.routes import (
+    branding,
     chat,
     knowledge,
     memory,
@@ -13,5 +14,5 @@ from xplogent.interfaces.api.routes import (
 ALL_ROUTERS = [
     system.router, sessions.router, chat.router, voip.router,
     settings.router, memory.router,
-    knowledge.router,
+    knowledge.router, branding.router,
 ]

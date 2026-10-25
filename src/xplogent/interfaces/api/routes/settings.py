@@ -40,6 +40,7 @@ async def config_full() -> dict:
         # Read back by the Calls view and the Ollama card (they used to show blank fields).
         "voip": cfg.voip,
         "ollama": {"host": str((cfg.raw.get("ollama") or {}).get("host") or "")},
+        "ui": dict(cfg.raw.get("ui") or {}),
     }
 
 

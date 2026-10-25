@@ -383,7 +383,7 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
 
         {usage && <UsageBar u={usage} />}
 
-        <div className="composer">
+        <div className="composer" data-tour="chat">
           {images.length > 0 && (
             <div className="thumbs">
               {images.map((src, i) => (

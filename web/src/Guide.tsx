@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getGuidePage, getGuidePages } from "./api";
+import { startTour } from "./components/Tour";
 
 export function Guide() {
   const [pages, setPages] = useState<{ slug: string; title: string }[]>([]);
@@ -22,6 +23,7 @@ export function Guide() {
   return (
     <div className="guide">
       <aside className="guide-nav">
+        <button className="btn primary sm" style={{ marginBottom: 8 }} onClick={startTour}>▶ Take the tour</button>
         {pages.map((p) => (
           <button key={p.slug} className={p.slug === active ? "active" : ""}
                   onClick={() => setActive(p.slug)}>

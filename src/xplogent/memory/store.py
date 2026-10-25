@@ -237,6 +237,7 @@ _MIGRATIONS = [
     ("calls", "crm_status", "TEXT DEFAULT ''"),     # sending | retrying | sent | failed | skipped
     ("calls", "crm_detail", "TEXT DEFAULT ''"),
     ("calls", "crm_payload", "TEXT DEFAULT ''"),    # exactly what was sent, for Resend
+    ("calls", "demo", "INTEGER DEFAULT 0"),         # sample data for demos: never counted, never sent
 ]
 # Stored in the database (PRAGMA user_version): changes whenever the schema text or
 # the migration list changes, so existing databases get upgraded automatically.
@@ -967,6 +968,37 @@ class Store:
             "SELECT c.*, ct.name AS contact_name FROM calls c "
             "LEFT JOIN contacts ct ON ct.id = c.contact_id ORDER BY c.id DESC LIMIT ?", (limit,))
         return [_without_payload(dict(r)) for r in rows]
+
+    def count_calls(self, include_demo: bool = False) -> int:
+        where = "" if include_demo else " WHERE demo=0"
+        return int(self._query("SELECT COUNT(*) FROM calls" + where)[0][0])
+
+    def add_demo_call(self, call: dict[str, Any], turns: list[tuple[str, str]],
+                      debug: dict[str, Any] | None = None) -> int:
+        """Sample call for demos (demo=1): straight into the table, no telephony, no CRM."""
+        cur = self._write(
+            "INSERT INTO calls (direction, from_number, to_number, status, outcome, summary, cost, "
+            "started_at, ended_at, transport, line, via_queue, original_called_number, queue_wait_s, demo) "
+            "VALUES (?,?,?,'ended',?,?,?,?,?,?,?,?,?,?,1)",
+            (call["direction"], call["from_number"], call["to_number"], call["outcome"], call["summary"],
+             call["cost"], call["started_at"], call["ended_at"], call["transport"], call.get("line", ""),
+             int(call.get("via_queue", 0)), call.get("original_called_number", ""), call.get("queue_wait_s")))
+        call_id = int(cur.lastrowid)
+        for n, (speaker, text) in enumerate(turns):
+            self._write("INSERT INTO call_turns (call_id, speaker, text, created_at) VALUES (?,?,?,?)",
+                        (call_id, speaker, text, call["started_at"] + 4 * n))
+        if debug is not None:
+            self.save_call_debug(call_id, debug)
+        return call_id
+
+    def clear_demo_calls(self) -> int:
+        """Remove every demo call and its transcript and diagnostics; real calls are untouched."""
+        ids = [r[0] for r in self._query("SELECT id FROM calls WHERE demo=1")]
+        for call_id in ids:
+            self._write("DELETE FROM call_turns WHERE call_id=?", (call_id,))
+            self._write("DELETE FROM call_debug WHERE call_id=?", (call_id,))
+        self._write("DELETE FROM calls WHERE demo=1")
+        return len(ids)
 
     def set_crm_payload(self, call_id: int, payload: dict[str, Any]) -> None:
         self._write("UPDATE calls SET crm_payload=? WHERE id=?", (json.dumps(payload, default=str), call_id))

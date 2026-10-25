@@ -1,3 +1,4 @@
+import type { Branding } from "../api";
 import {
   BarChart3, BookOpen, BookText, GraduationCap, type LucideIcon,
   MessageSquare, Moon, PhoneCall, Contact, Settings as Cog, ShieldAlert, Sparkles, Sun,
@@ -18,7 +19,14 @@ export const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "guide", label: "Guide", icon: BookOpen },
 ];
 
-export function NavRail({ tab, onSelect, online, theme, onTheme, className, unavailable }: {
+/** The customer's logo when they uploaded one, else the "X" mark. */
+export function BrandMark({ brand }: { brand: Branding | null }) {
+  return brand?.logo
+    ? <div className="brand logo" title={brand.company || "Xplogent"}><img src={`/branding/logo?v=${brand.logo_version}`} alt={brand.company || "logo"} /></div>
+    : <div className="brand" title={brand?.company || "Xplogent"}>{(brand?.company || "X").slice(0, 1).toUpperCase()}</div>;
+}
+
+export function NavRail({ tab, onSelect, online, theme, onTheme, className, unavailable, brand }: {
   tab: Tab;
   onSelect: (t: Tab) => void;
   online: boolean;
@@ -27,10 +35,11 @@ export function NavRail({ tab, onSelect, online, theme, onTheme, className, unav
   className?: string;
   /** Tabs this install can't run, with the reason (shown greyed out, not removed). */
   unavailable?: Partial<Record<Tab, string>>;
+  brand?: Branding | null;
 }) {
   return (
     <nav className={`rail ${className ?? ""}`}>
-      <div className="brand" title="Xplogent">X</div>
+      <BrandMark brand={brand ?? null} />
       {TABS.map(({ id, label, icon: Icon }) => (
         <button key={id} className={`rail-btn ${tab === id ? "active" : ""}`}
                 aria-label={label} onClick={() => onSelect(id)}

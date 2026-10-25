@@ -69,3 +69,20 @@ Setup is **one time** — your choices are saved under `~/.xplogent`, so `start`
 just work afterward.
 
 Prefer the terminal? `xplogent chat` for a single agent.
+
+## Your first tour of the dashboard
+
+- **Take the tour.** It starts once after first-run setup and walks through the health card,
+  the call list, a test call, Chat, Call training, the CRM card and Setup. Restart it any time
+  from **Guide → Take the tour** or the command palette (Ctrl/Cmd-K → "tour").
+- **Go live checklist** (top of **Calls**): connect a phone line → add the FreePBX extension
+  (optional) → make a test call → connect your CRM → go live. Each step is checked against
+  the real setup and has an **Open** button that jumps to the right card. Under it, one
+  health row shows every line, the voices, the CRM and line capacity in green, amber or red.
+- **Demo data** (the switch on the Recent calls card): adds four sample calls with
+  transcripts, outcomes and timings, badged *Demo data*. They are never counted, never sent
+  to your CRM and never touch contacts or training; switching it off removes only them.
+- **Branding** (Calls → Settings → Branding): your company name, logo (PNG, JPEG or WebP, up
+  to 512 KB) and accent colour, shown in the menu, on the login page and in the tour. The
+  colour is adjusted automatically so text stays readable in both themes.
+- **On a phone** the menu is a drawer (☰) and tables become cards.

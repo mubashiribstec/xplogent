@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { Menu } from "lucide-react";
-import { NavRail, TABS, Tab } from "./components/NavRail";
+import { BrandMark, NavRail, TABS, Tab } from "./components/NavRail";
 import { CommandPalette } from "./components/CommandPalette";
 import { Onboarding } from "./components/Onboarding";
 import { Login } from "./components/Login";
+import { TOUR_EVENT, Tour } from "./components/Tour";
+import { BRANDING_EVENT, applyAccent } from "./lib/brand";
 import { useIsMobile } from "./hooks/useMediaQuery";
-import { UNAUTHORIZED_EVENT, checkAuth, getSessions, getStatus, setToken, type StatusInfo } from "./api";
+import { UNAUTHORIZED_EVENT, checkAuth, getBranding, getFullConfig, getSessions, getStatus, setToken, setTourDone,
+  type Branding, type StatusInfo } from "./api";
 import { Chat } from "./views/Chat";
 import { Persona } from "./views/Persona";
 import { Knowledge } from "./views/Knowledge";
@@ -37,6 +40,34 @@ export function App() {
   // without the token got 401s and crashed the first-run check).
   const [authed, setAuthed] = useState<boolean | null>(null);
   const isMobile = useIsMobile();
+  const [brand, setBrand] = useState<Branding | null>(null);
+  const [tourOpen, setTourOpen] = useState(false);
+  const [tourDone, setTourDoneState] = useState<boolean | null>(null);
+
+  // Branding (public: the login page shows it too); the accent follows the theme.
+  useEffect(() => {
+    const load = () => getBranding().then(setBrand).catch(() => {});
+    load();
+    window.addEventListener(BRANDING_EVENT, load);
+    return () => window.removeEventListener(BRANDING_EVENT, load);
+  }, []);
+  useEffect(() => { applyAccent(brand?.accent ?? "", theme); }, [brand?.accent, theme]);
+
+  // The product tour: once, after first-run onboarding; restartable from Guide / the palette.
+  useEffect(() => {
+    if (!authed) return;
+    getFullConfig().then((c) => setTourDoneState(!!c.ui?.tour_done)).catch(() => setTourDoneState(true));
+    const start = () => setTourOpen(true);
+    window.addEventListener(TOUR_EVENT, start);
+    return () => window.removeEventListener(TOUR_EVENT, start);
+  }, [authed]);
+  useEffect(() => {
+    if (tourDone === false && !onboard) setTourOpen(true);
+  }, [tourDone, onboard]);
+  const closeTour = () => {
+    setTourOpen(false); setTourDoneState(true);
+    setTourDone(true).catch(() => {});
+  };
 
   // Gate the app behind the access token when the backend requires one.
   useEffect(() => {
@@ -95,19 +126,19 @@ export function App() {
   const go = (t: Tab) => { setTab(t); setNavOpen(false); };
 
   if (authed === null) return <div className="overlay center"><p className="dim">Loading…</p></div>;
-  if (!authed) return <Login onAuthed={() => { setAuthed(true); location.reload(); }} />;
+  if (!authed) return <Login brand={brand} onAuthed={() => { setAuthed(true); location.reload(); }} />;
 
   return (
     <div className="shell">
       <NavRail tab={tab} onSelect={go} online={online} theme={theme} onTheme={toggleTheme}
-               className={navOpen ? "open" : ""} />
+               className={navOpen ? "open" : ""} brand={brand} />
       {isMobile && navOpen && <div className="scrim" onClick={() => setNavOpen(false)} />}
 
       <div className="main">
         {isMobile && (
           <div className="topbar">
             <button className="icon-btn" aria-label="menu" onClick={() => setNavOpen(true)}><Menu size={20} /></button>
-            <div className="brand">X</div>
+            <BrandMark brand={brand} />
             <b>{TABS.find((t) => t.id === tab)?.label}</b>
           </div>
         )}
@@ -134,8 +165,10 @@ export function App() {
       </div>
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)}
-        onTab={go} onNewChat={() => { localStorage.removeItem("xplogent_session"); go("chat"); }} />
+        onTab={go} onNewChat={() => { localStorage.removeItem("xplogent_session"); go("chat"); }}
+        onTour={() => setTourOpen(true)} />
       {onboard && <Onboarding onDone={() => setOnboard(false)} />}
+      <Tour open={tourOpen && !onboard} onTab={go} onClose={closeTour} />
     </div>
   );
 }

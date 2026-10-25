@@ -67,7 +67,7 @@ async def voip_status() -> dict:
         out = {"enabled": bool(v.get("enabled")), "public_url": v.get("public_url", ""),
                "has_secret": bool(v.get("webhook_secret")),
                "webhook_path": "/telephony/webhook/<your webhook_secret>",
-               "contacts": store.count_contacts(), "calls": len(store.list_calls(1000)),
+               "contacts": store.count_contacts(), "calls": store.count_calls(),
                "active": [c.summary() for c in get_service().active.values()]}
     from xplogent.voip.telephony.sip import current_line
 
@@ -182,6 +182,22 @@ async def voip_speech_test(body: dict | None = None) -> dict:
         finally:
             await stt.aclose()
     return out
+
+
+@router.post("/voip/demo")
+async def voip_demo(body: dict | None = None) -> dict:
+    """Demo mode: ``{"on": true}`` seeds sample calls (badged, never counted or sent),
+    ``{"on": false}`` removes them. Real calls are never touched."""
+    from xplogent.voip import demo
+
+    with Store(load_config().db_path) as store:
+        if (body or {}).get("on"):
+            n = demo.seed(store)
+            deps.audit_event("voip_demo_on", target=f"{n} sample calls", risk="low")
+            return {"ok": True, "demo_calls": n}
+        n = store.clear_demo_calls()
+    deps.audit_event("voip_demo_off", target=f"{n} sample calls removed", risk="low")
+    return {"ok": True, "demo_calls": 0, "removed": n}
 
 
 @router.get("/voip/speech/voices")
@@ -440,7 +456,10 @@ async def voip_call_crm_resend(call_id: int) -> dict:
     if not crm.crm_enabled(cfg):
         return {"ok": False, "error": "switch CRM delivery on and set the CRM address first"}
     with Store(cfg.db_path) as store:
+        call = store.get_call(call_id) or {}
         payload = store.get_crm_payload(call_id)
+    if call.get("demo"):
+        return {"ok": False, "error": "demo calls are never sent to the CRM"}
     if payload is None:
         return {"ok": False, "error": "this call has no stored CRM summary to resend"}
     out = await crm.deliver(cfg, payload, attempts=1, on_status=crm.status_writer(cfg.db_path, call_id))

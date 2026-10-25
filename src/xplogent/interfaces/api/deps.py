@@ -84,6 +84,8 @@ def auth_token() -> str:
 def is_public(path: str, method: str) -> bool:
     if path in ("/health", "/auth/check"):
         return True
+    if method == "GET" and path in ("/branding", "/branding/logo"):    # shown on the login page
+        return True
     if path.startswith(WEBHOOK_PREFIXES):
         return True
     # Static files are public (the dashboard shell has to load before login),

@@ -95,7 +95,7 @@ export function Training() {
         <p className="dim">Teach the phone agent from your real material. Everything here is added to the knowledge
           the agent searches during calls; the playbook below is read before every call.</p>
 
-        <div className={`card${drag ? " drop-active" : ""}`}
+        <div className={`card${drag ? " drop-active" : ""}`} data-tour="training-upload"
           onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
           onDragLeave={() => setDrag(false)}
           onDrop={(e) => { e.preventDefault(); setDrag(false); upload(Array.from(e.dataTransfer.files)); }}>
@@ -124,7 +124,12 @@ export function Training() {
 
         <div className="card">
           <h3>Material ({items.length})</h3>
-          {items.length === 0 ? <p className="dim">Nothing uploaded yet.</p> : (
+          {items.length === 0 ? (
+            <div className="empty-state">
+              <p>Nothing uploaded yet. Give the agent your real material: past call recordings, scripts, FAQs.</p>
+              <button className="btn primary" onClick={() => file.current?.click()}>Upload training data</button>
+            </div>
+          ) : (
             <table className="data-table">
               <thead><tr><th>File</th><th>Type</th><th>Status</th><th>Knowledge</th><th></th></tr></thead>
               <tbody>

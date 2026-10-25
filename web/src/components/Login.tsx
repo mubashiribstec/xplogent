@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { KeyRound, ShieldCheck } from "lucide-react";
-import { checkAuth, setToken } from "../api";
+import { checkAuth, setToken, type Branding } from "../api";
 
 // Shown when the backend requires an access token and we don't have a valid one.
 // Validates the typed token against /auth/check before storing it and reloading.
-export function Login({ onAuthed }: { onAuthed: () => void }) {
+export function Login({ onAuthed, brand }: { onAuthed: () => void; brand?: Branding | null }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -21,8 +21,10 @@ export function Login({ onAuthed }: { onAuthed: () => void }) {
   return (
     <div className="overlay">
       <div className="modal login" onClick={(e) => e.stopPropagation()}>
-        <div className="login-icon"><ShieldCheck size={28} /></div>
-        <h2>Secure access</h2>
+        {brand?.logo
+          ? <img src={`/branding/logo?v=${brand.logo_version}`} alt={brand.company || "logo"} style={{ maxHeight: 56, maxWidth: 200, objectFit: "contain" }} />
+          : <div className="login-icon"><ShieldCheck size={28} /></div>}
+        <h2>{brand?.company ? `${brand.company}: secure access` : "Secure access"}</h2>
         <p className="dim">This Xplogent instance requires an access token. Generate one with
           <code> xplogent token</code> (or it was printed when the server started).</p>
         <div className="row" style={{ gap: 8, marginTop: 12 }}>

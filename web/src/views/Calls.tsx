@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw } from "lucide-react";
 import {
   CallRow, CallTurn, ReadinessItem, VoipStatus, getCall, getCalls, getContacts, getFullConfig, getVoipReadiness,
-  getVoipStatus, patchConfig, putSecrets, saveSip, clearSipBusy, getVoices, resendCrm, testSpeech, testTelnyx, deleteRecording, getRecordingUrl, trainOnRecording,
+  getVoipStatus, patchConfig, putSecrets, saveSip, clearSipBusy, getVoices, resendCrm, setDemo, testSpeech, testTelnyx, deleteRecording, getRecordingUrl, trainOnRecording,
 } from "../api";
 import { useToast } from "../components/Toast";
 import { CallNow, LiveCalls, TestCall } from "./CallControls";
@@ -10,6 +10,8 @@ import { SipCard } from "./SipCard";
 import { SipExtensionCard } from "./SipExtensionCard";
 import { CallAgentCard } from "./CallAgentCard";
 import { CallDebug } from "./CallDebug";
+import { GoLive } from "./GoLive";
+import { BrandingCard } from "./BrandingCard";
 
 const CRM_BADGE: Record<string, string> = { sent: "ok", failed: "bad", skipped: "bad", retrying: "warn", sending: "warn" };
 const fmtTime = (t?: number | null) => (t ? new Date(t * 1000).toLocaleString() : "—");
@@ -77,19 +79,38 @@ export function Calls() {
         <p className="dim">Answers inbound calls using your scripts and knowledge base. Calls are transcribed live (and recorded, unless you switch recording off);
           the agent only answers from your knowledge and hands off to a person when it can't.</p>
 
-        {ready && <Readiness ready={ready.ready} items={ready.items} onClearBusy={async (line) => {
-          await clearSipBusy(line); loadReady();
-        }} />}
+        {ready && loaded && <GoLive ready={ready.ready} items={ready.items} calls={calls} cfg={cfg} />}
+        {ready && <details className="card" open={ready.items.some((i) => !i.ok && i.required)}>
+          <summary><b>All checks</b> <span className="dim">({ready.items.filter((i) => i.ok).length} of {ready.items.length} fine)</span></summary>
+          <Readiness ready={ready.ready} items={ready.items} onClearBusy={async (line) => {
+            await clearSipBusy(line); loadReady();
+          }} />
+        </details>}
 
         <LiveCalls active={status?.active ?? []} toast={toast} onChange={reload} />
 
         {loaded && <CallNow toast={toast} onCalled={reload}
           via={[...(cfg.telephony === "sip" ? ["sip"] : cfg.telephony === "both" ? ["telnyx", "sip"] : ["telnyx"]),
                 ...(cfg.sip_extension?.enabled && cfg.sip_extension?.server ? ["extension"] : [])]} />}
-        <TestCall contacts={contacts} />
+        <div data-tour="test-call"><TestCall contacts={contacts} /></div>
 
-        <div className="card">
-          <h3>Recent calls ({calls.length})</h3>
+        <div className="card" data-tour="calls-list">
+          <h3 style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
+            <span>Recent calls ({calls.filter((c) => !c.demo).length}{calls.some((c) => c.demo) ? ` + ${calls.filter((c) => c.demo).length} demo` : ""})</span>
+            <label className="row check" style={{ gap: 6, fontSize: 13, fontWeight: 400, margin: 0 }}
+              title="Sample calls for showing the product: badged, never counted, never sent to your CRM">
+              <input type="checkbox" checked={calls.some((c) => c.demo)} onChange={async (e) => {
+                await setDemo(e.target.checked); toast(e.target.checked ? "demo data added" : "demo data cleared", "success"); reload();
+              }} /> Demo data</label>
+          </h3>
+          {calls.length === 0 ? (
+            <div className="empty-state">
+              <p>No calls yet. Try your agent first: it takes a minute.</p>
+              <button className="btn primary" onClick={() => document.querySelector('[data-tour="test-call"]')?.scrollIntoView({ behavior: "smooth", block: "center" })}>
+                Make a test call</button>{" "}
+              <button className="btn" onClick={async () => { await setDemo(true); reload(); }}>Show demo data</button>
+            </div>
+          ) : (
           <table className="data-table">
             <thead><tr><th></th><th>When</th><th>Caller</th><th>Duration</th><th>Outcome</th><th>Est. cost</th></tr></thead>
             <tbody>
@@ -99,16 +120,17 @@ export function Calls() {
                     onClick={() => { const next = open === c.id ? null : c.id; setOpen(next); setTurns([]); }}>
                     <td>{open === c.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       {c.direction === "inbound" ? <PhoneIncoming size={14} /> : <PhoneOutgoing size={14} />}</td>
-                    <td className="dim">{fmtTime(c.started_at)}</td>
-                    <td>{c.contact_name || (c.direction === "outbound" ? c.to_number : c.from_number) || "unknown"}
+                    <td className="dim" data-label="When">{fmtTime(c.started_at)}</td>
+                    <td data-label="Caller">{c.contact_name || (c.direction === "outbound" ? c.to_number : c.from_number) || "unknown"}
+                      {!!c.demo && <span className="badge demo" style={{ marginLeft: 6 }}>Demo data</span>}
                       {!!c.test && <span className="badge" style={{ marginLeft: 6 }}>test</span>}
                       {!!c.via_queue && <span className="badge warn" style={{ marginLeft: 6 }}
                         title={`came through the office queue${c.queue_wait_s ? ` after ${c.queue_wait_s}s` : ""}${c.original_called_number ? `; dialled ${c.original_called_number}` : ""}`}>via queue</span>}</td>
-                    <td>{fmtDur(c)}{c.status === "active" && <span className="badge warn" style={{ marginLeft: 6 }}>live</span>}</td>
-                    <td>{c.outcome ? <span className="badge">{c.outcome}</span> : <span className="dim">—</span>}
+                    <td data-label="Duration">{fmtDur(c)}{c.status === "active" && <span className="badge warn" style={{ marginLeft: 6 }}>live</span>}</td>
+                    <td data-label="Outcome">{c.outcome ? <span className="badge">{c.outcome}</span> : <span className="dim">—</span>}
                       {c.crm_status && <span className={`badge ${CRM_BADGE[c.crm_status] ?? ""}`} style={{ marginLeft: 6 }}
                         title={c.crm_detail || ""}>CRM {c.crm_status}</span>}</td>
-                    <td className="dim">${(c.cost ?? 0).toFixed(3)}</td>
+                    <td className="dim" data-label="Est. cost">${(c.cost ?? 0).toFixed(3)}</td>
                   </tr>
                   {open === c.id && (
                     <tr><td colSpan={6}>
@@ -135,14 +157,13 @@ export function Calls() {
                   )}
                 </Fragment>
               ))}
-              {calls.length === 0 && <tr><td colSpan={6} className="dim">no calls yet</td></tr>}
             </tbody>
-          </table>
+          </table>)}
         </div>
 
         <h2 style={{ margin: "28px 0 10px", fontSize: 18 }}>Settings</h2>
         {loaded && (<>
-        <div className="card">
+        <div className="card" data-tour="setup">
           <h3>Setup</h3>
           <div className="row wrap" style={{ gap: 10 }}>
             <label className="bud"><span className="lbl-sm">Phone agent</span>
@@ -186,7 +207,7 @@ export function Calls() {
         {cfg.telephony !== "sip" && <TelnyxCard cfg={cfg} keySet={telnyxKeySet} save={save} toast={toast}
           onKeySaved={() => { setTelnyxKeySet(true); loadReady(); }} />}
         {(cfg.telephony === "sip" || cfg.telephony === "both") && <SipCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} />}
-        <SipExtensionCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} />
+        <div data-tour="pbx-extension"><SipExtensionCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} /></div>
         <SpeechCard cfg={cfg} secrets={secrets} save={save} toast={toast} onKey={loadCfg} />
 
         <div className="card">
@@ -216,7 +237,8 @@ export function Calls() {
           <p className="dim" style={{ fontSize: 12 }}>Add your scripts and FAQs under Knowledge and your customers under
             Contacts: the agent answers only from those.</p>
         </div>
-        <CallAgentCard toast={toast} onChange={loadReady} />
+        <div data-tour="crm"><CallAgentCard toast={toast} onChange={loadReady} /></div>
+        <BrandingCard toast={toast} />
         </>)}
 
       </div>

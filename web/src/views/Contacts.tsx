@@ -74,7 +74,10 @@ export function Contacts() {
                   </td>
                 </tr>
               ))}
-              {list.length === 0 && <tr><td colSpan={5} className="dim">no contacts yet — import a CSV above</td></tr>}
+              {list.length === 0 && <tr><td colSpan={5}><div className="empty-state">
+                <p>No contacts yet. Import your customer list so the agent knows who is calling.</p>
+                <button className="btn primary" onClick={() => (document.querySelector('.pane input[type="file"]') as HTMLInputElement | null)?.click()}>
+                  Import contacts (CSV)</button></div></td></tr>}
             </tbody>
           </table>
         </div>

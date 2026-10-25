@@ -274,7 +274,7 @@ export interface CallRow {
   status: string; outcome?: string | null; summary?: string | null; cost: number;
   started_at: number; ended_at?: number | null; test?: number; transport?: string; recording?: string;
   line?: string; via_queue?: number; original_called_number?: string; queue_wait_s?: number | null;
-  crm_status?: string; crm_detail?: string;
+  crm_status?: string; crm_detail?: string; demo?: number;
 }
 export interface CallTurn { speaker: string; text: string; created_at: number; }
 export interface Contact {
@@ -415,6 +415,23 @@ export async function downloadDebugBundle(id: number): Promise<void> {
 }
 export const resendCrm = (id: number) =>
   postJSON<{ ok: boolean; status?: string; detail?: string; error?: string }>(`/voip/calls/${id}/crm/resend`);
+// ── Branding, tour, demo mode ─────────────────────────────────────────────────
+export interface Branding { company: string; accent: string; logo: boolean; logo_version: number; }
+export async function getBranding(): Promise<Branding> {
+  return (await fetch("/branding")).json();
+}
+export const saveBranding = (b: { accent?: string; company?: string }) =>
+  postJSON<Branding & { ok: boolean; error?: string }>("/branding", b);
+export async function uploadLogo(file: File): Promise<Branding & { ok: boolean; error?: string }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return (await fetch("/branding/logo", { method: "POST", body: fd })).json();
+}
+export async function deleteLogo(): Promise<void> {
+  await fetch("/branding/logo", { method: "DELETE" });
+}
+export const setTourDone = (done = true) => postJSON<{ ok: boolean }>("/ui/tour", { done });
+export const setDemo = (on: boolean) => postJSON<{ ok: boolean; demo_calls: number }>("/voip/demo", { on });
 export const testTelnyx = () => postJSON<Record<string, any>>("/voip/telnyx/test");
 export const testSpeech = (stt = true) => postJSON<Record<string, any>>("/voip/speech/test", { stt });
 

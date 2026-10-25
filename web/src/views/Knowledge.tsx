@@ -73,7 +73,11 @@ export function Knowledge() {
                 <button className="x" onClick={() => deleteDoc(d.id).then(reload)}><Trash2 size={14} /></button>
               </li>
             ))}
-            {docs.length === 0 && <p className="dim">nothing ingested yet</p>}
+            {docs.length === 0 && <div className="empty-state">
+              <p>Nothing here yet. Add your price list, FAQ or policies: the agent answers only from what it knows.</p>
+              <button className="btn primary" onClick={() => (document.querySelector(".pane textarea") as HTMLTextAreaElement | null)?.focus()}>
+                Paste your first document</button>{" "}
+              <span className="dim" style={{ fontSize: 12 }}>(or upload files under Call training)</span></div>}
           </ul>
         </div>
       </div>
