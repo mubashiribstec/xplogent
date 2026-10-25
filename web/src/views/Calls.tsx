@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw } from "lucide-react";
 import {
   CallRow, CallTurn, ReadinessItem, VoipStatus, getCall, getCalls, getContacts, getFullConfig, getVoipReadiness,
-  getVoipStatus, patchConfig, putSecrets, saveSip, clearSipBusy, testSpeech, testTelnyx, deleteRecording, getRecordingUrl, trainOnRecording,
+  getVoipStatus, patchConfig, putSecrets, saveSip, clearSipBusy, getVoices, testSpeech, testTelnyx, deleteRecording, getRecordingUrl, trainOnRecording,
 } from "../api";
 import { useToast } from "../components/Toast";
 import { CallNow, LiveCalls, TestCall } from "./CallControls";
@@ -29,8 +29,9 @@ export function Calls() {
   const [loaded, setLoaded] = useState(false);
   const [telnyxKeySet, setTelnyxKeySet] = useState(false);
   const [ready, setReady] = useState<{ ready: boolean; items: ReadinessItem[] } | null>(null);
+  const [secrets, setSecrets] = useState<Record<string, boolean>>({});
   const loadCfg = () => getFullConfig().then((c) => {
-    setCfg(c.voip ?? {}); setTelnyxKeySet(!!c.secrets?.TELNYX_API_KEY); setLoaded(true);
+    setCfg(c.voip ?? {}); setTelnyxKeySet(!!c.secrets?.TELNYX_API_KEY); setSecrets(c.secrets ?? {}); setLoaded(true);
   }).catch(() => setLoaded(true));
   const loadReady = () => getVoipReadiness().then(setReady).catch(() => {});
   const [contacts, setContacts] = useState<{ id: number; name: string }[]>([]);
@@ -171,7 +172,7 @@ export function Calls() {
           onKeySaved={() => { setTelnyxKeySet(true); loadReady(); }} />}
         {(cfg.telephony === "sip" || cfg.telephony === "both") && <SipCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} />}
         <SipExtensionCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} />
-        <SpeechCard cfg={cfg} save={save} toast={toast} />
+        <SpeechCard cfg={cfg} secrets={secrets} save={save} toast={toast} onKey={loadCfg} />
 
         <div className="card">
           <h3>Conversation</h3>
@@ -313,55 +314,114 @@ function TelnyxCard({ cfg, keySet, save, toast, onKeySaved }: {
 }
 
 const LOCAL_SPEECH = {
-  stt: { provider: "whisper-local", model: "small.en", base_url: "" },
-  tts: { base_url: "http://kokoro:8880/v1", model: "kokoro", voice: "af_heart", sample_rate: 24000 },
+  stt: { provider: "whisper-local", model: "auto", base_url: "" },
+  tts: { provider: "openai", base_url: "http://kokoro:8880/v1", model: "kokoro", voice: "af_heart", sample_rate: 24000 },
 };
 const OPENAI_SPEECH = {
   stt: { provider: "openai-compatible", model: "whisper-1", base_url: "https://api.openai.com/v1" },
-  tts: { base_url: "https://api.openai.com/v1", model: "tts-1", voice: "alloy", sample_rate: 24000 },
+  tts: { provider: "openai", base_url: "https://api.openai.com/v1", model: "tts-1", voice: "alloy", sample_rate: 24000 },
+};
+const TTS_PRESETS: Record<string, Record<string, any>> = {
+  local: LOCAL_SPEECH.tts, openai: OPENAI_SPEECH.tts,
+  elevenlabs: { provider: "elevenlabs", model: "eleven_flash_v2_5", voice: "", sample_rate: 24000 },
+  cartesia: { provider: "cartesia", model: "sonic-2", voice: "", sample_rate: 24000, language: "en" },
+};
+const STT_PRESETS: Record<string, Record<string, any>> = {
+  local: LOCAL_SPEECH.stt, openai: OPENAI_SPEECH.stt,
+  deepgram: { provider: "deepgram", model: "nova-3", streaming: true, base_url: "" },
+};
+const KEY_FOR: Record<string, string> = {
+  elevenlabs: "ELEVENLABS_API_KEY", cartesia: "CARTESIA_API_KEY", deepgram: "DEEPGRAM_API_KEY",
 };
 
-function SpeechCard({ cfg, save, toast }: { cfg: Record<string, any>; save: Saver; toast: Toaster }) {
+function SpeechCard({ cfg, secrets, save, toast, onKey }: {
+  cfg: Record<string, any>; secrets: Record<string, boolean>; save: Saver; toast: Toaster; onKey: () => void;
+}) {
   const [result, setResult] = useState<Record<string, any> | null>(null);
   const [busy, setBusy] = useState(false);
+  const [voices, setVoices] = useState<{ id: string; name: string }[] | null>(null);
+  const [voiceErr, setVoiceErr] = useState("");
   const tts = cfg.tts ?? {};
-  const preset = String(tts.base_url ?? "").includes("kokoro") ? "local"
+  const stt = cfg.stt ?? {};
+  const ttsKind = tts.provider === "elevenlabs" || tts.provider === "cartesia" ? tts.provider
+    : String(tts.base_url ?? "").includes("kokoro") ? "local"
     : String(tts.base_url ?? "api.openai.com").includes("api.openai.com") ? "openai" : "custom";
+  const sttKind = stt.provider === "deepgram" ? "deepgram"
+    : (stt.provider ?? "whisper-local") === "whisper-local" ? "local" : "openai";
+  const loadVoices = () => {
+    setVoices(null); setVoiceErr("");
+    getVoices().then((r) => { setVoices(r.voices); if (!r.ok) setVoiceErr(r.error ?? "could not list voices"); })
+      .catch((e) => setVoiceErr(String(e)));
+  };
+  useEffect(() => { loadVoices(); /* eslint-disable-next-line */ }, [tts.provider, tts.base_url]);
   const test = async () => {
     setBusy(true); setResult(null);
     try { setResult(await testSpeech(true)); } catch (e) { setResult({ ok: false, error: String(e) }); }
     finally { setBusy(false); }
   };
+  const keyInput = (name: string) => (
+    <label className="bud"><span className="lbl-sm">{name} {secrets[name] ? "✓ set" : "✗ not set"}</span>
+      <input type="password" placeholder={secrets[name] ? "•••••• (type to replace)" : "paste the API key"}
+        onBlur={async (e) => {
+          const v = e.target.value.trim();
+          if (!v) return;
+          await putSecrets({ [name]: v }); e.target.value = ""; onKey(); toast("key saved", "success"); loadVoices();
+        }} /></label>
+  );
   return (
     <div className="card">
       <h3>Speech</h3>
       <div className="row wrap" style={{ gap: 10, alignItems: "end" }}>
-        <label className="bud"><span className="lbl-sm">Voices</span>
-          <select value={preset} onChange={async (e) => {
-            if (e.target.value === "local") { await save(LOCAL_SPEECH); toast("local speech selected", "success"); }
-            if (e.target.value === "openai") { await save(OPENAI_SPEECH); toast("OpenAI speech selected (needs an OpenAI key)", "info"); }
+        <label className="bud"><span className="lbl-sm">Voice (text-to-speech)</span>
+          <select value={ttsKind} onChange={async (e) => {
+            await save({ tts: { ...TTS_PRESETS[e.target.value] } }); toast("voice provider saved", "success");
           }}>
             <option value="local">Local on this server (free)</option>
             <option value="openai">OpenAI (needs an OpenAI key)</option>
-            <option value="custom" disabled>Custom (edit URLs below)</option>
+            <option value="elevenlabs">ElevenLabs</option>
+            <option value="cartesia">Cartesia</option>
+            <option value="custom" disabled>Custom (edit the URL below)</option>
           </select></label>
-        <label className="bud"><span className="lbl-sm">Text-to-speech URL</span>
-          <input defaultValue={tts.base_url ?? ""} key={tts.base_url} style={{ width: 230 }}
-            onBlur={(e) => save({ tts: { ...tts, base_url: e.target.value.trim() } })} /></label>
-        <label className="bud"><span className="lbl-sm">Voice</span>
-          <input defaultValue={tts.voice ?? ""} key={tts.voice} style={{ width: 100 }}
-            onBlur={(e) => save({ tts: { ...tts, voice: e.target.value.trim() } })} /></label>
+        {KEY_FOR[ttsKind] && keyInput(KEY_FOR[ttsKind])}
+        <label className="bud"><span className="lbl-sm">Voice {voiceErr && <span className="warn">({voiceErr.slice(0, 60)})</span>}</span>
+          {voices && voices.length > 0
+            ? <select value={tts.voice ?? ""} onChange={(e) => save({ tts: { ...tts, voice: e.target.value } })} style={{ maxWidth: 220 }}>
+                <option value="" disabled>choose a voice…</option>
+                {!voices.some((v) => v.id === tts.voice) && tts.voice && <option value={tts.voice}>{tts.voice}</option>}
+                {voices.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            : <input defaultValue={tts.voice ?? ""} key={tts.voice} style={{ width: 140 }} placeholder="voice id"
+                onBlur={(e) => save({ tts: { ...tts, voice: e.target.value.trim() } })} />}</label>
+        {(ttsKind === "local" || ttsKind === "openai" || ttsKind === "custom") && (
+          <label className="bud"><span className="lbl-sm">Text-to-speech URL</span>
+            <input defaultValue={tts.base_url ?? ""} key={tts.base_url} style={{ width: 230 }}
+              onBlur={(e) => save({ tts: { ...tts, base_url: e.target.value.trim() } })} /></label>)}
+      </div>
+      <div className="row wrap" style={{ gap: 10, alignItems: "end", marginTop: 10 }}>
+        <label className="bud"><span className="lbl-sm">Listening (speech-to-text)</span>
+          <select value={sttKind} onChange={async (e) => {
+            await save({ stt: { ...STT_PRESETS[e.target.value] } }); toast("speech-to-text saved", "success");
+          }}>
+            <option value="local">Built-in Whisper (free; large-v3-turbo on a GPU, small.en on CPU)</option>
+            <option value="openai">OpenAI Whisper</option>
+            <option value="deepgram">Deepgram, streaming (fastest)</option>
+          </select></label>
+        {sttKind === "deepgram" && keyInput("DEEPGRAM_API_KEY")}
         <button className="btn" onClick={test} disabled={busy}>{busy ? "Testing… (first time downloads the speech model)" : "Test voice"}</button>
       </div>
       {result && (result.ok
         ? <p className="ok">✓ Spoke {result.audio_seconds}s of audio in {result.tts_ms} ms
             {result.transcript !== undefined ? ` · heard back: "${result.transcript}" (${result.stt_ms} ms)` : ""}</p>
         : <p className="warn">✗ {result.error}</p>)}
-      {preset === "local" && (
+      {ttsKind === "local" && (
         <p className="dim" style={{ fontSize: 12 }}>Local voices run in a small extra container. On the server run
           {" "}<code>xplogent-docker speech on</code> once (add <code>--gpu</code> on an NVIDIA server). Listening
-          (speech-to-text) runs inside Xplogent and downloads its model on first use.</p>
+          (speech-to-text) runs inside Xplogent and downloads its model on first use (about 1.6 GB for
+          large-v3-turbo on a GPU).</p>
       )}
+      <p className="dim" style={{ fontSize: 12 }}>Cloud choices send call audio (OpenAI, Deepgram) or the agent's
+        words (OpenAI, ElevenLabs, Cartesia) to that company; the local choices keep everything on this server.
+        If the main voice fails, the call keeps going on the fallback (<code>voip.tts_fallback</code>).</p>
     </div>
   );
 }

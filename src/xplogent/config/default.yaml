@@ -228,14 +228,17 @@ voip:
   dtmf:                            # phone keypad
     enabled: true                  # keys pressed reach the agent as [keypad: …]; it can press keys too
     keys: {}                       # instant keys, e.g. {"0": "transfer", "*": "repeat"}
-  stt:                             # whisper-local = faster-whisper on your GPU; or an OpenAI-compatible URL
-    provider: whisper-local        # whisper-local | openai-compatible
-    model: small.en
+  stt:                             # whisper-local = faster-whisper on this server; deepgram (streaming); or an OpenAI-compatible URL
+    provider: whisper-local        # whisper-local | deepgram | openai-compatible
+    model: auto                    # whisper-local: auto = large-v3-turbo on an NVIDIA GPU, small.en on CPU; deepgram: e.g. nova-3
+    streaming: true                # deepgram: transcribe while the caller speaks (key: DEEPGRAM_API_KEY)
     base_url: ""
     api_key_env: OPENAI_API_KEY
     language: en
     device: auto                   # whisper-local: auto | cpu | cuda
-  tts:                             # any OpenAI-compatible /audio/speech (OpenAI, or local Kokoro-FastAPI)
+  tts:                             # openai = any OpenAI-compatible /audio/speech (OpenAI, local Kokoro); or elevenlabs / cartesia
+    provider: openai               # openai | elevenlabs | cartesia (keys: ELEVENLABS_API_KEY / CARTESIA_API_KEY)
+    language: en                   # cartesia
     base_url: "https://api.openai.com/v1"
     model: tts-1
     voice: alloy

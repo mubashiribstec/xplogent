@@ -16,7 +16,8 @@ import yaml
 _OPTIONAL: dict[str, Any] = {
     "stt_fallback": {"provider": "", "model": "", "base_url": "", "api_key_env": "", "language": "",
                      "device": ""},
-    "tts_fallback": {"base_url": "", "model": "", "voice": "", "sample_rate": 0, "api_key_env": ""},
+    "tts_fallback": {"provider": "", "base_url": "", "model": "", "voice": "", "sample_rate": 0,
+                     "api_key_env": "", "language": ""},
     "training": {"whisper_model": "", "language": ""},
 }
 _FREE_FORM = {"dtmf.keys"}          # user-defined keys inside these dicts

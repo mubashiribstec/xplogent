@@ -384,6 +384,9 @@ export async function getCallAgent(): Promise<CallAgentInfo> {
 }
 export const testCrm = () => postJSON<{ ok: boolean; status?: string; detail?: string; error?: string }>("/voip/crm/test");
 export const clearSipBusy = (line = "") => postJSON<{ ok: boolean }>("/voip/sip/busy/clear", line ? { line } : {});
+export async function getVoices(provider = ""): Promise<{ ok: boolean; voices: { id: string; name: string }[]; error?: string }> {
+  return (await fetch(`/voip/speech/voices${provider ? `?provider=${encodeURIComponent(provider)}` : ""}`)).json();
+}
 export const testTelnyx = () => postJSON<Record<string, any>>("/voip/telnyx/test");
 export const testSpeech = (stt = true) => postJSON<Record<string, any>>("/voip/speech/test", { stt });
 

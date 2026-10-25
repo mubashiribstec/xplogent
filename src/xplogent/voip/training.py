@@ -136,7 +136,9 @@ def whisper_settings(cfg: Config) -> tuple[str, str]:
         model = str(stt.get("model") or "small.en") if stt.get("provider", "whisper-local") \
             == "whisper-local" else "small.en"
     lang = str(tr.get("language") or stt.get("language") or "en")
-    return model, lang
+    from xplogent.voip.providers import resolve_whisper_model
+
+    return resolve_whisper_model(model), lang
 
 
 def _channels(path: Path) -> int:

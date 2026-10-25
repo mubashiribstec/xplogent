@@ -141,8 +141,31 @@ agent can send digits (e.g. through a menu) on lines that negotiated it.
 
 ## Speech
 
-`xplogent-docker speech on` runs Kokoro (text-to-speech) on CPU; listening uses the built-in
-Whisper. Choose **Local on this server** in the Speech card and press **Test voice**.
+Calls go: caller audio → speech-to-text → the call model → text-to-speech, sentence by
+sentence, with barge-in (the greeting is never cut off). Pick both halves in **Calls → Speech**;
+**Test voice** speaks a sentence and hears it back, showing both times in ms.
+
+| Listening (speech-to-text) | Notes |
+|---|---|
+| Built-in Whisper (default, free) | Runs inside Xplogent. `voip.stt.model: auto` = `large-v3-turbo` on an NVIDIA GPU (≈1.6 GB download on first use, cached), `small.en` on CPU. Transcribes after the caller stops. |
+| OpenAI Whisper | `whisper-1` over the API (OpenAI key). |
+| **Deepgram, streaming** | Transcribes *while* the caller speaks, so the text is ready almost as soon as they stop (`DEEPGRAM_API_KEY`, model e.g. `nova-3`). If the stream fails mid-sentence, the recorded utterance is transcribed by Deepgram's batch API, then the built-in Whisper: no words are lost. |
+
+| Voice (text-to-speech) | Notes |
+|---|---|
+| Local Kokoro (free) | `xplogent-docker speech on` (`--gpu` on NVIDIA). |
+| OpenAI | `tts-1` voices (OpenAI key). |
+| ElevenLabs | `ELEVENLABS_API_KEY`, model from config (default `eleven_flash_v2_5`), voice picked from your ElevenLabs voices. |
+| Cartesia | `CARTESIA_API_KEY`, model from config (default `sonic-2`), voice picked from your Cartesia voices. |
+
+Keys are stored encrypted (Speech card or Settings). If the main voice fails before speaking,
+it is retried once, then `voip.tts_fallback` (any of the above) takes over for that sentence; the
+call's debug view shows which provider served each turn and why a fallback happened.
+
+**Cost:** set `voip.cost_per_minute` to carrier + model + the speech providers' per-minute rates
+from their price pages (local Whisper and Kokoro add nothing). **Privacy:** cloud speech-to-text
+receives the caller's audio; cloud voices receive the agent's words. The local choices keep both
+on your server; say which you use in your privacy notice.
 
 ## Call recording
 

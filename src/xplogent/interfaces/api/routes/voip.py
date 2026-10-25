@@ -184,6 +184,20 @@ async def voip_speech_test(body: dict | None = None) -> dict:
     return out
 
 
+@router.get("/voip/speech/voices")
+async def voip_speech_voices(provider: str = "") -> dict:
+    """Voices for the Speech card's picker (the configured TTS, or ``provider``)."""
+    from xplogent.voip.providers import list_voices
+
+    tts = dict((load_config().voip or {}).get("tts") or {})
+    if provider:
+        tts["provider"] = provider
+    try:
+        return {"ok": True, "voices": await asyncio.wait_for(list_voices(tts), timeout=15)}
+    except Exception as exc:  # noqa: BLE001 - shown in the card
+        return {"ok": False, "voices": [], "error": f"{type(exc).__name__}: {exc}"[:300]}
+
+
 @router.get("/voip/calls")
 async def voip_calls(limit: int = 100) -> dict:
     with Store(load_config().db_path) as store:

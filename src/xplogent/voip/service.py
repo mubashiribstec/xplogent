@@ -25,7 +25,7 @@ from xplogent.voip.control import (
 from xplogent.voip.crm import build_payload, crm_enabled, enqueue_delivery
 from xplogent.voip.engine import CallSession
 from xplogent.voip.fields import build_collector
-from xplogent.voip.providers import build_stt, build_tts
+from xplogent.voip.providers import build_streaming_stt, build_stt, build_tts
 from xplogent.voip.templates import get_template
 
 _log = get_logger("voip.service")
@@ -226,6 +226,9 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         greeting_v = {**greeting_v, "greeting": v["queue_greeting"]}   # disclosure rules still apply
     greeting = render_template(effective_greeting(greeting_v), variables)
     vad_cfg = v.get("vad", {}) or {}
+    # Live speech-to-text only with the configured provider (an injected stt is a test's).
+    stream_stt = session_kw.pop("stream_stt") if "stream_stt" in session_kw else (
+        build_streaming_stt(v.get("stt") or {}) if stt is None else None)
     session = CallSession(
         brain=brain, stt=stt or _speech_stt(v), tts=tts or _speech_tts(v),
         send_audio=send_audio, clear_audio=clear_audio, hangup=hangup, transfer=transfer,
@@ -236,7 +239,8 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
                 min_speech_ms=int(vad_cfg.get("min_speech_ms", 200)),
                 max_utterance_ms=int(vad_cfg.get("max_utterance_ms", 15000))),
         max_call_s=float(v.get("max_call_seconds", 900)),
-        send_dtmf=send_dtmf if dtmf_on else None, recorder=_recorder(v, call_id), **session_kw)
+        send_dtmf=send_dtmf if dtmf_on else None, recorder=_recorder(v, call_id),
+        stream_stt=stream_stt, **session_kw)
     session.dtmf_enabled = dtmf_on
     return session, call_id, brain
 

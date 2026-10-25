@@ -28,6 +28,15 @@ from xplogent.voip.audio import (
     resample,
 )
 from xplogent.voip.brain import CallBrain
+from xplogent.voip.providers import label_of
+
+
+def llm_label(provider: Any) -> str:
+    """Which model answered: ``backup:<spec>`` when the backup model stepped in."""
+    if getattr(provider, "used_backup", False):
+        return f"backup:{getattr(provider, 'backup_spec', '')}"
+    name, model = getattr(provider, "name", ""), getattr(provider, "model", "")
+    return f"{name}:{model}" if name and model else str(model or name or type(provider).__name__)
 
 _log = get_logger("voip.engine")
 
@@ -60,7 +69,7 @@ class CallSession:
                  transfer_timeout_s: float = 60.0,
                  send_dtmf: Callable[[str], Awaitable[None]] | None = None,
                  dtmf_keys: dict[str, str] | None = None, dtmf_gap_s: float = 2.0,
-                 recorder: Any = None) -> None:
+                 recorder: Any = None, stream_stt: Any = None) -> None:
         self.brain, self.stt, self.tts = brain, stt, tts
         self.send_audio, self.clear_audio = send_audio, clear_audio
         self.hangup_cb, self.transfer_cb = hangup, transfer
@@ -76,6 +85,12 @@ class CallSession:
         self._last_agent_line = ""
         self.dtmf_enabled = True
         self.recorder = recorder            # CallRecorder (voip.recording) or None
+        # Streaming speech-to-text (providers.DeepgramStreamingSTT) or None: fed while the
+        # caller speaks; the buffered utterance still goes to ``stt`` if the stream fails.
+        self.stream_stt = stream_stt
+        self._stream: Any = None
+        self._turn_info: dict[str, Any] = {}
+        self._say_first_frame_at = 0.0
         self._events_seen = 0
         self.greeting = greeting
         self.vad = vad or VAD()
@@ -88,7 +103,7 @@ class CallSession:
         self.started = time.time()
         self.finished = asyncio.Event()
         self.latencies_ms: list[float] = []
-        self.turn_timings: list[dict[str, float]] = []  # per-turn stage timings (debug/CRM)
+        self.turn_timings: list[dict[str, Any]] = []  # per-turn stage timings + providers (debug/CRM)
         self._last_stt_ms = 0.0
         self._pending = bytearray()
         self._turn_task: asyncio.Task | None = None
@@ -155,14 +170,39 @@ class CallSession:
             frame = bytes(self._pending[:FRAME_BYTES])
             del self._pending[:FRAME_BYTES]
             event = self.vad.feed(frame)
+            if self._stream is not None and event != "speech_start":
+                if self.vad.in_speech:
+                    self._stream.feed(frame)
+                else:                                  # a click or cough, not speech
+                    self._drop_stream()
             if event == "speech_start":
                 self._last_activity = time.time()
                 self._idle_prompts = 0
+                self._open_stream()
                 if self._speaking:
                     await self._barge_in()
             elif event == "speech_end":
                 self._speech_end_at = time.time()
-                await self._begin_turn(self.vad.take())
+                stream, self._stream = self._stream, None
+                await self._begin_turn(self.vad.take(), stream)
+
+    def _open_stream(self) -> None:
+        """Start streaming this utterance (with the audio the VAD already holds)."""
+        self._drop_stream()
+        if self.stream_stt is None:
+            return
+        try:
+            self._stream = self.stream_stt.new_stream()
+            self._stream.start()
+            self._stream.feed(bytes(self.vad._buf))
+        except Exception:  # noqa: BLE001 - the batch path still has the audio
+            _log.exception("could not open the speech-to-text stream")
+            self._stream = None
+
+    def _drop_stream(self) -> None:
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            asyncio.create_task(stream.aclose())
 
     async def _barge_in(self) -> None:
         if self._greeting_playing():
@@ -198,23 +238,49 @@ class CallSession:
             raise
         await coro
 
-    async def _begin_turn(self, pcm8k: bytes) -> None:
+    async def _begin_turn(self, pcm8k: bytes, stream: Any = None) -> None:
         self._cancel_turn()
-        self._turn_task = asyncio.create_task(self._turn(pcm8k))
+        self._turn_task = asyncio.create_task(self._turn(pcm8k, stream))
 
     # -- one turn ----------------------------------------------------------------
-    async def _turn(self, pcm8k: bytes) -> None:
+    async def _turn(self, pcm8k: bytes, stream: Any = None) -> None:
         _t0 = time.time()
-        try:
-            text = await self.stt.transcribe(resample(pcm8k, 8000, 16000))
-            self._last_stt_ms = (time.time() - _t0) * 1000
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 - one bad turn must not drop the call
-            _log.exception("speech-to-text failed")
-            await self._after_greeting()
-            await self._say("Sorry, I had a problem. Could you say that again?")
-            return
+        info: dict[str, Any] = {"stt": label_of(self.stt), "fallbacks": [], "error": ""}
+        text: str | None = None
+        if stream is not None:
+            try:
+                text = await stream.finish()
+                info["stt"] = label_of(self.stream_stt)
+            except asyncio.CancelledError:
+                await stream.aclose()
+                raise
+            except Exception as exc:  # noqa: BLE001 - fall back to the buffered audio below
+                _log.warning("streaming speech-to-text failed (%s): transcribing the recording", exc)
+                info["fallbacks"].append("stt:stream->batch")
+                info["error"] = f"stt stream: {exc}"[:300]
+            await stream.aclose()
+        if text is None:
+            try:
+                text = await self.stt.transcribe(resample(pcm8k, 8000, 16000))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one bad turn must not drop the call
+                _log.exception("speech-to-text failed")
+                self.turn_timings.append({"stt_ms": round((time.time() - _t0) * 1000, 1),
+                                          "stt": info["stt"], "fallbacks": info["fallbacks"],
+                                          "error": f"stt: {type(exc).__name__}: {exc}"[:300]})
+                await self._after_greeting()
+                await self._say("Sorry, I had a problem. Could you say that again?")
+                return
+            last = getattr(self.stt, "last", None) or {}
+            if last:
+                info["stt"] = last.get("provider") or info["stt"]
+                if last.get("fallback"):
+                    info["fallbacks"].append("stt:fallback")
+                if last.get("error") and not info["error"]:
+                    info["error"] = f"stt: {last['error']}"
+        self._last_stt_ms = (time.time() - _t0) * 1000
+        self._turn_info = info
         await self._after_greeting()
         await self._reply((text or "").strip())
 
@@ -238,6 +304,9 @@ class CallSession:
             reply_parts: list[str] = []
             first = True
             first_ms = 0.0          # this turn's own first-word delay (0 = it didn't speak)
+            info, self._turn_info = self._turn_info, {}
+            reply_start = time.time()
+            stage = {"llm_first_sentence_ms": 0.0, "tts_first_audio_ms": 0.0, "total_ms": 0.0}
 
             async def sentences():
                 nonlocal first
@@ -249,8 +318,16 @@ class CallSession:
                 async for sentence in sentences():
                     if first:
                         first = False
-                        first_ms = (time.time() - self._speech_end_at) * 1000
+                        sentence_at = time.time()
+                        first_ms = (sentence_at - self._speech_end_at) * 1000
                         self.latencies_ms.append(first_ms)
+                        stage["llm_first_sentence_ms"] = (sentence_at - reply_start) * 1000
+                        self._say_first_frame_at = 0.0
+                        await self._say(sentence)
+                        if self._say_first_frame_at:
+                            stage["tts_first_audio_ms"] = (self._say_first_frame_at - sentence_at) * 1000
+                            stage["total_ms"] = (self._say_first_frame_at - self._speech_end_at) * 1000
+                        continue
                     await self._say(sentence)
             except asyncio.CancelledError:
                 if reply_parts:     # interrupted: keep what the caller already heard
@@ -258,9 +335,21 @@ class CallSession:
                 raise
             if reply_parts:
                 self._record("agent", " ".join(reply_parts))
+            tts_last = getattr(self.tts, "last", None) or {}
+            fallbacks = list(info.get("fallbacks") or [])
+            if tts_last.get("fallback"):
+                fallbacks.append("tts:fallback")
+            if getattr(self.brain.provider, "used_backup", False):
+                fallbacks.append("llm:backup")
+            error = info.get("error") or (f"tts: {tts_last['error']}" if tts_last.get("error") else "")
             self.turn_timings.append({
                 "stt_ms": round(self._last_stt_ms, 1),
-                "llm_first_ms": round(first_ms, 1),
+                **{k: round(v, 1) for k, v in stage.items()},
+                "llm_first_ms": round(first_ms, 1),      # end of speech -> first sentence (older name)
+                "stt": info.get("stt", "") or ("text" if not self._last_stt_ms else ""),
+                "llm": llm_label(self.brain.provider),
+                "tts": tts_last.get("provider") or label_of(self.tts),
+                "fallbacks": fallbacks, "error": error,
             })
             self._last_stt_ms = 0.0
             st = self.brain.state
@@ -277,8 +366,13 @@ class CallSession:
             await self._after_turn()
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 - one bad turn must not drop the call
+        except Exception as exc:  # noqa: BLE001 - one bad turn must not drop the call
             _log.exception("turn failed")
+            self.turn_timings.append({"stt_ms": round(self._last_stt_ms, 1),
+                                      "llm": llm_label(self.brain.provider),
+                                      "tts": label_of(self.tts),
+                                      "error": f"{type(exc).__name__}: {exc}"[:300]})
+            self._last_stt_ms = 0.0
             with contextlib.suppress(Exception):
                 await self._say("Sorry, I had a problem. Could you say that again?")
 
@@ -452,6 +546,8 @@ class CallSession:
                 if ahead > self.lead_s:
                     await asyncio.sleep(ahead - self.lead_s)
             await self.send_audio(frame)
+            if not self._say_first_frame_at:
+                self._say_first_frame_at = time.time()
             if self.recorder is not None:
                 self.recorder.agent(frame)
             play_end = max(play_end, loop.time()) + len(frame) / 8000.0
