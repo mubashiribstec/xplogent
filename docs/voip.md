@@ -204,6 +204,26 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
 - **Call me**: rings your phone. Test calls are marked "test", not counted, and never change
   a contact or the do-not-call list.
 
+## Debugging a call
+
+Open any call in **Calls** (live or finished) and press **Debug this call**:
+
+- **Turns**: per turn, speech-to-text ms, model ms (to the first sentence), voice ms (to the
+  first audio) and the total from "caller stopped talking" to "caller hears the agent", which
+  provider served each stage, any fallback (e.g. `tts:fallback`, `stt:stream->batch`,
+  `llm:backup`) and the exact error when a stage failed.
+- **Timeline**: answered, greeting, each line said, interruptions, keys, transfer attempts and
+  results, why the call ended.
+- **SIP messages** (SIP calls): the INVITE/100/180/200/ACK/BYE ladder with key headers on hover.
+  Login headers (`Authorization`, `Proxy-Authorization`) are never stored.
+- **Audio (RTP)**: codec, far end, packets in/out, loss, late packets, jitter, silence filled
+  in, keypad events. **Telnyx events** for Telnyx calls.
+
+**Download debug bundle** saves one JSON file for a bug report: the call, transcript, all of
+the above and a config snapshot with secrets removed (no audio). Each download is in the audit
+log. From a terminal: `xplogent voip debug <call-id>` (or `--json`). Diagnostics are kept as
+long as recordings (`voip.recording.retention_days`).
+
 ## Backup model
 
 If the call model's server is down, a small local model can answer instead

@@ -47,6 +47,17 @@ class TelnyxTrunk:
         self.outbound: dict[str, dict[str, Any]] = {}     # call_control_id -> {contact_id, test}
         self._tasks: set[asyncio.Task] = set()
         self._seen_at: dict[str, float] = {}              # token / call id -> created
+        self.call_events: dict[str, list[dict[str, Any]]] = {}   # call id -> webhook events (debug view)
+
+    def _log_event(self, ccid: str, ev: dict[str, Any], leg: str = "") -> None:
+        if not ccid:
+            return
+        while ccid not in self.call_events and len(self.call_events) >= 50:
+            self.call_events.pop(next(iter(self.call_events)))
+        events = self.call_events.setdefault(ccid, [])
+        if len(events) < 100:
+            events.append({"at": time.time(), "event": ev.get("event", ""), "leg": leg,
+                           **({"digit": ev["digit"]} if ev.get("digit") else {})})
 
     def _remember(self, table: dict, key: str, value: dict[str, Any]) -> None:
         table[key] = value
@@ -112,6 +123,7 @@ class TelnyxTrunk:
         self._expire()
         ccid = ev["call_control_id"]
         xfer_of = ev["client_state"][5:] if ev["client_state"].startswith("xfer:") else ""
+        self._log_event(xfer_of or ccid, ev, leg="transfer" if xfer_of else "")
         ours = ccid in self.outbound or bool(xfer_of) or self.service.live_by_ref(ccid) is not None
         # Switched off: answer nothing new — but calls we placed (test calls) and calls
         # already in progress still get their events.
@@ -192,7 +204,10 @@ class TelnyxTrunk:
         ccid = info.get("call_control_id", "")
         stream_id = {"id": ""}
 
+        media = {"frames_in": 0, "frames_out": 0}
+
         async def send_audio(chunk: bytes) -> None:
+            media["frames_out"] += 1
             await websocket.send_text(media_message(chunk))
 
         async def clear_audio() -> None:
@@ -226,6 +241,14 @@ class TelnyxTrunk:
                 direction="outbound" if is_outbound(info) else "inbound", transport="telnyx",
                 test=bool(info.get("test")), contact_name=str((brain.contact or {}).get("name") or ""),
                 transfer_to=transfer_to, ref=ccid))
+            began = session.started
+
+            def telnyx_debug() -> dict[str, Any]:
+                return {"telnyx_events": [{**e, "t": round(e["at"] - began, 2)}
+                                          for e in self.call_events.get(ccid, [])],
+                        "media": dict(media, stream_id=stream_id["id"])}
+
+            session.debug_sources.append(telnyx_debug)
             started = False
             while not session.finished.is_set():
                 try:
@@ -241,6 +264,7 @@ class TelnyxTrunk:
                     started = True
                     await session.start()
                 if msg["event"] == "media":
+                    media["frames_in"] += 1
                     await session.on_audio(msg["audio"])
                 elif msg["event"] == "stop":
                     break
@@ -257,6 +281,7 @@ class TelnyxTrunk:
                 await session.stop()
                 result = finalize_call(cfg, store, call_id, session, brain, customer_number(info))
                 _log.info("call %s finished: %s", call_id, result)
+                self.call_events.pop(ccid, None)
                 closers += [session.stt.aclose, session.tts.aclose, brain.provider.aclose]
                 if hasattr(brain.retrieve, "aclose"):
                     closers.append(brain.retrieve.aclose)

@@ -202,6 +202,7 @@ class SipTrunk(asyncio.DatagramProtocol):
         self.reg_expires = 0
         self.last_error = ""
         self.busy_at: list[float] = []      # when callers got "busy" because the line was full
+        self.traces: dict[str, Any] = {}     # SIP Call-ID -> debug.SipTrace (calls only)
         self.started = False
         self._reg_changed = asyncio.Event()
         self.trusted: set[str] = set()
@@ -296,6 +297,7 @@ class SipTrunk(asyncio.DatagramProtocol):
             msg = parse_message(data)
         except Exception:  # noqa: BLE001 - junk on the port
             return
+        self._trace("in", msg, addr)
         if msg.is_request:
             self._spawn(self._on_request(msg, addr))
         else:
@@ -304,6 +306,28 @@ class SipTrunk(asyncio.DatagramProtocol):
     def _send(self, msg: SipMessage | bytes, addr) -> None:
         if self.transport is not None:
             self.transport.sendto(msg if isinstance(msg, bytes) else msg.encode(), addr)
+        if isinstance(msg, bytes):
+            if not msg.strip():
+                return                                       # CRLF keep-alive
+            try:
+                msg = parse_message(msg)
+            except Exception:  # noqa: BLE001
+                return
+        self._trace("out", msg, addr)
+
+    def _trace(self, direction: str, msg: SipMessage, addr) -> None:
+        """Keep the SIP ladder of calls (not REGISTER/OPTIONS) for the debug view."""
+        from xplogent.voip.debug import SipTrace
+
+        cid = msg.call_id
+        trace = self.traces.get(cid)
+        if trace is None:
+            if msg.cseq[1] != "INVITE" or not cid:
+                return
+            while len(self.traces) >= 50:                    # refused/abandoned calls: oldest go
+                self.traces.pop(next(iter(self.traces)))
+            trace = self.traces[cid] = SipTrace()
+        trace.add(direction, msg, addr)
 
     # -- building requests ---------------------------------------------------------------
     def _via(self, branch: str) -> str:
@@ -857,6 +881,10 @@ class SipTrunk(asyncio.DatagramProtocol):
             await self.hangup(call)
             return
         call.session, call.brain, call.row_id = session, brain, row_id
+        trace = self.traces.get(call.call_id)
+        session.debug_sources.append(lambda: {
+            "line": self.line, "sip": trace.export() if trace is not None else {},
+            "rtp": call.rtp.stats() if call.rtp is not None else {}})
         call.rtp.on_audio = session.on_audio
         call.rtp.on_dtmf = session.on_dtmf
         call.rtp.start()
@@ -882,6 +910,7 @@ class SipTrunk(asyncio.DatagramProtocol):
                 await self._end(call)
                 result = finalize_call(cfg, store, row_id, session, brain, call.number)
                 _log.info("SIP call %s finished: %s", row_id, result)
+                self.traces.pop(call.call_id, None)
                 closers = [session.stt.aclose, session.tts.aclose, brain.provider.aclose]
                 if hasattr(brain.retrieve, "aclose"):
                     closers.append(brain.retrieve.aclose)

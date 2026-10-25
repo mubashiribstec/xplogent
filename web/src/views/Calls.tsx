@@ -9,6 +9,7 @@ import { CallNow, LiveCalls, TestCall } from "./CallControls";
 import { SipCard } from "./SipCard";
 import { SipExtensionCard } from "./SipExtensionCard";
 import { CallAgentCard } from "./CallAgentCard";
+import { CallDebug } from "./CallDebug";
 
 const fmtTime = (t?: number | null) => (t ? new Date(t * 1000).toLocaleString() : "—");
 const fmtDur = (c: CallRow) => {
@@ -25,6 +26,7 @@ export function Calls() {
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [open, setOpen] = useState<number | null>(null);
   const [turns, setTurns] = useState<CallTurn[]>([]);
+  const [debugOpen, setDebugOpen] = useState<number | null>(null);
   const [cfg, setCfg] = useState<Record<string, any>>({});
   const [loaded, setLoaded] = useState(false);
   const [telnyxKeySet, setTelnyxKeySet] = useState(false);
@@ -109,6 +111,9 @@ export function Calls() {
                     <tr><td colSpan={6}>
                       {c.summary && <p className="dim" style={{ marginBottom: 6 }}><b>Summary:</b> {c.summary}</p>}
                       {c.recording && <Recording callId={c.id} toast={toast} onDeleted={reload} />}
+                      <button className="linkx" onClick={() => setDebugOpen(debugOpen === c.id ? null : c.id)}>
+                        {debugOpen === c.id ? "Hide debug" : "Debug this call"}</button>
+                      {debugOpen === c.id && <CallDebug callId={c.id} toast={toast} />}
                       {turns.length === 0 && <p className="dim">no transcript yet</p>}
                       {turns.map((t, i) => (
                         <div key={i} style={{ margin: "3px 0" }}>

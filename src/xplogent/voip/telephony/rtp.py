@@ -6,12 +6,13 @@ import asyncio
 import contextlib
 import random
 import struct
+import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 
 from xplogent.core.logging import get_logger
 from xplogent.voip.audio import alaw_to_mulaw, mulaw_to_alaw
-from xplogent.voip.telephony.sip_proto import PCMA, PCMU
+from xplogent.voip.telephony.sip_proto import CODEC_NAMES, PCMA, PCMU
 
 DTMF_CODES = {**{str(i): i for i in range(10)}, "*": 10, "#": 11, "A": 12, "B": 13, "C": 14, "D": 15}
 DTMF_EVENTS = {code: key for key, code in DTMF_CODES.items()}
@@ -66,6 +67,16 @@ class RtpStream(asyncio.DatagramProtocol):
         self.ts = random.getrandbits(32)
         self.received = 0
         self.sent = 0
+        # Receive quality for the debug view (RFC 3550-style estimates).
+        self.lost = 0                       # sequence numbers that never arrived
+        self.late = 0                       # arrived after a later packet (reordered)
+        self.duplicates = 0
+        self.jitter = 0.0                   # interarrival jitter, in 8 kHz samples
+        self.gap_fill_ms = 0                # silence inserted while the far end sent nothing
+        self.dtmf_in = 0
+        self.dtmf_out = 0
+        self._max_seq: int | None = None
+        self._transit: float | None = None
         self._inbox: asyncio.Queue[bytes | str | None] = asyncio.Queue()
         self._tasks: list[asyncio.Task] = []
         self._marker = True
@@ -100,7 +111,40 @@ class RtpStream(asyncio.DatagramProtocol):
         if data[0] & 0x20 and payload:                       # padding
             payload = payload[: -payload[-1]]
         self.received += 1
+        self._quality(data)
         self._inbox.put_nowait(alaw_to_mulaw(payload) if pt == PCMA else payload)
+
+    def _quality(self, data: bytes) -> None:
+        seq, rtp_ts = struct.unpack("!HI", data[2:8])
+        if self._max_seq is None:
+            self._max_seq = seq
+        else:
+            delta = (seq - self._max_seq) & 0xFFFF
+            if delta == 0:
+                self.duplicates += 1
+            elif delta < 0x8000:
+                self.lost += delta - 1
+                self._max_seq = seq
+            else:
+                self.late += 1
+                self.lost = max(0, self.lost - 1)      # it was counted as lost; it's only late
+        transit = time.monotonic() * 8000 - rtp_ts
+        if self._transit is not None:
+            d = abs(transit - self._transit)
+            if d < 8000 * 10:                           # ignore timestamp jumps (new talk spurt)
+                self.jitter += (d - self.jitter) / 16
+        self._transit = transit
+
+    def stats(self) -> dict[str, object]:
+        expected = self.received + self.lost
+        return {"codec": CODEC_NAMES.get(self.pt, str(self.pt)),
+                "remote": f"{self.remote[0]}:{self.remote[1]}" if self.remote else "",
+                "local_port": self.port, "packets_in": self.received, "packets_out": self.sent,
+                "lost": self.lost, "loss_pct": round(100 * self.lost / expected, 2) if expected else 0.0,
+                "late": self.late, "duplicates": self.duplicates,
+                "jitter_ms": round(self.jitter / 8, 1), "gap_fill_ms": self.gap_fill_ms,
+                "dtmf_in": self.dtmf_in, "dtmf_out": self.dtmf_out,
+                "keypad_events": self.dtmf_pt is not None}
 
     def _telephone_event(self, data: bytes) -> None:
         """RFC 4733: report each key once, when its end packet arrives (sent 3x)."""
@@ -114,6 +158,7 @@ class RtpStream(asyncio.DatagramProtocol):
         self._dtmf_seen.append(ts)
         digit = DTMF_EVENTS.get(payload[0])
         if digit:
+            self.dtmf_in += 1
             self._inbox.put_nowait(digit)
 
     def queue_dtmf(self, digits: str, duration_ms: int = 160, gap_ms: int = 80) -> None:
@@ -125,6 +170,7 @@ class RtpStream(asyncio.DatagramProtocol):
             code = DTMF_CODES.get(d.upper())
             if code is None:
                 continue
+            self.dtmf_out += 1
             for i in range(1, steps + 1):
                 body = struct.pack("!BBH", code, 10, i * FRAME)
                 self._dtmf_out.append((self.dtmf_pt, i == 1, -1, body))
@@ -152,6 +198,7 @@ class RtpStream(asyncio.DatagramProtocol):
                 if frames <= 0:
                     continue
                 chunk = SILENCE[PCMU] * min(frames, 50)
+                self.gap_fill_ms += min(frames, 50) * 20
                 last += frames * 0.02
             else:
                 if chunk is None:

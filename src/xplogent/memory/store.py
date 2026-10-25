@@ -178,6 +178,11 @@ CREATE TABLE IF NOT EXISTS call_turns (
     created_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_call_turns_call ON call_turns(call_id);
+CREATE TABLE IF NOT EXISTS call_debug (
+    call_id INTEGER PRIMARY KEY,
+    data TEXT,
+    created_at REAL
+);
 CREATE TABLE IF NOT EXISTS training_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT,
@@ -929,6 +934,22 @@ class Store:
                  cost: float = 0.0, status: str = "ended") -> None:
         self._write("UPDATE calls SET status=?, outcome=?, summary=?, cost=?, ended_at=? WHERE id=?",
                     (status, outcome, summary, cost, time.time(), call_id))
+
+    def save_call_debug(self, call_id: int, data: dict[str, Any]) -> None:
+        self._write("INSERT OR REPLACE INTO call_debug (call_id, data, created_at) VALUES (?,?,?)",
+                    (call_id, json.dumps(data, default=str), time.time()))
+
+    def get_call_debug(self, call_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT data FROM call_debug WHERE call_id=?", (call_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def prune_call_debug(self, older_than_days: float) -> int:
+        """Drop debug traces older than the recordings' retention (0 = keep)."""
+        if older_than_days <= 0:
+            return 0
+        cur = self._write("DELETE FROM call_debug WHERE created_at < ?",
+                          (time.time() - older_than_days * 86400,))
+        return cur.rowcount
 
     def set_call_recording(self, call_id: int, path: str) -> None:
         self._write("UPDATE calls SET recording=? WHERE id=?", (path, call_id))

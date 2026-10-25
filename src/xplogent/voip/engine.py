@@ -91,6 +91,10 @@ class CallSession:
         self._stream: Any = None
         self._turn_info: dict[str, Any] = {}
         self._say_first_frame_at = 0.0
+        # Debug view (voip/debug.py): what happened when, plus transport-specific
+        # sources (SIP ladder, RTP stats, carrier events) the line adds.
+        self.timeline: list[dict[str, Any]] = []
+        self.debug_sources: list[Callable[[], dict[str, Any]]] = []
         self._events_seen = 0
         self.greeting = greeting
         self.vad = vad or VAD()
@@ -120,13 +124,25 @@ class CallSession:
         self._greeting_task: asyncio.Task | None = None
 
     # -- lifecycle ---------------------------------------------------------------
+    def event(self, kind: str, detail: str = "") -> None:
+        """Add a timeline entry for the debug view (seconds since the call started)."""
+        if len(self.timeline) < 500:
+            self.timeline.append({"t": round(time.time() - self.started, 2), "kind": kind,
+                                  "detail": str(detail)[:200]})
+
     async def start(self) -> None:
         self._watchdog = asyncio.create_task(self._watch())
+        self.event("answered")
         if self.greeting:
+            self.event("greeting")
             self._record("agent", self.greeting)
             self._greeting_task = self._turn_task = asyncio.create_task(self._say(self.greeting))
+            self._greeting_task.add_done_callback(
+                lambda t: self.event("greeting_end", "stopped" if t.cancelled() else ""))
 
     async def stop(self) -> None:
+        if not self.finished.is_set() or not any(e["kind"] == "ended" for e in self.timeline):
+            self.event("ended")
         self.finished.set()
         for task in (self._turn_task, self._watchdog, self._transfer_timer, self._dtmf_timer):
             if task and not task.done():
@@ -151,6 +167,8 @@ class CallSession:
         return time.time() - self.started
 
     def _record(self, speaker: str, text: str) -> None:
+        if text.strip():
+            self.event("caller" if speaker == "caller" else "agent", text.strip()[:80])
         if speaker == "agent" and text.strip():
             self._last_agent_line = text.strip()
         if self.on_turn and text.strip():
@@ -208,6 +226,7 @@ class CallSession:
         if self._greeting_playing():
             return          # the disclosure is never cut off; the caller is answered after it
         _log.info("barge-in: caller interrupted the agent")
+        self.event("barge_in")
         if self._turn_task and not self._turn_task.done():
             self._turn_task.cancel()
         self._speaking = False
@@ -355,6 +374,7 @@ class CallSession:
             st = self.brain.state
             if getattr(st, "dtmf_out", "") and self.send_dtmf is not None:
                 digits, st.dtmf_out = st.dtmf_out, ""
+                self.event("dtmf_out", digits)
                 try:
                     await self.send_dtmf(digits)
                 except Exception:  # noqa: BLE001 - a failed key press must not drop the call
@@ -386,6 +406,7 @@ class CallSession:
             return
         self._last_activity = time.time()
         self._idle_prompts = 0
+        self.event("dtmf_in", digit)
         if self._speaking:
             await self._barge_in()
         action = self.dtmf_keys.get(digit) if not self._dtmf_buf else None
@@ -451,7 +472,7 @@ class CallSession:
 
     async def end(self) -> None:
         """Hang up now (supervisor)."""
-        await self._hangup()
+        await self._hangup("hung up from the dashboard")
 
     async def _after_turn(self) -> None:
         st = self.brain.state
@@ -468,7 +489,7 @@ class CallSession:
                 await self.start_transfer(lambda: self.transfer_cb(st.transfer_reason),
                                           st.transfer_reason)
         elif st.end:
-            await self._hangup()
+            await self._hangup("the agent ended the call")
 
     # -- transfers -------------------------------------------------------------------
     async def start_transfer(self, attempt: Callable[[], Awaitable[None]], reason: str = "") -> None:
@@ -477,6 +498,7 @@ class CallSession:
         :meth:`transfer_failed` (the caller is still here). No answer within
         ``transfer_timeout_s`` counts as failed. ``attempt`` raising = failed now."""
         st = self.brain.state
+        self.event("transfer", reason)
         self.brain.paused = True
         self.transfer_pending = True
         st.transfer, st.outcome = True, st.outcome or "transferred"
@@ -497,6 +519,7 @@ class CallSession:
 
     def transfer_done(self) -> None:
         """The caller is now connected elsewhere: this session is over."""
+        self.event("transfer_done")
         self.transfer_pending = False
         self.finished.set()
 
@@ -504,6 +527,7 @@ class CallSession:
         """The caller is still with us: resume the agent and say so."""
         if not self.transfer_pending or self.finished.is_set():
             return
+        self.event("transfer_failed", why)
         self.transfer_pending = False
         st = self.brain.state
         st.transfer, st.transfer_failed = False, True
@@ -519,7 +543,8 @@ class CallSession:
         else:
             await self._prompt(TRANSFER_FAILED_LINE, interrupt=True)
 
-    async def _hangup(self) -> None:
+    async def _hangup(self, reason: str = "") -> None:
+        self.event("hangup", reason)
         self.finished.set()
         if self.hangup_cb:
             with contextlib.suppress(Exception):
@@ -598,7 +623,7 @@ class CallSession:
             if now - self.started > self.max_call_s:
                 await self._prompt("I'm sorry, we've reached the time limit for this call. "
                                    "Goodbye.", interrupt=True, wait=True)
-                await self._hangup()
+                await self._hangup("time limit reached")
                 return
             if self._speaking or self.vad.in_speech or getattr(self.brain, "paused", False):
                 continue
@@ -610,7 +635,7 @@ class CallSession:
                     "I haven't heard anything, so I'll end the call. Goodbye.", wait=True)
                 if task is not None and task.cancelled():
                     continue  # the caller spoke over the goodbye: they're still there
-                await self._hangup()
+                await self._hangup("caller silent")
                 return
             if self._idle_prompts < self.idle_max_prompts:
                 step = (self.idle_hangup_s - self.idle_prompt_s) / max(1, self.idle_max_prompts)

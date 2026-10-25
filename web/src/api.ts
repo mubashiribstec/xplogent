@@ -387,6 +387,31 @@ export const clearSipBusy = (line = "") => postJSON<{ ok: boolean }>("/voip/sip/
 export async function getVoices(provider = ""): Promise<{ ok: boolean; voices: { id: string; name: string }[]; error?: string }> {
   return (await fetch(`/voip/speech/voices${provider ? `?provider=${encodeURIComponent(provider)}` : ""}`)).json();
 }
+export interface CallDebugData {
+  ok: boolean; live: boolean; kept: boolean; call: CallRow & Record<string, any>;
+  debug: {
+    timeline?: { t: number; kind: string; detail: string }[];
+    turns?: Record<string, any>[];
+    providers?: { stt_fallbacks: number; tts_fallbacks: number };
+    line?: string;
+    sip?: { messages?: { t: number; dir: string; line: string; peer: string; headers: Record<string, string>; sdp: boolean }[]; dropped?: number };
+    rtp?: Record<string, any>;
+    telnyx_events?: { t: number; event: string; leg: string; digit?: string }[];
+    media?: Record<string, any>;
+    errors?: string[];
+  };
+}
+export async function getCallDebug(id: number): Promise<CallDebugData> {
+  return (await fetch(`/voip/calls/${id}/debug`)).json();
+}
+export async function downloadDebugBundle(id: number): Promise<void> {
+  const r = await fetch(`/voip/calls/${id}/debug/bundle`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement("a");
+  a.href = url; a.download = `call-${id}-debug.json`; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
 export const testTelnyx = () => postJSON<Record<string, any>>("/voip/telnyx/test");
 export const testSpeech = (stt = true) => postJSON<Record<string, any>>("/voip/speech/test", { stt });
 

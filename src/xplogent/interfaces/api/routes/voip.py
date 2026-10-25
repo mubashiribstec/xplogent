@@ -212,6 +212,44 @@ async def voip_call(call_id: int) -> dict:
     return {"call": out}
 
 
+@router.get("/voip/calls/{call_id}/debug")
+async def voip_call_debug(call_id: int):
+    """The Call Debug view: timeline, stage timings, SIP ladder / Telnyx events, RTP."""
+    from xplogent.voip import debug
+    from xplogent.voip.service import get_service
+
+    live = get_service().active.get(call_id)
+    with Store(load_config().db_path) as store:
+        call = store.get_call(call_id)
+        if call is None:
+            return JSONResponse({"error": "no such call"}, status_code=404)
+        data = debug.collect(live.session) if live is not None else store.get_call_debug(call_id)
+    call.pop("turns", None)
+    call.pop("recording", None)
+    return {"ok": True, "live": live is not None, "call": call, "debug": data or {},
+            "kept": data is not None}
+
+
+@router.get("/voip/calls/{call_id}/debug/bundle")
+async def voip_call_debug_bundle(call_id: int):
+    """One redacted JSON file for a bug report (no audio, no secrets)."""
+    import json
+
+    from fastapi.responses import Response
+
+    from xplogent.voip import debug
+    from xplogent.voip.service import get_service
+
+    cfg = load_config()
+    with Store(cfg.db_path) as store:
+        doc = debug.bundle(cfg, store, call_id, live=get_service().active.get(call_id))
+    if doc is None:
+        return JSONResponse({"error": "no such call"}, status_code=404)
+    deps.audit_event("voip_debug_bundle", target=str(call_id), risk="medium")
+    return Response(json.dumps(doc, indent=2), media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="call-{call_id}-debug.json"'})
+
+
 @router.get("/voip/contacts")
 async def voip_contacts(q: str = "", limit: int = 500) -> dict:
     with Store(load_config().db_path) as store:

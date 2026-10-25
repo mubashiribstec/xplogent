@@ -327,6 +327,13 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
         if bits:
             summary = (summary + " | Fields: " + "; ".join(bits)).strip(" |")
     store.end_call(call_id, outcome=outcome, summary=summary, cost=cost)
+    try:                                # the debug view's record of the call (voip/debug.py)
+        from xplogent.voip import debug
+
+        debug.save(store, call_id, session)
+        store.prune_call_debug(float(((cfg.voip or {}).get("recording") or {}).get("retention_days", 90)))
+    except Exception:  # noqa: BLE001 - diagnostics must never break the call record
+        _log.exception("could not save the call's debug trace")
     if getattr(session, "recorder", None) is not None:
         from xplogent.voip.recording import prune
 

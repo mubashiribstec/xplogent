@@ -118,3 +118,32 @@ def dial(number: str = typer.Argument("", help="Number (+countrycode…) or PBX 
         if res.get("hours"):
             console.print("Add --ignore-hours to call anyway.")
         raise typer.Exit(1)
+
+
+@voip_app.command("debug")
+def debug_cmd(call_id: int = typer.Argument(..., help="Call number (from `xplogent voip calls`)."),
+              as_json: bool = typer.Option(False, "--json", help="Print the whole redacted bundle."),
+              url: str | None = _URL) -> None:
+    """One call's diagnostics: timeline, per-stage timings, SIP ladder, RTP or Telnyx events."""
+    import json
+
+    from xplogent.interfaces.api.deps import auth_token
+    from xplogent.voip.debug import summary_lines
+
+    token = auth_token()
+    try:
+        with httpx.Client(timeout=30.0, trust_env=False) as client:
+            resp = client.get(f"{_base(url)}/voip/calls/{call_id}/debug/bundle",
+                              headers={"Authorization": f"Bearer {token}"} if token else {})
+    except httpx.HTTPError as exc:
+        console.print(f"[red]Can't reach the Xplogent server at {_base(url)}[/] ({type(exc).__name__}).")
+        raise typer.Exit(2) from exc
+    if resp.status_code != 200:
+        console.print(f"[red]HTTP {resp.status_code}[/]: {resp.text[:200]}")
+        raise typer.Exit(2)
+    doc = resp.json()
+    if as_json:
+        console.print_json(json.dumps(doc))
+        return
+    for line in summary_lines(doc):
+        console.print(line, markup=False, highlight=False)
