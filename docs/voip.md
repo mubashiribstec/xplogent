@@ -158,10 +158,15 @@ live, especially before outbound calling. This is engineering documentation, not
   `kingsbury_outbound_screener` ship a greeting, playbook and field schema for
   UK recruitment, plus a scoring rubric (right-to-work gate; must-haves 40 /
   commute 20 / shifts 20 / experience 20; a pay mismatch flags, never scores).
+  A template only applies to calls in its own direction (the inbound one to
+  inbound calls, the screener to outbound calls); other calls use your own
+  greeting and playbook. Pick one in Calls → Call agent.
 - **CRM (`voip.crm`).** On call end, a signed (HMAC-SHA256) `call.completed`
   webhook is POSTed with outcome, summary, field completeness and the
   transcript — 3 attempts, backoff, delivery log at
-  `voip/crm_deliveries.jsonl`. See `docs/crm-laravel.md`.
+  `voip/crm_deliveries.jsonl`. Nothing is sent until the API token is set
+  (Calls → Call agent, stored encrypted as `XPLOGENT_CRM_API_TOKEN`); **Send
+  test** posts a sample. See `docs/crm-laravel.md`.
 - **Knowledge gaps.** Questions the knowledge base couldn't answer are logged
-  to `voip/knowledge_gaps.jsonl`; `top_knowledge_gaps()` ranks them — that list
-  is what to teach the agent next.
+  to `voip/knowledge_gaps.jsonl` (size-capped) and ranked in Calls → Call
+  agent — that list is what to teach the agent next.

@@ -12,8 +12,7 @@ resolve them in git first.
 
 ## Docker installs (one-command server install)
 
-The dashboard can't replace its own container, so Settings → Update tells you to
-update on the server instead:
+The dashboard can't replace its own container, so you update on the server:
 
 ```bash
 xplogent-docker update     # backup → new deploy files → pull the new image → restart

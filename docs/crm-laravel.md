@@ -13,9 +13,16 @@ Headers:
 
 ```
 Authorization: Bearer <api_token>
+X-Xplogent-Timestamp: <unix seconds when the request was signed>
 X-Xplogent-Signature: sha256=<HMAC-SHA256 of the raw body, keyed with api_token>
+X-Xplogent-Signature-V2: sha256=<HMAC-SHA256 of "<timestamp>.<raw body>", keyed with api_token>
 Content-Type: application/json
 ```
+
+Verify `X-Xplogent-Signature-V2` and refuse timestamps more than five minutes
+old: a captured request then can't be replayed later. (`X-Xplogent-Signature`
+stays for receivers written before V2.) Xplogent sends nothing until the token
+is set (`XPLOGENT_CRM_API_TOKEN`, or Calls → Call agent → CRM in the dashboard).
 
 Body (field completeness comes from the Part D mandatory-field schema — a
 "succeeded" call always carries its required fields):
@@ -81,10 +88,12 @@ class VerifyXplogentSignature
     public function handle(Request $request, Closure $next)
     {
         $token = config('services.xplogent.token');
-        $given = (string) $request->header('X-Xplogent-Signature', '');
-        $expected = 'sha256=' . hash_hmac('sha256', $request->getContent(), $token);
+        $ts = (string) $request->header('X-Xplogent-Timestamp', '');
+        $given = (string) $request->header('X-Xplogent-Signature-V2', '');
+        $expected = 'sha256=' . hash_hmac('sha256', $ts . '.' . $request->getContent(), $token);
 
-        if (!hash_equals($expected, $given)
+        if (!ctype_digit($ts) || abs(time() - (int) $ts) > 300
+            || !hash_equals($expected, $given)
             || !hash_equals('Bearer ' . $token, (string) $request->header('Authorization', ''))) {
             abort(401, 'bad signature');
         }
