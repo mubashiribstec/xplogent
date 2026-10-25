@@ -69,7 +69,23 @@ async def voip_status() -> dict:
                "webhook_path": "/telephony/webhook/<your webhook_secret>",
                "contacts": store.count_contacts(), "calls": len(store.list_calls(1000)),
                "active": [c.summary() for c in get_service().active.values()]}
+    from xplogent.voip.telephony.sip import current_line
+
+    out["capacity"] = {line: {k: t.status()[k] for k in ("calls", "max_calls", "busy_24h", "last_busy_at")}
+                       for line in ("trunk", "extension") if (t := current_line(line)) is not None}
     return out
+
+
+@router.post("/voip/sip/busy/clear")
+async def voip_sip_busy_clear(body: dict | None = None) -> dict:
+    """Acknowledge the "callers got busy" warning for a line (or both)."""
+    from xplogent.voip.telephony.sip import current_line
+
+    lines = [str((body or {}).get("line"))] if (body or {}).get("line") else ["trunk", "extension"]
+    for line in lines:
+        if (t := current_line(line)) is not None:
+            t.clear_busy()
+    return {"ok": True}
 
 
 @router.get("/voip/readiness")

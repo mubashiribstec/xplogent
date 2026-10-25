@@ -201,6 +201,7 @@ class SipTrunk(asyncio.DatagramProtocol):
         self.reg_ok_at = 0.0
         self.reg_expires = 0
         self.last_error = ""
+        self.busy_at: list[float] = []      # when callers got "busy" because the line was full
         self.started = False
         self._reg_changed = asyncio.Event()
         self.trusted: set[str] = set()
@@ -267,7 +268,16 @@ class SipTrunk(asyncio.DatagramProtocol):
                 "server": f"{self.s.server}:{self.s.port}", "username": self.s.username,
                 "local_port": self.s.local_port, "contact_ip": self.contact_ip,
                 "rtp": f"{self.s.rtp_start}-{self.s.rtp_end}", "calls": len(self.calls),
+                "max_calls": self.s.max_calls, **self.busy_summary(),
                 "last_error": self.last_error}
+
+    def busy_summary(self) -> dict[str, Any]:
+        """Callers turned away because the line was full, over the last 24 hours."""
+        recent = [t for t in self.busy_at if t > time.time() - 86400]
+        return {"busy_24h": len(recent), "last_busy_at": recent[-1] if recent else None}
+
+    def clear_busy(self) -> None:
+        self.busy_at = []
 
     def _spawn(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -562,6 +572,9 @@ class SipTrunk(asyncio.DatagramProtocol):
             self._reply(req, addr, 480, "Temporarily Unavailable")
             return
         if len(self.calls) >= self.s.max_calls:
+            self.busy_at = [t for t in self.busy_at if t > time.time() - 86400][-999:] + [time.time()]
+            _log.warning("SIP %s line full (%s calls): caller %s got busy", self.line,
+                         self.s.max_calls, user_of(req.get("From")) or "?")
             self._reply(req, addr, 486, "Busy Here")
             return
         self._reply(req, addr, 100, "Trying")

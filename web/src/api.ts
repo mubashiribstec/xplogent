@@ -383,6 +383,7 @@ export async function getCallAgent(): Promise<CallAgentInfo> {
   return (await fetch("/voip/agent")).json();
 }
 export const testCrm = () => postJSON<{ ok: boolean; status?: string; detail?: string; error?: string }>("/voip/crm/test");
+export const clearSipBusy = (line = "") => postJSON<{ ok: boolean }>("/voip/sip/busy/clear", line ? { line } : {});
 export const testTelnyx = () => postJSON<Record<string, any>>("/voip/telnyx/test");
 export const testSpeech = (stt = true) => postJSON<Record<string, any>>("/voip/speech/test", { stt });
 

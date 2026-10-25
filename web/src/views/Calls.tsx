@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw } from "lucide-react";
 import {
   CallRow, CallTurn, ReadinessItem, VoipStatus, getCall, getCalls, getContacts, getFullConfig, getVoipReadiness,
-  getVoipStatus, patchConfig, putSecrets, saveSip, testSpeech, testTelnyx, deleteRecording, getRecordingUrl, trainOnRecording,
+  getVoipStatus, patchConfig, putSecrets, saveSip, clearSipBusy, testSpeech, testTelnyx, deleteRecording, getRecordingUrl, trainOnRecording,
 } from "../api";
 import { useToast } from "../components/Toast";
 import { CallNow, LiveCalls, TestCall } from "./CallControls";
@@ -73,7 +73,9 @@ export function Calls() {
         <p className="dim">Answers inbound calls using your scripts and knowledge base. Calls are transcribed live (and recorded, unless you switch recording off);
           the agent only answers from your knowledge and hands off to a person when it can't.</p>
 
-        {ready && <Readiness ready={ready.ready} items={ready.items} />}
+        {ready && <Readiness ready={ready.ready} items={ready.items} onClearBusy={async (line) => {
+          await clearSipBusy(line); loadReady();
+        }} />}
 
         <LiveCalls active={status?.active ?? []} toast={toast} onChange={reload} />
 
@@ -230,7 +232,9 @@ function Recording({ callId, toast, onDeleted }: { callId: number; toast: Toaste
   );
 }
 
-function Readiness({ ready, items }: { ready: boolean; items: ReadinessItem[] }) {
+function Readiness({ ready, items, onClearBusy }: {
+  ready: boolean; items: ReadinessItem[]; onClearBusy: (line: string) => void;
+}) {
   return (
     <div className="card">
       <h3>{ready ? "✓ Ready for calls" : "Before calls can work"}</h3>
@@ -240,6 +244,9 @@ function Readiness({ ready, items }: { ready: boolean; items: ReadinessItem[] })
             <span style={{ color: i.ok ? "var(--green, #2e7d32)" : i.required ? "var(--red, #c62828)" : "var(--amber, #b26a00)" }}>
               {i.ok ? "✔" : i.required ? "✗" : "○"}</span>{" "}
             <b>{i.label}</b>{i.detail && <span className="dim"> · {i.detail}</span>}
+            {i.id.endsWith("_capacity") && i.detail.includes("got busy") && (
+              <button className="linkx" style={{ marginLeft: 6 }}
+                onClick={() => onClearBusy(i.id === "sip_capacity" ? "trunk" : "extension")}>clear</button>)}
           </li>
         ))}
       </ul>

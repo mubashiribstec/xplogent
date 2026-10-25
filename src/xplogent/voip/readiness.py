@@ -60,6 +60,23 @@ def speech_status(v: dict[str, Any], env: dict[str, str]) -> tuple[bool, str]:
         "local" if any(h in base for h in LOCAL_TTS_HINTS) else base)
 
 
+def _capacity(add, id_: str, label: str, st: dict[str, Any]) -> None:
+    """Warn before a SIP line fills up (the next caller gets "busy"), and when it did."""
+    if not st.get("running") or not st.get("max_calls"):
+        return
+    calls, cap, busy = int(st.get("calls") or 0), int(st["max_calls"]), int(st.get("busy_24h") or 0)
+    if busy:
+        add(id_, label, False,
+            f"{busy} caller{'s' if busy != 1 else ''} got busy in the last 24 h (line full at "
+            f"{cap} calls): raise max_calls or give the extension a busy fallback in FreePBX",
+            required=False)
+    elif calls >= max(1, cap - 1):
+        add(id_, label, False, f"{calls} of {cap} calls in use: the next callers may get busy",
+            required=False)
+    else:
+        add(id_, label, True, f"{calls} of {cap} calls in use", required=False)
+
+
 def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
               sip_status: dict[str, Any] | None = None,
               sip_extension_status: dict[str, Any] | None = None) -> list[dict]:
@@ -102,6 +119,7 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
         if sip.get("register", True):
             add("sip_registered", "SIP registration", bool(st.get("registered")),
                 "registered" if st.get("registered") else (st.get("error") or "not registered yet"))
+        _capacity(add, "sip_capacity", "SIP trunk capacity", st)
     ext = v.get("sip_extension") or {}
     if ext.get("enabled"):
         configured = bool(ext.get("server") and ext.get("username"))
@@ -113,6 +131,7 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
             st = sip_extension_status or {}
             add("sip_extension_registered", "PBX extension registration", bool(st.get("registered")),
                 "registered" if st.get("registered") else (st.get("error") or "not registered yet"))
+        _capacity(add, "sip_extension_capacity", "PBX extension capacity", sip_extension_status or {})
     call_model = str(v.get("model") or model)
     provider = call_model.split(":", 1)[0]
     needs = _PROVIDER_KEYS.get(provider)
