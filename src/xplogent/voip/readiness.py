@@ -121,6 +121,12 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
         call_model if model_ok else f"{call_model} needs {needs}: add it in Settings or pick an Ollama model")
     ok, detail = speech_status(v, env)
     add("speech", "Speech (listen + speak)", ok, detail)
+    rec_on = bool((v.get("recording") or {}).get("enabled", True))
+    claims = "record" in str(v.get("greeting", "")).lower()
+    if claims and not rec_on:
+        add("greeting", "Greeting is truthful", False,
+            "the greeting says calls are recorded but recording is off: change one of them",
+            required=False)
     from xplogent.voip.config_check import check_voip
 
     bad = check_voip(v)

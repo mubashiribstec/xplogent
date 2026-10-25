@@ -6,9 +6,9 @@ Template 2 (outbound screener) and the scoring rubric are ported from the
 pilot plan (RETELL-PILOT-PLAN-AND-SCREENING-SCRIPT.md Parts 4 + 6.1).
 
 Product adaptations, deliberately:
-- The scripts said "this call may be recorded"; this product stores
-  transcripts, so the disclosure says "transcribed" (and the system-injected
-  disclosure in service.effective_greeting applies on top regardless).
+- The greetings say "transcribed"; while ``voip.recording`` is on (the
+  default) service.effective_greeting switches that to "recorded", so the
+  caller is always told what really happens to the call.
 - The phone-number discipline the scripts begged the model to follow is
   enforced by the Part D field guard: each template ships its field schema,
   and end_call is refused while a required field is unconfirmed.

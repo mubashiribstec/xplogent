@@ -33,6 +33,13 @@ _log = get_logger("voip.service")
 
 AI_DISCLOSURE = ("You're speaking with an AI assistant, and this call is "
                   "transcribed so we can help you better.")
+AI_DISCLOSURE_RECORDED = ("You're speaking with an AI assistant, and this call is "
+                          "recorded so we can help you better.")
+RECORDING_NOTICE = "This call is recorded."
+
+
+def recording_enabled(v: dict[str, Any]) -> bool:
+    return bool((v.get("recording") or {}).get("enabled", True))
 
 
 def effective_greeting(v: dict[str, Any]) -> str:
@@ -43,11 +50,23 @@ def effective_greeting(v: dict[str, Any]) -> str:
     doesn't already say it, the disclosure sentence goes in front. An operator
     editing the greeting can therefore never silently remove the disclosure
     (vs-Retell brief C3).
+
+    The same goes for recording: while ``voip.recording`` is on, the caller is
+    told the call is *recorded* — a greeting that says "transcribed" is switched
+    to "recorded", and one that says neither gets the notice in front.
     """
+    import re
+
     greeting = str(v.get("greeting", "")).replace(
         "{company}", str(v.get("company", "our company")))
+    recorded = recording_enabled(v)
+    if recorded and "record" not in greeting.lower():
+        greeting = re.sub(r"\btranscribed\b", "recorded", greeting)
     if v.get("disclose_ai", True) and "ai assistant" not in greeting.lower():
-        greeting = f"{AI_DISCLOSURE} {greeting}".strip()
+        disclosure = AI_DISCLOSURE_RECORDED if recorded else AI_DISCLOSURE
+        greeting = f"{disclosure} {greeting}".strip()
+    elif recorded and "record" not in greeting.lower():
+        greeting = f"{RECORDING_NOTICE} {greeting}".strip()
     return greeting
 
 
@@ -98,6 +117,17 @@ def customer_number(info: dict[str, str]) -> str:
     lookup, DNC request and status updates all hit the wrong record.
     """
     return info.get("to", "") if is_outbound(info) else info.get("from", "")
+
+
+def _recorder(v: dict[str, Any], call_id: int):
+    """A recorder for this call, unless ``voip.recording.enabled`` is false."""
+    rec = v.get("recording") or {}
+    if not rec.get("enabled", True):
+        return None
+    from xplogent.voip.recording import CallRecorder, recordings_dir
+
+    return CallRecorder(recordings_dir() / f"{call_id}.wav",
+                        max_seconds=float(v.get("max_call_seconds", 900)) + 60)
 
 
 def _speech_stt(v: dict[str, Any]):
@@ -190,7 +220,7 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
                 min_speech_ms=int(vad_cfg.get("min_speech_ms", 200)),
                 max_utterance_ms=int(vad_cfg.get("max_utterance_ms", 15000))),
         max_call_s=float(v.get("max_call_seconds", 900)),
-        send_dtmf=send_dtmf if dtmf_on else None, **session_kw)
+        send_dtmf=send_dtmf if dtmf_on else None, recorder=_recorder(v, call_id), **session_kw)
     session.dtmf_enabled = dtmf_on
     return session, call_id, brain
 
@@ -277,6 +307,13 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
         if bits:
             summary = (summary + " | Fields: " + "; ".join(bits)).strip(" |")
     store.end_call(call_id, outcome=outcome, summary=summary, cost=cost)
+    if getattr(session, "recorder", None) is not None:
+        from xplogent.voip.recording import prune
+
+        path = session.recorder.close()
+        if path:
+            store.set_call_recording(call_id, str(path))
+        prune(float(((cfg.voip or {}).get("recording") or {}).get("retention_days", 90)))
     call = store.get_call(call_id) or {}
 
     def _deliver(result: dict[str, Any]) -> dict[str, Any]:

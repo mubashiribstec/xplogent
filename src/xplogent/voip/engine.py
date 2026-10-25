@@ -59,7 +59,8 @@ class CallSession:
                  on_events: Callable[[list[str]], Awaitable[None]] | None = None,
                  transfer_timeout_s: float = 60.0,
                  send_dtmf: Callable[[str], Awaitable[None]] | None = None,
-                 dtmf_keys: dict[str, str] | None = None, dtmf_gap_s: float = 2.0) -> None:
+                 dtmf_keys: dict[str, str] | None = None, dtmf_gap_s: float = 2.0,
+                 recorder: Any = None) -> None:
         self.brain, self.stt, self.tts = brain, stt, tts
         self.send_audio, self.clear_audio = send_audio, clear_audio
         self.hangup_cb, self.transfer_cb = hangup, transfer
@@ -74,6 +75,7 @@ class CallSession:
         self._dtmf_timer: asyncio.Task | None = None
         self._last_agent_line = ""
         self.dtmf_enabled = True
+        self.recorder = recorder            # CallRecorder (voip.recording) or None
         self._events_seen = 0
         self.greeting = greeting
         self.vad = vad or VAD()
@@ -143,6 +145,8 @@ class CallSession:
     async def on_audio(self, mulaw: bytes) -> None:
         if self.finished.is_set():
             return
+        if self.recorder is not None:
+            self.recorder.caller(mulaw)
         self._pending.extend(mulaw_to_pcm16(mulaw))
         while len(self._pending) >= FRAME_BYTES:
             frame = bytes(self._pending[:FRAME_BYTES])
@@ -422,6 +426,8 @@ class CallSession:
                 if ahead > self.lead_s:
                     await asyncio.sleep(ahead - self.lead_s)
             await self.send_audio(frame)
+            if self.recorder is not None:
+                self.recorder.agent(frame)
             play_end = max(play_end, loop.time()) + len(frame) / 8000.0
 
         try:

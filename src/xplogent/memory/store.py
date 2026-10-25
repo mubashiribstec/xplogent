@@ -224,6 +224,7 @@ _MIGRATIONS = [
     ("calls", "test", "INTEGER DEFAULT 0"),     # test calls: not counted, no contact updates
     ("calls", "transport", "TEXT DEFAULT ''"),  # telnyx | sip | browser
     ("calls", "line", "TEXT DEFAULT ''"),       # SIP line: trunk | extension ('' otherwise)
+    ("calls", "recording", "TEXT DEFAULT ''"),  # path of the call's WAV (voip.recording)
 ]
 # Stored in the database (PRAGMA user_version): changes whenever the schema text or
 # the migration list changes, so existing databases get upgraded automatically.
@@ -920,6 +921,9 @@ class Store:
                  cost: float = 0.0, status: str = "ended") -> None:
         self._write("UPDATE calls SET status=?, outcome=?, summary=?, cost=?, ended_at=? WHERE id=?",
                     (status, outcome, summary, cost, time.time(), call_id))
+
+    def set_call_recording(self, call_id: int, path: str) -> None:
+        self._write("UPDATE calls SET recording=? WHERE id=?", (path, call_id))
 
     def list_calls(self, limit: int = 100) -> list[dict[str, Any]]:
         rows = self._query(

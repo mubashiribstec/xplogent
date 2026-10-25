@@ -233,9 +233,10 @@ def test_browser_test_call(monkeypatch):
         ws.send_text(json.dumps({"type": "start", "voice": False, "contact_id": cid}))
         started = json.loads(ws.receive_text())
         assert started["type"] == "started" and started["contact"] == "Ana"
-        # The system-injected AI disclosure precedes the configured greeting (C3).
+        # The system-injected AI disclosure precedes the configured greeting (C3);
+        # recording is on by default, so it says so.
         assert json.loads(ws.receive_text()) == {"type": "turn", "speaker": "agent",
-            "text": "You're speaking with an AI assistant, and this call is transcribed "
+            "text": "You're speaking with an AI assistant, and this call is recorded "
                     "so we can help you better. Hi from Acme"}
         assert get_service().active[started["call_id"]].transport == "browser"
         ws.send_text(json.dumps({"type": "text", "text": "call me back on Tuesday"}))

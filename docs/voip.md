@@ -89,6 +89,18 @@ agent can send digits (e.g. through a menu) on lines that negotiated it.
 `xplogent-docker speech on` runs Kokoro (text-to-speech) on CPU; listening uses the built-in
 Whisper. Choose **Local on this server** in the Speech card and press **Test voice**.
 
+## Call recording
+
+Every call is recorded as a stereo WAV (caller on the left, agent on the right) on all lines:
+Telnyx, the SIP trunk, the PBX extension and browser test calls. Open a call in **Calls** to
+play, download or delete its recording, or press **Use for training** to add it to Call
+training. Files are kept in `data/voip/recordings/` for `voip.recording.retention_days`
+(90 by default, 0 keeps them).
+
+While recording is on, callers are told so: the greeting is adjusted automatically (see
+Safety defaults). To keep transcripts only, set **Call recording → off** in the Conversation
+card (`voip.recording.enabled: false`).
+
 ## Training (Call training page)
 
 - **Call recordings** (wav, mp3, m4a, ogg…, up to 200 MB each) are transcribed on the server.
@@ -127,7 +139,10 @@ estimate, shown per call.
 
 ## Safety defaults
 
-- The agent states it is an AI and that the call is transcribed (edit `voip.greeting`). Xplogent stores transcripts, not audio recordings — the greeting must not claim recording.
+- The agent states it is an AI and that the call is recorded (or, with recording off,
+  transcribed). The system keeps this true whatever the greeting says: while recording is on,
+  "transcribed" becomes "recorded" and a greeting that mentions neither gets "This call is
+  recorded." in front.
 - It answers only from the knowledge base, playbook and customer record; otherwise it offers a
   callback or a human.
 - "Stop calling me" → the number is added to the do-not-call list; dialing such a number is refused.

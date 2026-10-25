@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw } from "lucide-react";
 import {
   CallRow, CallTurn, ReadinessItem, VoipStatus, getCall, getCalls, getContacts, getFullConfig, getVoipReadiness,
-  getVoipStatus, patchConfig, putSecrets, saveSip, testSpeech, testTelnyx,
+  getVoipStatus, patchConfig, putSecrets, saveSip, testSpeech, testTelnyx, deleteRecording, getRecordingUrl, trainOnRecording,
 } from "../api";
 import { useToast } from "../components/Toast";
 import { CallNow, LiveCalls, TestCall } from "./CallControls";
@@ -70,7 +70,7 @@ export function Calls() {
             <button className="icon-btn" onClick={reload} aria-label="refresh"><RefreshCw size={16} /></button>
           </div>
         </div>
-        <p className="dim">Answers inbound calls using your scripts and knowledge base. Calls are transcribed live;
+        <p className="dim">Answers inbound calls using your scripts and knowledge base. Calls are transcribed live (and recorded, unless you switch recording off);
           the agent only answers from your knowledge and hands off to a person when it can't.</p>
 
         {ready && <Readiness ready={ready.ready} items={ready.items} />}
@@ -103,6 +103,7 @@ export function Calls() {
                   {open === c.id && (
                     <tr><td colSpan={6}>
                       {c.summary && <p className="dim" style={{ marginBottom: 6 }}><b>Summary:</b> {c.summary}</p>}
+                      {c.recording && <Recording callId={c.id} toast={toast} onDeleted={reload} />}
                       {turns.length === 0 && <p className="dim">no transcript yet</p>}
                       {turns.map((t, i) => (
                         <div key={i} style={{ margin: "3px 0" }}>
@@ -183,6 +184,14 @@ export function Calls() {
             <label className="bud"><span className="lbl-sm">Max call length (s)</span>
               <input type="number" defaultValue={cfg.max_call_seconds ?? 900}
                 onBlur={(e) => save({ max_call_seconds: Number(e.target.value) || 900 })} style={{ width: 90 }} /></label>
+            <label className="bud"><span className="lbl-sm">Call recording</span>
+              <select value={cfg.recording?.enabled === false ? "off" : "on"}
+                onChange={(e) => save({ recording: { enabled: e.target.value === "on" } })}>
+                <option value="on">on: callers are told the call is recorded</option>
+                <option value="off">off: transcripts only</option></select></label>
+            <label className="bud"><span className="lbl-sm">Keep recordings (days, 0 = forever)</span>
+              <input type="number" min={0} defaultValue={cfg.recording?.retention_days ?? 90}
+                onBlur={(e) => save({ recording: { retention_days: Math.max(0, Number(e.target.value) || 0) } })} style={{ width: 90 }} /></label>
           </div>
           <p className="dim" style={{ fontSize: 12 }}>Add your scripts and FAQs under Knowledge and your customers under
             Contacts: the agent answers only from those.</p>
@@ -195,6 +204,29 @@ export function Calls() {
   );
 }
 
+
+function Recording({ callId, toast, onDeleted }: { callId: number; toast: Toaster; onDeleted: () => void }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+  const load = async () => {
+    try { setUrl(await getRecordingUrl(callId)); } catch { toast("recording not found", "error"); }
+  };
+  return (
+    <div className="row wrap" style={{ gap: 8, margin: "4px 0 8px", alignItems: "center" }}>
+      {url ? <audio controls autoPlay src={url} style={{ height: 32 }} />
+        : <button className="btn" onClick={load}>▶ Play recording</button>}
+      {url && <a className="btn" href={url} download={`call-${callId}.wav`}>Download</a>}
+      <button className="btn" title="Transcribe it and add it to Call training (caller left, agent right)"
+        onClick={async () => { const r = await trainOnRecording(callId); toast(r.ok ? "added to Call training" : r.error ?? "failed", r.ok ? "success" : "error"); }}>
+        Use for training</button>
+      <button className="btn ghost" onClick={async () => {
+        if (!confirm("Delete this recording? The transcript stays.")) return;
+        await deleteRecording(callId); setUrl(""); onDeleted();
+      }}>Delete</button>
+      <span className="dim" style={{ fontSize: 12 }}>left: caller · right: agent</span>
+    </div>
+  );
+}
 
 function Readiness({ ready, items }: { ready: boolean; items: ReadinessItem[] }) {
   return (

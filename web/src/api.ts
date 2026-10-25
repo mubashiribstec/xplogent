@@ -272,7 +272,7 @@ export async function setBudget(b: Budget): Promise<{ ok: boolean; budget: Budge
 export interface CallRow {
   id: number; direction: string; contact_name?: string | null; from_number: string; to_number: string;
   status: string; outcome?: string | null; summary?: string | null; cost: number;
-  started_at: number; ended_at?: number | null; test?: number; transport?: string;
+  started_at: number; ended_at?: number | null; test?: number; transport?: string; recording?: string;
 }
 export interface CallTurn { speaker: string; text: string; created_at: number; }
 export interface Contact {
@@ -551,3 +551,16 @@ export const testSipExtension = () => postJSON<{ ok: boolean; error?: string; no
 export async function detectSipIp(): Promise<{ lan: string; internet: string; note: string }> {
   return (await fetch("/voip/sip/detect-ip")).json();
 }
+
+// ── Call recordings ──────────────────────────────────────────────────────────
+/** The WAV as a blob URL (an <audio> tag can't send the access token itself). */
+export async function getRecordingUrl(callId: number): Promise<string> {
+  const r = await fetch(`/voip/calls/${callId}/recording`);
+  if (!r.ok) throw new Error("no recording");
+  return URL.createObjectURL(await r.blob());
+}
+export async function deleteRecording(callId: number): Promise<void> {
+  await fetch(`/voip/calls/${callId}/recording`, { method: "DELETE" });
+}
+export const trainOnRecording = (callId: number) =>
+  postJSON<{ ok: boolean; error?: string }>(`/voip/calls/${callId}/recording/train`);

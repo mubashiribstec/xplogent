@@ -699,3 +699,56 @@ async def voip_sip_detect_ip() -> dict:
     return {"lan": lan, "internet": internet,
             "note": "inside Docker the LAN address is the container's: run `xplogent-docker sip on` "
                     "so the host address is known" if in_docker else ""}
+
+
+# ── Call recordings ──────────────────────────────────────────────────────────
+def _recording_path(call_id: int) -> Path | None:
+    from xplogent.voip.recording import recordings_dir
+
+    with Store(load_config().db_path) as store:
+        call = store.get_call(call_id) or {}
+    path = Path(call.get("recording") or "")
+    # Only ever serve files from the recordings folder.
+    if not call.get("recording") or not path.is_file() or recordings_dir().resolve() not in path.resolve().parents:
+        return None
+    return path
+
+
+@router.get("/voip/calls/{call_id}/recording")
+async def voip_call_recording(call_id: int):
+    from fastapi.responses import FileResponse
+
+    path = _recording_path(call_id)
+    if path is None:
+        return JSONResponse({"error": "no recording for this call"}, status_code=404)
+    return FileResponse(path, media_type="audio/wav", filename=f"call-{call_id}.wav")
+
+
+@router.delete("/voip/calls/{call_id}/recording")
+async def voip_call_recording_delete(call_id: int) -> dict:
+    path = _recording_path(call_id)
+    if path is not None:
+        path.unlink(missing_ok=True)
+    with Store(load_config().db_path) as store:
+        store.set_call_recording(call_id, "")
+    deps.audit_event("voip_recording_deleted", target=str(call_id), risk="low")
+    return {"ok": True}
+
+
+@router.post("/voip/calls/{call_id}/recording/train")
+async def voip_call_recording_train(call_id: int) -> dict:
+    """Add a recorded call to the training material (caller left, agent right)."""
+    import shutil
+
+    from xplogent.voip import training
+
+    path = _recording_path(call_id)
+    if path is None:
+        return {"ok": False, "error": "no recording for this call"}
+    dest = training.training_dir() / f"call-{call_id}.wav"
+    await asyncio.to_thread(shutil.copyfile, path, dest)
+    with Store(load_config().db_path) as store:
+        item_id = store.add_training_item("recording", f"call-{call_id}.wav", str(dest),
+                                          dest.stat().st_size, {"layout": "agent-right"})
+    _kick_training()
+    return {"ok": True, "item_id": item_id}

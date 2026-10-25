@@ -9,32 +9,55 @@ import pytest
 
 from tests.conftest import ScriptedProvider
 from tests.test_voip import FakeTTS, make_session, tone_mulaw
+from xplogent.core.config import load_config
 from xplogent.voip.service import (
     AI_DISCLOSURE,
+    AI_DISCLOSURE_RECORDED,
+    RECORDING_NOTICE,
     call_variables,
     effective_greeting,
     render_template,
 )
 
+NOREC = {"recording": {"enabled": False}}
+
 
 def test_disclosure_injected_when_greeting_lacks_it():
     g = effective_greeting({"greeting": "Hello, thanks for calling {company}. How can I help?",
-                            "company": "Acme"})
+                            "company": "Acme", **NOREC})
     assert g.startswith(AI_DISCLOSURE)
     assert "calling Acme." in g
 
 
 def test_disclosure_not_duplicated_when_greeting_has_it():
     text = "Hi, you're speaking with an AI assistant at Acme. How can I help?"
-    assert effective_greeting({"greeting": text}) == text
+    assert effective_greeting({"greeting": text, **NOREC}) == text
 
 
 def test_disclosure_toggle_off_keeps_operator_greeting():
-    assert effective_greeting({"greeting": "Hello there.", "disclose_ai": False}) == "Hello there."
+    assert effective_greeting({"greeting": "Hello there.", "disclose_ai": False, **NOREC}) == "Hello there."
 
 
 def test_disclosure_with_empty_greeting_still_discloses():
-    assert effective_greeting({}) == AI_DISCLOSURE
+    assert effective_greeting(NOREC) == AI_DISCLOSURE
+    assert effective_greeting({}) == AI_DISCLOSURE_RECORDED    # recording is on by default
+
+
+def test_recording_on_means_the_caller_hears_recorded():
+    from xplogent.voip.templates import TEMPLATES
+
+    # Shipped wording says "transcribed": with recording on it must say "recorded".
+    default = load_config().voip["greeting"]
+    for text in [default] + [t["greeting"] for t in TEMPLATES.values()]:
+        g = effective_greeting({"greeting": text, "company": "Acme"})
+        assert "recorded" in g and "transcribed" not in g, g
+    # A greeting with neither word still gets the notice, even with disclose_ai off.
+    g = effective_greeting({"greeting": "Hi, I'm an AI assistant. How can I help?"})
+    assert g.startswith(RECORDING_NOTICE)
+    g = effective_greeting({"greeting": "Hello.", "disclose_ai": False})
+    assert g == f"{RECORDING_NOTICE} Hello."
+    # Recording off: "transcribed" stays as written.
+    assert "transcribed" in effective_greeting({"greeting": default, **NOREC})
 
 
 def test_brain_guardrail_forbids_repeating_the_greeting():

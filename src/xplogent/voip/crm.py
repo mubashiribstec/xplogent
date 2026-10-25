@@ -105,6 +105,7 @@ def build_payload(cfg: Config, store, call_id: int, result: dict[str, Any],
         "transcript": [{"speaker": t["speaker"], "text": t["text"]}
                        for t in call.get("turns", [])],
         "test": bool(call.get("test")),
+        "recording_available": bool(call.get("recording")),   # audio stays on this server
     }
 
 
