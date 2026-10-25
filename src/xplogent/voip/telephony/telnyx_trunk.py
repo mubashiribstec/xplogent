@@ -48,6 +48,7 @@ class TelnyxTrunk:
         self._tasks: set[asyncio.Task] = set()
         self._seen_at: dict[str, float] = {}              # token / call id -> created
         self.call_events: dict[str, list[dict[str, Any]]] = {}   # call id -> webhook events (debug view)
+        self.lookups: dict[str, asyncio.Task] = {}      # call id -> pre-call CRM lookup in flight
 
     def _log_event(self, ccid: str, ev: dict[str, Any], leg: str = "") -> None:
         if not ccid:
@@ -153,6 +154,13 @@ class TelnyxTrunk:
         if ev["event"] == "call.initiated":
             self._remember(self.by_call, ccid, ev)
             if not is_outbound(ev):
+                from xplogent.voip import crm
+
+                if crm.lookup_enabled(cfg) and ev.get("from"):   # runs while the call connects
+                    while len(self.lookups) >= 50:
+                        self.lookups.pop(next(iter(self.lookups))).cancel()
+                    self.lookups[ccid] = asyncio.create_task(
+                        crm.lookup(cfg, ev["from"], direction="inbound", line="telnyx"))
                 c = client()
                 self._spawn(self._act(c, c.answer(ccid)))
         elif ev["event"] == "call.answered":
@@ -230,6 +238,10 @@ class TelnyxTrunk:
 
         session = brain = None
         call_id = 0
+        lookup_task = self.lookups.pop(ccid, None)
+        if lookup_task is not None:
+            with contextlib.suppress(Exception):
+                info = {**info, "crm_lookup": await lookup_task}   # bounded by the lookup's timeout
         try:
             # Inside the try: if building the session fails, the store, the Telnyx client
             # and the socket are still closed below.

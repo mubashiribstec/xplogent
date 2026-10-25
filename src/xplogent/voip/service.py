@@ -99,6 +99,26 @@ def call_variables(v: dict[str, Any], info: dict[str, Any],
     return variables
 
 
+def merge_crm_contact(contact: dict[str, Any] | None, crm: dict[str, Any], phone: str) -> dict[str, Any]:
+    """The CRM's view of the caller on top of the local record (which stays the
+    offline fallback and is not changed)."""
+    out = dict(contact or {"name": "", "phone": phone, "fields": {}})
+    fields = dict(out.get("fields") or {})
+    if crm.get("name") and not out.get("name"):
+        out["name"] = crm["name"]
+    if crm.get("company"):
+        fields.setdefault("company", crm["company"])
+    if crm.get("last_outcome"):
+        fields["last_crm_outcome"] = crm["last_outcome"]
+    out["fields"] = fields
+    if crm.get("notes"):
+        out["crm_notes"] = crm["notes"]
+    if crm.get("do_not_call"):
+        out["do_not_call"] = True
+    out.setdefault("source", "crm")
+    return out
+
+
 def load_playbook() -> str:
     """The distilled playbook (written by the training pipeline), if any."""
     path = data_dir() / "voip" / "playbook.md"
@@ -163,12 +183,15 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
     contact = store.get_contact(int(info["contact_id"])) if info.get("contact_id") else None
     if contact is None and customer:
         contact = store.find_contact_by_phone(customer)
+    lookup = info.get("crm_lookup") or {}
+    if lookup.get("found") and lookup.get("contact"):
+        contact = merge_crm_contact(contact, lookup["contact"], customer)
     if contact is not None and store.is_dnc(contact.get("phone") or customer):
         contact = {**contact, "do_not_call": True}
     direction = str(info.get("direction_label") or ("outbound" if is_outbound(info) else "inbound"))
     call_id = store.start_call(direction, info.get("from", ""), info.get("to", ""),
                                provider_call_id=info.get("call_control_id", ""),
-                               contact_id=contact["id"] if contact else None,
+                               contact_id=contact.get("id") if contact else None,
                                test=bool(info.get("test")), transport=str(info.get("transport", "")),
                                line=str(info.get("line", "")),
                                original_called_number=str(info.get("original_called_number") or ""),
@@ -242,6 +265,11 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         send_dtmf=send_dtmf if dtmf_on else None, recorder=_recorder(v, call_id),
         stream_stt=stream_stt, **session_kw)
     session.dtmf_enabled = dtmf_on
+    if lookup:
+        session.event("crm_lookup", ("found " + (lookup["contact"].get("name") or "a record")
+                                     if lookup.get("found") else "no record" if lookup.get("ok")
+                                     else f"failed: {lookup.get('error')}")
+                      + f" ({lookup.get('ms', 0)} ms{', cached' if lookup.get('cached') else ''})")
     return session, call_id, brain
 
 
@@ -412,6 +440,15 @@ class VoipService:
         # Both SIP lines share the "sip" transport; the line tag keeps them apart.
         meta = {"contact_id": contact["id"] if contact else None, "test": test,
                 "transport": "sip" if via in ("sip", "extension") else via}
+        if not test:
+            from xplogent.voip import crm
+
+            if crm.lookup_enabled(cfg):
+                found = await crm.lookup(cfg, number, direction="outbound",
+                                         line="extension" if via == "extension" else via)
+                if found.get("found") and (found.get("contact") or {}).get("do_not_call"):
+                    return {"ok": False, "error": "the CRM marks this number do-not-call"}
+                meta["crm_lookup"] = found
         if via in ("sip", "extension"):
             meta["line"] = via if via == "extension" else "trunk"
         if via in ("sip", "extension"):

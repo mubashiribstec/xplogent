@@ -219,6 +219,7 @@ voip:
     enabled: false
     base_url: ""                   # e.g. https://crm.example.com — POSTs go to {base_url}/api/xplogent/call-summary
     api_token_env: XPLOGENT_CRM_API_TOKEN   # env var / secrets-store name holding the bearer token (also the HMAC key)
+    lookup: true                   # ask the CRM who is calling before answering / dialling (POST {base_url}/api/xplogent/contact-lookup, 1.5 s max)
   fields: []                       # mandatory fields: the call CANNOT close successfully while a required field is missing (Part D enforcement). Example — uncomment to require a read-back-confirmed callback number:
     # - { name: callback_number, label: "best callback number", validator: phone, required: true, require_confirmed: true, default_country: "+44" }
     # - { name: caller_name, label: "caller's name", validator: nonempty, required: true }

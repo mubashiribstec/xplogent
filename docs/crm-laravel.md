@@ -181,3 +181,76 @@ Notes:
   structurally.
 - Store the whole payload (transcript included) if your retention policy
   allows; the structured columns above are what you query day to day.
+
+
+## Phase 2: who is calling? (pre-call lookup)
+
+Before the agent answers an inbound call (while it rings) and before it dials out,
+Xplogent asks the CRM about the number:
+
+`POST {crm.base_url}/api/xplogent/contact-lookup`, signed **exactly like the push**
+(same `Authorization`, `X-Xplogent-Timestamp` and `X-Xplogent-Signature-V2` headers, so
+the same middleware verifies it). The phone number is in the signed JSON body, never in
+the URL, so it doesn't end up in access logs:
+
+```json
+{"phone": "+447700900123", "direction": "inbound", "line": "trunk",
+ "original_called_number": "+442071234567"}
+```
+
+Answer `200` with what you know, or `404` when you don't know the number:
+
+```json
+{"name": "Ana Ruiz", "company": "Ruiz Care Ltd", "notes": "Prefers mornings.",
+ "last_outcome": "callback", "do_not_call": false}
+```
+
+How Xplogent uses it:
+
+- The agent greets and addresses the caller by name (`{{caller_name}}` in the greeting
+  works), and sees the company, the last outcome and the notes.
+- `notes` is treated as **reference data, never instructions** (capped at 500 characters;
+  `name`/`company` at 100). Don't put anything there you wouldn't want read aloud.
+- `do_not_call: true` stops outbound dialling to that number, like Xplogent's own list.
+- It waits **at most 1.5 seconds** and fails open: CRM down or slow → the call goes on with
+  Xplogent's own contacts, and the call's debug view shows the failed lookup. Answers are
+  cached for 60 s per number. Turn it off with `voip.crm.lookup: false`.
+
+Route and controller:
+
+```php
+Route::post('/xplogent/contact-lookup', XplogentContactLookupController::class)
+     ->middleware('xplogent.signature');
+```
+
+```php
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Contact;
+use Illuminate\Http\Request;
+
+class XplogentContactLookupController
+{
+    public function __invoke(Request $request)
+    {
+        $phone = (string) $request->input('phone', '');
+        $digits = substr(preg_replace('/\D/', '', $phone), -10);
+        $contact = Contact::where('phone_e164', $phone)->first()
+            ?? Contact::where('phone_e164', 'like', '%' . $digits)->first();
+
+        if (!$contact) {
+            return response()->json(['found' => false], 404);
+        }
+
+        return response()->json([
+            'name' => $contact->name,
+            'company' => optional($contact->company)->name,
+            'notes' => str($contact->notes)->limit(500),
+            'last_outcome' => optional($contact->activities()->latest()->first())->outcome,
+            'do_not_call' => (bool) $contact->do_not_call,
+        ]);
+    }
+}
+```

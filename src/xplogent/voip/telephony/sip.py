@@ -315,6 +315,19 @@ class SipTrunk(asyncio.DatagramProtocol):
                 return
         self._trace("out", msg, addr)
 
+    async def _crm_lookup(self, ident: dict[str, Any]) -> dict[str, Any] | None:
+        """Pre-call CRM lookup for an inbound caller (None when the CRM isn't set up)."""
+        if self.service is None:
+            return None
+        from xplogent.core.config import load_config
+        from xplogent.voip import crm
+
+        cfg = self.cfg or load_config()
+        if not crm.lookup_enabled(cfg) or not ident.get("caller"):
+            return None
+        return await crm.lookup(cfg, ident["caller"], direction="inbound", line=self.line,
+                                original_called_number=ident.get("original_called_number", ""))
+
     def _trace(self, direction: str, msg: SipMessage, addr) -> None:
         """Keep the SIP ladder of calls (not REGISTER/OPTIONS) for the debug view."""
         from xplogent.voip.debug import SipTrace
@@ -627,6 +640,9 @@ class SipTrunk(asyncio.DatagramProtocol):
             return
         self.calls[call.call_id] = call
         self._reply(req, addr, 180, "Ringing", to_tag=call.local_tag)
+        crm_lookup = await self._crm_lookup(ident)            # while it rings; 1.5 s at most
+        if call.state == "ended":                              # the caller gave up (CANCEL)
+            return
         ok = self._reply(req, addr, 200, "OK", to_tag=call.local_tag,
                          body=build_sdp(self.contact_ip, call.rtp.port, (codec,), dtmf_pt=call.rtp.dtmf_pt))
         call.state = "confirmed"
@@ -635,6 +651,8 @@ class SipTrunk(asyncio.DatagramProtocol):
                 "original_called_number": ident["original_called_number"],
                 "diversion_reason": ident["diversion_reason"], "via_queue": ident["via_queue"],
                 "queue_wait_s": ident["queue_wait_s"]}
+        if crm_lookup is not None:
+            info["crm_lookup"] = crm_lookup
         # Retransmit the 200 OK until the ACK arrives (UDP may drop it).
         data, wait = ok.encode(), T1
         deadline = time.monotonic() + self.ack_timeout

@@ -27,6 +27,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -155,6 +156,89 @@ async def deliver(cfg: Config, payload: dict[str, Any], *, attempts: int = 3,
     _log.warning("CRM delivery for call %s failed after %s attempts: %s",
                  call_id, attempts, last["detail"])
     return last
+
+
+# ── pre-call lookup (phase 2) ──────────────────────────────────────────────────
+_LOOKUP_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+LOOKUP_TIMEOUT_S = 1.5
+_CACHE_S = 60.0
+_LIMITS = {"name": 100, "company": 100, "notes": 500, "last_outcome": 50}
+
+
+def lookup_enabled(cfg: Config) -> bool:
+    return crm_enabled(cfg) and bool(crm_config(cfg).get("lookup", True))
+
+
+def _clean(value: Any, limit: int) -> str:
+    """CRM text is untrusted: plain, single-line-ish, bounded."""
+    text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", " ", str(value or ""))
+    return " ".join(text.split())[:limit]
+
+
+def _signed_headers(body: bytes, token: str) -> dict[str, str]:
+    ts = str(int(time.time()))
+    return {"Content-Type": "application/json", "Authorization": f"Bearer {token}",
+            "X-Xplogent-Timestamp": ts, "X-Xplogent-Signature": sign(body, token),
+            "X-Xplogent-Signature-V2": sign_v2(body, token, ts)}
+
+
+async def lookup(cfg: Config, phone: str, *, direction: str = "inbound", line: str = "",
+                 original_called_number: str = "", timeout_s: float = LOOKUP_TIMEOUT_S,
+                 transport=None) -> dict[str, Any]:
+    """Ask the CRM who is calling: ``POST {base_url}/api/xplogent/contact-lookup``,
+    signed exactly like the push. Fail-open and never raises: a slow or broken CRM
+    means the call goes on with the local contact store.
+
+    Returns ``{"ok", "found", "contact", "error", "ms", "cached"}``; ``contact`` is
+    ``{name, company, notes, last_outcome, do_not_call}`` with every text capped.
+    """
+    import httpx
+
+    started = time.monotonic()
+    out: dict[str, Any] = {"ok": False, "found": False, "contact": None, "error": "", "ms": 0.0,
+                           "cached": False}
+    if not phone or not lookup_enabled(cfg):
+        out["error"] = "not configured"
+        return out
+    token = os.environ.get(token_env(cfg), "")
+    if not token:
+        out["error"] = f"no API token ({token_env(cfg)} is not set)"
+        return out
+    hit = _LOOKUP_CACHE.get(phone)
+    if hit and time.monotonic() - hit[0] < _CACHE_S:
+        return {**hit[1], "cached": True, "ms": 0.0}
+    body = json.dumps({"phone": phone, "direction": direction, "line": line,
+                       "original_called_number": original_called_number}).encode()
+    url = str(crm_config(cfg).get("base_url", "")).rstrip("/") + "/api/xplogent/contact-lookup"
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
+            resp = await asyncio.wait_for(
+                client.post(url, content=body, headers=_signed_headers(body, token)), timeout=timeout_s)
+        if resp.status_code == 404:
+            out.update(ok=True)                              # the CRM doesn't know this number
+        elif resp.status_code >= 300:
+            out["error"] = f"HTTP {resp.status_code}"
+        else:
+            data = resp.json()
+            data = data.get("contact", data) if isinstance(data, dict) else {}
+            if isinstance(data, dict) and any(data.get(k) for k in (*_LIMITS, "do_not_call")):
+                contact = {k: _clean(data.get(k), n) for k, n in _LIMITS.items()}
+                contact["do_not_call"] = data.get("do_not_call") is True
+                out.update(ok=True, found=True, contact=contact)
+            else:
+                out.update(ok=True)
+    except TimeoutError:
+        out["error"] = f"timed out after {timeout_s:g} s"
+    except Exception as exc:  # noqa: BLE001 - fail open
+        out["error"] = f"{type(exc).__name__}: {exc}"[:200]
+    out["ms"] = round((time.monotonic() - started) * 1000, 1)
+    if out["ok"]:
+        _LOOKUP_CACHE[phone] = (time.monotonic(), dict(out))
+        while len(_LOOKUP_CACHE) > 1000:
+            _LOOKUP_CACHE.pop(next(iter(_LOOKUP_CACHE)))
+    else:
+        _log.warning("CRM lookup for a %s call failed (%s): using local contacts", direction, out["error"])
+    return out
 
 
 def enqueue_delivery(cfg: Config, payload: dict[str, Any]) -> None:

@@ -279,7 +279,10 @@ live, especially before outbound calling. This is engineering documentation, not
   transcript — 3 attempts, backoff, delivery log at
   `voip/crm_deliveries.jsonl`. Nothing is sent until the API token is set
   (Calls → Call agent, stored encrypted as `XPLOGENT_CRM_API_TOKEN`); **Send
-  test** posts a sample. See `docs/crm-laravel.md`.
+  test** posts a sample. Before answering (while it rings) and before dialling, the
+  agent also asks the CRM who the number is (signed `contact-lookup`, 1.5 s max, fails
+  open to local contacts; the CRM's `do_not_call` blocks dialling). See
+  `docs/crm-laravel.md`.
 - **Knowledge gaps.** Questions the knowledge base couldn't answer are logged
   to `voip/knowledge_gaps.jsonl` (size-capped) and ranked in Calls → Call
   agent — that list is what to teach the agent next.
