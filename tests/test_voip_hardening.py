@@ -263,3 +263,29 @@ async def test_idle_prompt_is_tracked_and_interruptible():
     watchdog.cancel()
     await session.stop()
     assert not hung
+
+
+@pytest.mark.asyncio
+async def test_caller_cannot_cut_off_the_greeting():
+    """The greeting carries the AI + recording disclosure: speech over it is
+    answered after it, and never stops it (a real Asterisk call cut it off)."""
+    prov = ScriptedProvider([Message(role=Role.ASSISTANT, content="We open at nine.")])
+    tts = FakeTTS(chunks=15)                  # 1.5 s greeting, played in real time
+    session, sent, cleared, turns, _ = make_session(
+        prov, tts=tts, greeting="You're speaking with an AI assistant, and this call is recorded.")
+    await session.start()
+    for _ in range(50):
+        if session._speaking:
+            break
+        await asyncio.sleep(0.02)
+    await speak_utterance(session)         # the caller talks over the greeting
+    assert not cleared and session._greeting_task is not None and not session._greeting_task.done()
+    for _ in range(200):
+        if any(s == "agent" and "nine" in t for s, t in turns):
+            break
+        await asyncio.sleep(0.02)
+    assert session._greeting_task.done() and not session._greeting_task.cancelled()
+    assert sum(len(f) for f in sent) >= 12000      # the whole 1.5 s greeting went out
+    assert [s for s, _ in turns] == ["agent", "caller", "agent"]
+    assert tts.spoken == ["You're speaking with an AI assistant, and this call is recorded.", "We open at nine."]
+    await session.stop()

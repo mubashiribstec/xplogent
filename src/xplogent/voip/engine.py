@@ -100,13 +100,16 @@ class CallSession:
         self._idle_prompts = 0
         self._speech_end_at = 0.0
         self._watchdog: asyncio.Task | None = None
+        # The greeting carries the AI and recording disclosure: it always plays to
+        # the end. Speech over it is answered after it, never cuts it off.
+        self._greeting_task: asyncio.Task | None = None
 
     # -- lifecycle ---------------------------------------------------------------
     async def start(self) -> None:
         self._watchdog = asyncio.create_task(self._watch())
         if self.greeting:
             self._record("agent", self.greeting)
-            self._turn_task = asyncio.create_task(self._say(self.greeting))
+            self._greeting_task = self._turn_task = asyncio.create_task(self._say(self.greeting))
 
     async def stop(self) -> None:
         self.finished.set()
@@ -162,6 +165,8 @@ class CallSession:
                 await self._begin_turn(self.vad.take())
 
     async def _barge_in(self) -> None:
+        if self._greeting_playing():
+            return          # the disclosure is never cut off; the caller is answered after it
         _log.info("barge-in: caller interrupted the agent")
         if self._turn_task and not self._turn_task.done():
             self._turn_task.cancel()
@@ -170,9 +175,31 @@ class CallSession:
             with contextlib.suppress(Exception):
                 await self.clear_audio()
 
-    async def _begin_turn(self, pcm8k: bytes) -> None:
-        if self._turn_task and not self._turn_task.done():
+    def _greeting_playing(self) -> bool:
+        return self._greeting_task is not None and not self._greeting_task.done()
+
+    def _cancel_turn(self) -> None:
+        """Stop the reply in progress (but never the greeting)."""
+        if self._turn_task and not self._turn_task.done() and self._turn_task is not self._greeting_task:
             self._turn_task.cancel()
+
+    async def _after_greeting(self) -> None:
+        if self._greeting_playing():
+            with contextlib.suppress(Exception):
+                await asyncio.shield(self._greeting_task)
+            self._speech_end_at = time.time()   # latency counts from when the agent may speak
+
+    async def _then(self, coro) -> None:
+        """Run a caller-triggered reply once the greeting has finished."""
+        try:
+            await self._after_greeting()
+        except BaseException:
+            coro.close()
+            raise
+        await coro
+
+    async def _begin_turn(self, pcm8k: bytes) -> None:
+        self._cancel_turn()
         self._turn_task = asyncio.create_task(self._turn(pcm8k))
 
     # -- one turn ----------------------------------------------------------------
@@ -185,8 +212,10 @@ class CallSession:
             raise
         except Exception:  # noqa: BLE001 - one bad turn must not drop the call
             _log.exception("speech-to-text failed")
+            await self._after_greeting()
             await self._say("Sorry, I had a problem. Could you say that again?")
             return
+        await self._after_greeting()
         await self._reply((text or "").strip())
 
     async def on_text(self, text: str) -> None:
@@ -196,9 +225,7 @@ class CallSession:
         self._speech_end_at = time.time()
         if self._speaking:
             await self._barge_in()
-        if self._turn_task and not self._turn_task.done():
-            self._turn_task.cancel()
-        self._turn_task = asyncio.create_task(self._reply(text.strip()))
+        self._run_turn(self._reply(text.strip()))
 
     async def _reply(self, text: str, record_as: str | None = None) -> None:
         try:
@@ -293,9 +320,8 @@ class CallSession:
             self._run_turn(self._reply(f"[keypad: {digits}]", record_as=f"(keypad: {' '.join(digits)})"))
 
     def _run_turn(self, coro) -> None:
-        if self._turn_task is not None and not self._turn_task.done():
-            self._turn_task.cancel()
-        self._turn_task = asyncio.create_task(coro)
+        self._cancel_turn()
+        self._turn_task = asyncio.create_task(self._then(coro))
 
     async def _quick_key(self, digit: str, action: str) -> None:
         self._record("caller", f"(keypad: {digit})")
