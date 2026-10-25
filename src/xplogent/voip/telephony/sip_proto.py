@@ -166,6 +166,51 @@ def record_routes(msg: SipMessage) -> list[str]:
     return split_header_values(msg.get_all("Record-Route"))
 
 
+def call_identity(msg: SipMessage, *, trusted: bool,
+                  queue_numbers: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
+    """Who is calling, what they dialled, and whether they came through a queue.
+
+    Two meanings, kept apart:
+    - caller ID: ``P-Asserted-Identity`` → ``Remote-Party-ID`` → ``From``;
+    - original number dialled: the *oldest* ``Diversion`` entry (RFC 5806 lists
+      the newest first), else the first ``History-Info`` entry, else ``To``.
+
+    The PAI/RPID/Diversion/History-Info/X-Xplogent-* headers are only believed
+    when the INVITE came from the PBX itself (``trusted``): anyone else could
+    simply write them. ``via_queue`` needs the diverting number in
+    ``queue_numbers`` or FreePBX's ``X-Xplogent-Via: queue`` — a bare Diversion
+    is ordinary call forwarding too.
+    """
+    out: dict[str, Any] = {"caller": user_of(msg.get("From")), "called": user_of(msg.get("To")),
+                           "original_called_number": "", "diversion_reason": "",
+                           "via_queue": False, "queue_wait_s": None}
+    if not trusted:
+        return out
+    for name in ("P-Asserted-Identity", "Remote-Party-ID"):
+        entries = split_header_values(msg.get_all(name))
+        user = next((user_of(e) for e in entries if user_of(e)), "")
+        if user:
+            out["caller"] = user
+            break
+    diversions = split_header_values(msg.get_all("Diversion"))
+    if diversions:
+        oldest = diversions[-1]
+        out["original_called_number"] = user_of(oldest)
+        out["diversion_reason"] = header_param(oldest, "reason")
+    else:
+        history = split_header_values(msg.get_all("History-Info"))
+        if history:
+            out["original_called_number"] = user_of(history[0])
+    diverted_by = {user_of(d) for d in diversions}
+    queues = {str(q).strip() for q in queue_numbers if str(q).strip()}
+    out["via_queue"] = (msg.get("X-Xplogent-Via").strip().lower() == "queue"
+                        or bool(diverted_by & queues))
+    wait = msg.get("X-Xplogent-Queue-Wait").strip()
+    if wait.isdigit():
+        out["queue_wait_s"] = int(wait)
+    return out
+
+
 def new_branch() -> str:
     return "z9hG4bK" + secrets.token_hex(8)
 

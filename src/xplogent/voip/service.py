@@ -91,6 +91,8 @@ def call_variables(v: dict[str, Any], info: dict[str, Any],
         "caller_phone": customer,
         "direction": "outbound" if is_outbound(info) else "inbound",
         "line": str(info.get("line", "")),
+        "original_called_number": str(info.get("original_called_number") or ""),
+        "queue_wait_s": info.get("queue_wait_s") or "",
     }
     for key, value in ((contact or {}).get("fields") or {}).items():
         variables.setdefault(str(key), value)
@@ -168,7 +170,11 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
                                provider_call_id=info.get("call_control_id", ""),
                                contact_id=contact["id"] if contact else None,
                                test=bool(info.get("test")), transport=str(info.get("transport", "")),
-                               line=str(info.get("line", "")))
+                               line=str(info.get("line", "")),
+                               original_called_number=str(info.get("original_called_number") or ""),
+                               via_queue=bool(info.get("via_queue")),
+                               diversion_reason=str(info.get("diversion_reason") or ""),
+                               queue_wait_s=info.get("queue_wait_s"))
 
     if provider is None:
         from xplogent.providers.registry import build_provider
@@ -183,6 +189,14 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         persona += (" This call is on the internal PBX extension line, not a direct "
                     "external line: the caller is a colleague, an internal test, or "
                     "someone transferred or overflowed from the office phone system.")
+    if info.get("via_queue"):
+        waited = info.get("queue_wait_s")
+        persona += (" The caller waited in the office phone queue"
+                    + (f" for about {int(waited)} seconds" if waited else "")
+                    + " before reaching you (nobody was free): briefly thank them for "
+                      "waiting, once, then help them.")
+    if info.get("original_called_number"):
+        persona += f" They dialled {info['original_called_number']}."
     silence_cfg = v.get("silence") or {}
     session_kw.setdefault("idle_prompt_s", float(silence_cfg.get("prompt_after_s", 12.0)))
     session_kw.setdefault("idle_hangup_s", float(silence_cfg.get("hangup_after_s", 30.0)))
@@ -208,6 +222,8 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
                       contact=contact, retrieve=retrieve, store=store, can_transfer=can_transfer,
                       can_send_dtmf=send_dtmf is not None and dtmf_on)
     greeting_v = {**v, "greeting": template["greeting"]} if template else v
+    if info.get("via_queue") and str(v.get("queue_greeting") or "").strip():
+        greeting_v = {**greeting_v, "greeting": v["queue_greeting"]}   # disclosure rules still apply
     greeting = render_template(effective_greeting(greeting_v), variables)
     vad_cfg = v.get("vad", {}) or {}
     session = CallSession(

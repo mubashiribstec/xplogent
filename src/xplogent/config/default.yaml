@@ -193,6 +193,7 @@ voip:
     expires: 300
     allow_from: []                 # extra IPs allowed to send calls (the server is always allowed)
     strict_source: false           # true: refuse calls from other addresses even if addressed to us
+    queue_numbers: []              # FreePBX queue numbers that overflow to this extension: calls diverted from them are marked 'via queue'
     max_calls: 4
     ring_timeout: 45               # seconds an outbound call may ring before it is cancelled
   public_url: ""                   # e.g. https://agent.example.com  (no trailing slash)
@@ -200,6 +201,7 @@ voip:
   api_key_env: TELNYX_API_KEY      # env var holding the carrier API key
   company: "our company"
   greeting: "Hello, thanks for calling {company}. You're speaking with an AI assistant, and this call is transcribed so we can help you better. How can I help you?"
+  queue_greeting: ""               # optional greeting for callers who came through a PBX queue (blank = the greeting above); the AI/recording disclosure is still added
   disclose_ai: true                # system injects the AI disclosure into the greeting if the greeting text doesn't already contain it (UK/EU transparency); set false only where disclosure is handled another way
   model: ""                        # LLM for calls; blank = use `model`. Pick a small fast streaming model.
   transfer_number: ""              # human hand-off number (E.164), e.g. +15551234567

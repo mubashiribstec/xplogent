@@ -95,7 +95,9 @@ export function Calls() {
                       {c.direction === "inbound" ? <PhoneIncoming size={14} /> : <PhoneOutgoing size={14} />}</td>
                     <td className="dim">{fmtTime(c.started_at)}</td>
                     <td>{c.contact_name || (c.direction === "outbound" ? c.to_number : c.from_number) || "unknown"}
-                      {!!c.test && <span className="badge" style={{ marginLeft: 6 }}>test</span>}</td>
+                      {!!c.test && <span className="badge" style={{ marginLeft: 6 }}>test</span>}
+                      {!!c.via_queue && <span className="badge warn" style={{ marginLeft: 6 }}
+                        title={`came through the office queue${c.queue_wait_s ? ` after ${c.queue_wait_s}s` : ""}${c.original_called_number ? `; dialled ${c.original_called_number}` : ""}`}>via queue</span>}</td>
                     <td>{fmtDur(c)}{c.status === "active" && <span className="badge warn" style={{ marginLeft: 6 }}>live</span>}</td>
                     <td>{c.outcome ? <span className="badge">{c.outcome}</span> : <span className="dim">—</span>}</td>
                     <td className="dim">${(c.cost ?? 0).toFixed(3)}</td>

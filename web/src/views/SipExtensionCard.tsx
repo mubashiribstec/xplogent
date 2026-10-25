@@ -87,6 +87,7 @@ export function SipExtensionCard({ cfg, toast, onChange }: { cfg: Record<string,
           {input("domain", "SIP domain (blank = server)", "", 150)}
           {input("ring_timeout", "Ring time for outbound calls (s)", "45", 90, "number")}
           {input("allow_from", "Also accept calls from (IPs)", "", 170)}
+          {input("queue_numbers", "Queue numbers that overflow here (marks calls 'via queue')", "600, 601", 200)}
           <label className="row" style={{ gap: 6 }}>
             <input type="checkbox" checked={!!val("strict_source", false)} onChange={(e) => set("strict_source", e.target.checked)} />
             only accept calls from these addresses</label>

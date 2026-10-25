@@ -49,6 +49,7 @@ from xplogent.voip.telephony.sip_proto import (  # noqa: F401 - re-exported
     USER_AGENT,
     SipMessage,
     build_sdp,
+    call_identity,
     choose_codec,
     digest_authorization,
     header_param,
@@ -88,6 +89,7 @@ class SipSettings:
     ring_timeout: float = 45.0
     strict_source: bool = False          # accept calls only from the server / allow_from addresses
     enabled: bool = False                # only the extension line uses this: off = fully inert
+    queue_numbers: list[str] = field(default_factory=list)   # PBX queues that overflow to this line
 
     @classmethod
     def from_config(cls, v: dict[str, Any], block: str = "sip", *,
@@ -112,6 +114,9 @@ class SipSettings:
         allow = s.get("allow_from") or []
         if isinstance(allow, str):
             allow = [a.strip() for a in allow.split(",") if a.strip()]
+        queues = s.get("queue_numbers") or []
+        if isinstance(queues, str):
+            queues = [q.strip() for q in queues.split(",") if q.strip()]
         return cls(server=str(s.get("server") or "").strip(), username=str(s.get("username") or "").strip(),
                    password=os.environ.get(password_env, ""), port=int(s.get("port") or 5060),
                    auth_username=str(s.get("auth_username") or "").strip(),
@@ -124,7 +129,8 @@ class SipSettings:
                    allow_from=list(allow), max_calls=int(s.get("max_calls") or 4),
                    strict_source=bool(s.get("strict_source", False)),
                    ring_timeout=float(s.get("ring_timeout") or 45),
-                   enabled=bool(s.get("enabled", False)))
+                   enabled=bool(s.get("enabled", False)),
+                   queue_numbers=[str(q) for q in queues])
 
     @classmethod
     def extension_from_config(cls, v: dict[str, Any]) -> SipSettings:
@@ -568,12 +574,14 @@ class SipTrunk(asyncio.DatagramProtocol):
         if codec is None or not sdp.get("port"):
             self._reply(req, addr, 488, "Not Acceptable Here")
             return
+        # Identity headers (PAI, Diversion, queue hints) count only when the PBX sent them.
+        ident = call_identity(req, trusted=addr[0] in self.trusted, queue_numbers=self.s.queue_numbers)
         call = SipCall(call_id=req.call_id, local_tag=new_tag(), outbound=False,
                        local_uri=req.get("To"), remote_uri=req.get("From"),
                        remote_tag=header_param(req.get("From"), "tag"),
                        remote_target=uri_of(req.get("Contact") or req.get("From")),
                        route_set=record_routes(req), invite=req,
-                       number=user_of(req.get("From")))
+                       number=ident["caller"])
         try:
             call.rtp = await self._open_rtp(codec, sdp)
         except Exception as exc:  # noqa: BLE001
@@ -586,7 +594,10 @@ class SipTrunk(asyncio.DatagramProtocol):
                          body=build_sdp(self.contact_ip, call.rtp.port, (codec,), dtmf_pt=call.rtp.dtmf_pt))
         call.state = "confirmed"
         info = {"direction": "inbound", "from": call.number, "to": user_of(req.get("To")),
-                "call_control_id": call.call_id, "transport": "sip", "line": self.line}
+                "call_control_id": call.call_id, "transport": "sip", "line": self.line,
+                "original_called_number": ident["original_called_number"],
+                "diversion_reason": ident["diversion_reason"], "via_queue": ident["via_queue"],
+                "queue_wait_s": ident["queue_wait_s"]}
         # Retransmit the 200 OK until the ACK arrives (UDP may drop it).
         data, wait = ok.encode(), T1
         deadline = time.monotonic() + self.ack_timeout
@@ -841,7 +852,8 @@ class SipTrunk(asyncio.DatagramProtocol):
                 call_id=row_id, session=session, brain=brain, number=call.number,
                 direction="outbound" if call.outbound else "inbound", transport="sip",
                 test=bool(info.get("test")), contact_name=str((brain.contact or {}).get("name") or ""),
-                transfer_to=transfer_to, ref=call.call_id, line=self.line))
+                transfer_to=transfer_to, ref=call.call_id, line=self.line,
+                via_queue=bool(info.get("via_queue"))))
         await session.start()
 
         async def supervise() -> None:

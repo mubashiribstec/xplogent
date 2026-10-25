@@ -273,6 +273,7 @@ export interface CallRow {
   id: number; direction: string; contact_name?: string | null; from_number: string; to_number: string;
   status: string; outcome?: string | null; summary?: string | null; cost: number;
   started_at: number; ended_at?: number | null; test?: number; transport?: string; recording?: string;
+  line?: string; via_queue?: number; original_called_number?: string; queue_wait_s?: number | null;
 }
 export interface CallTurn { speaker: string; text: string; created_at: number; }
 export interface Contact {
@@ -285,7 +286,7 @@ export interface VoipStatus {
 }
 export interface LiveCallInfo {
   call_id: number; number: string; direction: string; transport: string; test: boolean;
-  contact_name: string; started: number; paused: boolean; notes: string[]; can_transfer: boolean;
+  contact_name: string; started: number; paused: boolean; notes: string[]; can_transfer: boolean; via_queue?: boolean;
 }
 export async function getVoipStatus(): Promise<VoipStatus> { return (await fetch("/voip/status")).json(); }
 export async function getCalls(): Promise<{ calls: CallRow[] }> { return (await fetch("/voip/calls")).json(); }

@@ -35,6 +35,11 @@ Body (field completeness comes from the Part D mandatory-field schema — a
   "from": "+447700900123",
   "to": "2000",
   "transport": "sip",
+  "line": "extension",
+  "via_queue": true,
+  "original_called_number": "+442071234567",
+  "diversion_reason": "unconditional",
+  "queue_wait_s": 35,
   "started_at": "2026-10-23T10:15:22+00:00",
   "duration_s": 187,
   "outcome": "callback",
@@ -48,9 +53,14 @@ Body (field completeness comes from the Part D mandatory-field schema — a
   "cost": 0.0374,
   "turn_timings": [{"stt_ms": 210.0, "llm_first_ms": 640.0}],
   "transcript": [{"speaker": "caller", "text": "…"}, {"speaker": "agent", "text": "…"}],
-  "test": false
+  "test": false,
+  "recording_available": true
 }
 ```
+
+`via_queue` / `original_called_number` / `diversion_reason` / `queue_wait_s` describe a
+FreePBX queue overflow (see "Queue overflow" in `docs/voip.md`); they are `false` / `""` /
+`null` on other calls. Unknown fields should be ignored, so new ones never break the endpoint.
 
 Delivery: 3 attempts with exponential backoff; every attempt is logged on the
 Xplogent side (`voip/crm_deliveries.jsonl`). Enable it in config:

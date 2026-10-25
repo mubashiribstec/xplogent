@@ -59,7 +59,7 @@ function LiveCall({ call, toast, onChange }: { call: LiveCallInfo; toast: Toaste
       <div className="row wrap" style={{ gap: 8, justifyContent: "space-between" }}>
         <div>
           <b>{call.contact_name || call.number || "unknown"}</b>{" "}
-          <span className="dim">{call.direction} · {call.transport}{call.test && call.direction !== "test" ? " · test" : ""} · {since(call.started)}</span>
+          <span className="dim">{call.direction} · {call.transport}{call.test && call.direction !== "test" ? " · test" : ""}{call.via_queue ? " · via queue" : ""} · {since(call.started)}</span>
           {call.paused && <span className="badge warn" style={{ marginLeft: 6 }}>AI paused</span>}
         </div>
         <div className="row" style={{ gap: 6 }}>

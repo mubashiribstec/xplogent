@@ -225,6 +225,10 @@ _MIGRATIONS = [
     ("calls", "transport", "TEXT DEFAULT ''"),  # telnyx | sip | browser
     ("calls", "line", "TEXT DEFAULT ''"),       # SIP line: trunk | extension ('' otherwise)
     ("calls", "recording", "TEXT DEFAULT ''"),  # path of the call's WAV (voip.recording)
+    ("calls", "original_called_number", "TEXT DEFAULT ''"),   # number the caller dialled (SIP Diversion)
+    ("calls", "via_queue", "INTEGER DEFAULT 0"),               # reached the AI through a PBX queue
+    ("calls", "diversion_reason", "TEXT DEFAULT ''"),
+    ("calls", "queue_wait_s", "INTEGER"),                      # seconds waited in the queue, if the PBX said
 ]
 # Stored in the database (PRAGMA user_version): changes whenever the schema text or
 # the migration list changes, so existing databases get upgraded automatically.
@@ -905,12 +909,16 @@ class Store:
 
     def start_call(self, direction: str, from_number: str, to_number: str,
                    provider_call_id: str = "", contact_id: int | None = None, *,
-                   test: bool = False, transport: str = "", line: str = "") -> int:
+                   test: bool = False, transport: str = "", line: str = "",
+                   original_called_number: str = "", via_queue: bool = False,
+                   diversion_reason: str = "", queue_wait_s: int | None = None) -> int:
         cur = self._write(
             "INSERT INTO calls (direction, contact_id, from_number, to_number, provider_call_id, "
-            "status, started_at, test, transport, line) VALUES (?,?,?,?,?,'active',?,?,?,?)",
+            "status, started_at, test, transport, line, original_called_number, via_queue, "
+            "diversion_reason, queue_wait_s) VALUES (?,?,?,?,?,'active',?,?,?,?,?,?,?,?)",
             (direction, contact_id, from_number, to_number, provider_call_id, time.time(),
-             int(test), transport, line))
+             int(test), transport, line, original_called_number, int(via_queue),
+             diversion_reason, queue_wait_s))
         return int(cur.lastrowid)
 
     def add_call_turn(self, call_id: int, speaker: str, text: str) -> None:

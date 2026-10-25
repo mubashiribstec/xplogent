@@ -33,12 +33,13 @@ class LiveCall:
     # Transport-level transfer to a given number (None: this line can't transfer).
     transfer_to: Callable[[str], Awaitable[None]] | None = None
     ref: str = ""                       # carrier call id (Telnyx call_control_id / SIP Call-ID)
+    via_queue: bool = False             # reached the AI through a PBX queue
     started: float = field(default_factory=time.time)
 
     def summary(self) -> dict[str, Any]:
         return {"call_id": self.call_id, "number": self.number,
                 "direction": self.direction, "transport": self.transport, "line": self.line,
-                "test": self.test,
+                "test": self.test, "via_queue": self.via_queue,
                 "contact_name": self.contact_name, "started": self.started,
                 "paused": self.brain.paused, "notes": list(self.brain.notes),
                 "can_transfer": self.transfer_to is not None}

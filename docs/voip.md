@@ -79,6 +79,61 @@ the agent knows it is on an internal/PBX call. **FreePBX side**: Applications �
 Extensions → add a **PJSIP** extension for the AI; keep NAT on (rtp_symmetric,
 force_rport, rewrite_contact) and allow ulaw/alaw.
 
+#### Queue overflow: who called, what they dialled, how long they waited
+
+When a FreePBX queue overflows to the agent, the agent can know it. It reads, **only from the
+PBX itself** (headers from anyone else are ignored, so they can't be faked):
+
+- the caller's number from `P-Asserted-Identity` (then `Remote-Party-ID`, then `From`);
+- the number they originally dialled from the oldest `Diversion` entry (or `History-Info`);
+- "came through a queue" when the diverting number is in **Queue numbers that overflow here**
+  (PBX extension card, `voip.sip_extension.queue_numbers`) or FreePBX sends
+  `X-Xplogent-Via: queue`, plus the wait from `X-Xplogent-Queue-Wait` (seconds).
+
+The call is then marked **via queue**, the agent thanks the caller once for waiting, and the call
+record and CRM payload carry `via_queue`, `original_called_number`, `diversion_reason` and
+`queue_wait_s`. `voip.queue_greeting` can replace the greeting for these callers (the AI and
+recording disclosure is still added).
+
+FreePBX side, on the AI's PJSIP extension (Advanced tab): **Send RPID/PAI** → *Send
+P-Asserted-Identity header* and **Trust RPID/PAI** → *Yes* (needed for the caller's number), and
+keep **Send Diversion** on (the default). Then add this to `/etc/asterisk/extensions_custom.conf`
+(2000 = the AI's extension; change the `VoiceMail` line to your voicemail box or ring group),
+reload, create a **Custom Destination** with target `xplogent-overflow,s,1`, and pick it as the
+queue's **Fail Over Destination**:
+
+```
+[xplogent-overflow]
+exten => s,1,Set(__XPL_WAIT=${CDR(duration)})
+ same => n,Set(REDIRECTING(from-num)=${FROM_DID})   ; the number the caller dialled
+ same => n,Set(REDIRECTING(from-pres)=allowed)
+ same => n,Set(REDIRECTING(reason)=no_answer)
+ same => n,Set(REDIRECTING(count)=1)
+ same => n,Dial(PJSIP/2000,60,b(xplogent-headers^s^1))
+ same => n,VoiceMail(100@default,u)        ; AI busy or down: never strand the caller
+ same => n,Hangup()
+
+[xplogent-headers]
+exten => s,1,Set(PJSIP_HEADER(add,X-Xplogent-Via)=queue)
+ same => n,Set(PJSIP_HEADER(add,X-Xplogent-Queue-Wait)=${XPL_WAIT})
+ same => n,Return()
+```
+
+This exact dialplan was tested on Asterisk 23 (caller ID, dialled number, queue flag and wait
+time arrive; with the AI unregistered the caller lands on the fallback line). The wait is the
+call's age when it reaches the AI, so it includes any IVR time before the queue.
+
+#### When the AI line is full or down
+
+Each SIP line takes `max_calls` calls at once (4 by default); the next caller gets "busy". The
+Calls page warns when a line is nearly full and counts callers who got busy, but the caller
+must still go somewhere. In FreePBX, give the AI's extension a fallback **behind** it:
+
+- Extension → Advanced → **Optional Destinations**: set *Busy* and *Not Reachable* to
+  voicemail or a ring group (Not Reachable also covers "the AI server is down / unregistered").
+- If you use the custom destination above, its line after `Dial` is that fallback.
+- Keep the queue's own timeout/fail-over chain ending at a person or voicemail.
+
 Limits: UDP only (no TCP/TLS/SRTP), G.711 μ-law/A-law, two SIP accounts (trunk +
 extension). DTMF uses RFC 4733 telephone-events and works both ways when the far end
 offers it: callers can use the keypad (`voip.dtmf` configures what keys do), and the

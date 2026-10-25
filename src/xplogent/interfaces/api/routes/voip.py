@@ -579,10 +579,13 @@ def _sip_updates(body: dict, fields: dict) -> tuple[dict, str]:
             return {}, f"{key} must be a {kind.__name__}"
         if kind is str:
             updates[key] = updates[key].strip()
-    if "allow_from" in body:
-        raw = body["allow_from"]
-        updates["allow_from"] = [a.strip() for a in (raw if isinstance(raw, list) else str(raw).split(","))
-                                 if str(a).strip()]
+    for key in ("allow_from", "queue_numbers"):
+        if key in body:
+            raw = body[key]
+            updates[key] = [str(a).strip() for a in (raw if isinstance(raw, list) else str(raw).split(","))
+                            if str(a).strip()]
+    if any(not re.fullmatch(r"\+?[0-9*#]{1,20}", q) for q in updates.get("queue_numbers", [])):
+        return {}, "queue numbers must be extension/queue numbers like 600"
     host = updates.get("server", "")
     if host and not re.fullmatch(r"[A-Za-z0-9.\-]+", host):
         return {}, "server must be a host name or IP (no sip:, no port)"
