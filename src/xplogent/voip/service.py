@@ -165,6 +165,10 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         resolve_transfer_number(v, transport=str(info.get("transport", ""))))
     variables = call_variables(v, info, contact, customer)
     template = get_template(v.get("template"))
+    if template and template["direction"] != ("outbound" if is_outbound(info) else "inbound"):
+        # An outbound screener's script must never greet an inbound caller
+        # ("is that {{candidate_name}}?"), nor the other way round.
+        template = None
     playbook_text = template["playbook"] if template else load_playbook()
     field_configs = list(template["fields"]) if template else []
     field_configs += list(v.get("fields") or [])
@@ -200,34 +204,30 @@ def knowledge_gap_path():
 
 def top_knowledge_gaps(limit: int = 20) -> list[dict[str, Any]]:
     """The knowledge-gap report: most-asked questions the knowledge base
-    could not answer, most frequent first."""
-    import json
+    could not answer, most frequent first (with when each was last asked)."""
     from collections import Counter
 
-    try:
-        lines = knowledge_gap_path().read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return []
-    counts = Counter()
-    for line in lines:
-        try:
-            counts[str(json.loads(line).get("query", "")).strip()] += 1
-        except Exception:  # noqa: BLE001 - skip a corrupt line, keep the report
-            continue
-    counts.pop("", None)
-    return [{"query": q, "count": n} for q, n in counts.most_common(limit)]
+    from xplogent.voip import jsonl
+
+    counts: Counter[str] = Counter()
+    latest: dict[str, tuple[str, float]] = {}   # key -> (wording last used, when)
+    for rec in jsonl.read(knowledge_gap_path()):
+        query = " ".join(str(rec.get("query", "")).split())
+        if query:
+            counts[query.lower()] += 1
+            latest[query.lower()] = (query, float(rec.get("ts") or 0))
+    return [{"query": latest[k][0], "count": n, "last_ts": latest[k][1]}
+            for k, n in counts.most_common(limit)]
 
 
 def log_knowledge_gap(query: str) -> None:
     """Best-effort: a logging failure must never break a live call."""
-    import json
     import time
 
+    from xplogent.voip import jsonl
+
     try:
-        path = knowledge_gap_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"ts": time.time(), "query": query}) + "\n")
+        jsonl.append(knowledge_gap_path(), {"ts": time.time(), "query": query[:500]})
     except Exception:  # noqa: BLE001
         _log.exception("could not log knowledge gap")
 

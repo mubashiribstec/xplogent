@@ -137,6 +137,19 @@ def test_top_knowledge_gaps_counts_and_orders(tmp_path, monkeypatch):
     log_knowledge_gap("do you open on sundays?")
     log_knowledge_gap("what does it cost?")
     log_knowledge_gap("do you open on sundays?")
+    log_knowledge_gap("Do you  open on Sundays?")   # same question, different wording
     gaps = top_knowledge_gaps()
-    assert gaps[0] == {"query": "do you open on sundays?", "count": 2}
-    assert gaps[1] == {"query": "what does it cost?", "count": 1}
+    assert [(g["query"], g["count"]) for g in gaps] == [
+        ("Do you open on Sundays?", 3), ("what does it cost?", 1)]
+    assert gaps[0]["last_ts"] > 0
+
+
+def test_knowledge_gap_log_is_size_capped(tmp_path):
+    from xplogent.voip import jsonl
+
+    path = tmp_path / "gaps.jsonl"
+    for i in range(400):
+        jsonl.append(path, {"query": f"question {i:04d} " + "x" * 40}, max_bytes=5_000)
+    assert path.stat().st_size <= 5_000
+    kept = jsonl.read(path)
+    assert kept and kept[-1]["query"].startswith("question 0399")   # newest kept

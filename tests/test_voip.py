@@ -248,6 +248,23 @@ async def test_engine_full_turn_records_and_speaks():
 
 
 @pytest.mark.asyncio
+async def test_turn_timings_are_per_turn():
+    # A turn that says nothing must not report the previous turn's first-word delay.
+    prov = ScriptedProvider([Message(role=Role.ASSISTANT, content="We open at nine."),
+                             Message(role=Role.ASSISTANT, content="")])
+    session, _sent, _, _turns, _ = make_session(prov)
+    await session.start()
+    await settle(session)
+    for _ in range(2):
+        await speak_utterance(session)
+        await settle(session)
+    assert len(session.turn_timings) == 2
+    assert session.turn_timings[0]["llm_first_ms"] > 0
+    assert session.turn_timings[1]["llm_first_ms"] == 0.0
+    await session.stop()
+
+
+@pytest.mark.asyncio
 async def test_engine_barge_in_cancels_speech_and_clears_buffer():
     prov = ScriptedProvider([Message(role=Role.ASSISTANT, content="This is a long reply that will be cut off.")])
     session, sent, cleared, _, _ = make_session(prov, tts=FakeTTS(delay=0.15, chunks=10))

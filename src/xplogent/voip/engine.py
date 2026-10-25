@@ -206,6 +206,7 @@ class CallSession:
                 return              # a person is handling the call
             reply_parts: list[str] = []
             first = True
+            first_ms = 0.0          # this turn's own first-word delay (0 = it didn't speak)
 
             async def sentences():
                 nonlocal first
@@ -217,7 +218,8 @@ class CallSession:
                 async for sentence in sentences():
                     if first:
                         first = False
-                        self.latencies_ms.append((time.time() - self._speech_end_at) * 1000)
+                        first_ms = (time.time() - self._speech_end_at) * 1000
+                        self.latencies_ms.append(first_ms)
                     await self._say(sentence)
             except asyncio.CancelledError:
                 if reply_parts:     # interrupted: keep what the caller already heard
@@ -227,7 +229,7 @@ class CallSession:
                 self._record("agent", " ".join(reply_parts))
             self.turn_timings.append({
                 "stt_ms": round(self._last_stt_ms, 1),
-                "llm_first_ms": round(self.latencies_ms[-1], 1) if self.latencies_ms else 0.0,
+                "llm_first_ms": round(first_ms, 1),
             })
             self._last_stt_ms = 0.0
             st = self.brain.state

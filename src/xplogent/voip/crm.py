@@ -11,7 +11,13 @@ shape matches, so promoting it to a table later is mechanical.)
 
 The API token is read from an environment variable (``crm.api_token_env``,
 default ``XPLOGENT_CRM_API_TOKEN``) — the repo's existing secrets pattern —
-never from plain config.
+never from plain config. Without a token nothing is sent (an unsigned summary
+with a full transcript must never leave the server).
+
+Signatures: ``X-Xplogent-Signature`` is the HMAC of the raw body (kept for
+existing receivers); ``X-Xplogent-Signature-V2`` is the HMAC of
+``"{X-Xplogent-Timestamp}.{body}"``, so a receiver can also refuse old,
+replayed requests.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from typing import Any
 
 from xplogent.core.config import Config, data_dir
 from xplogent.core.logging import get_logger
+from xplogent.voip import jsonl
 
 _log = get_logger("voip.crm")
 
@@ -48,18 +55,28 @@ def deliveries_path():
 
 def _log_attempt(call_id: int, attempt: int, status: str, detail: str = "") -> None:
     try:
-        path = deliveries_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"ts": time.time(), "call_id": call_id,
-                                 "attempt": attempt, "status": status,
-                                 "detail": detail}) + "\n")
+        jsonl.append(deliveries_path(), {"ts": time.time(), "call_id": call_id,
+                                         "attempt": attempt, "status": status,
+                                         "detail": detail})
     except Exception:  # noqa: BLE001 - logging must never break delivery
         _log.exception("could not write CRM delivery log")
 
 
+def recent_deliveries(limit: int = 20) -> list[dict[str, Any]]:
+    """The newest delivery attempts, newest first (dashboard)."""
+    return list(reversed(jsonl.read(deliveries_path(), limit)))
+
+
+def token_env(cfg: Config) -> str:
+    return str(crm_config(cfg).get("api_token_env") or "XPLOGENT_CRM_API_TOKEN")
+
+
 def sign(body: bytes, token: str) -> str:
     return "sha256=" + hmac.new(token.encode(), body, hashlib.sha256).hexdigest()
+
+
+def sign_v2(body: bytes, token: str, timestamp: str) -> str:
+    return sign(timestamp.encode() + b"." + body, token)
 
 
 def build_payload(cfg: Config, store, call_id: int, result: dict[str, Any],
@@ -99,13 +116,21 @@ async def deliver(cfg: Config, payload: dict[str, Any], *, attempts: int = 3,
 
     crm = crm_config(cfg)
     url = str(crm.get("base_url", "")).rstrip("/") + "/api/xplogent/call-summary"
-    token = os.environ.get(str(crm.get("api_token_env", "XPLOGENT_CRM_API_TOKEN")), "")
-    body = json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json",
-               "Authorization": f"Bearer {token}",
-               "X-Xplogent-Signature": sign(body, token)}
+    token = os.environ.get(token_env(cfg), "")
     call_id = int(payload.get("call_id", 0))
     last = {"call_id": call_id, "status": "failed", "attempts": 0, "detail": ""}
+    if not token:
+        last.update(status="skipped", detail=f"no API token ({token_env(cfg)} is not set)")
+        _log_attempt(call_id, 0, "skipped", last["detail"])
+        _log.warning("CRM delivery for call %s skipped: %s", call_id, last["detail"])
+        return last
+    body = json.dumps(payload).encode()
+    ts = str(int(time.time()))
+    headers = {"Content-Type": "application/json",
+               "Authorization": f"Bearer {token}",
+               "X-Xplogent-Timestamp": ts,
+               "X-Xplogent-Signature": sign(body, token),
+               "X-Xplogent-Signature-V2": sign_v2(body, token, ts)}
     for attempt in range(1, attempts + 1):
         last["attempts"] = attempt
         try:

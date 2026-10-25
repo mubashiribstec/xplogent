@@ -228,6 +228,10 @@ def test_sip_compose_file_publishes_udp_and_passes_settings():
     sip = yaml.safe_load((REPO / "deploy" / "docker" / "compose.sip.yml").read_text())["services"]["xplogent"]
     assert all(p.endswith("/udp") for p in sip["ports"])
     assert {"XPLOGENT_SIP_PORT", "XPLOGENT_RTP_START", "XPLOGENT_RTP_END", "XPLOGENT_HOST_IP"} <= set(sip["environment"])
+    # Both SIP lines (trunk + PBX extension) are reachable, on ports that don't overlap.
+    assert {"XPLOGENT_SIP_EXT_PORT", "XPLOGENT_RTP_EXT_START", "XPLOGENT_RTP_EXT_END"} <= set(sip["environment"])
+    published = " ".join(sip["ports"])
+    assert "5060" in published and "5062" in published and "10200" in published and "10300" in published
 
 
 @_bash

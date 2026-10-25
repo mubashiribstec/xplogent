@@ -4,13 +4,20 @@
 #   XPLOGENT_SIP_PORT                 SIP port (default 5060)
 #   XPLOGENT_RTP_START/XPLOGENT_RTP_END  call audio ports (default 10000-10100, ~50 calls)
 #   XPLOGENT_HOST_IP                  this server's address, put in SIP/SDP so audio comes back here
+# The second line (PBX extension login, Calls → PBX extension) has its own ports so both
+# lines run at once: XPLOGENT_SIP_EXT_PORT (5062), XPLOGENT_RTP_EXT_START/END (10200-10300).
 services:
   xplogent:
     ports:
       - "${XPLOGENT_SIP_PORT:-5060}:${XPLOGENT_SIP_PORT:-5060}/udp"
       - "${XPLOGENT_RTP_START:-10000}-${XPLOGENT_RTP_END:-10100}:${XPLOGENT_RTP_START:-10000}-${XPLOGENT_RTP_END:-10100}/udp"
+      - "${XPLOGENT_SIP_EXT_PORT:-5062}:${XPLOGENT_SIP_EXT_PORT:-5062}/udp"
+      - "${XPLOGENT_RTP_EXT_START:-10200}-${XPLOGENT_RTP_EXT_END:-10300}:${XPLOGENT_RTP_EXT_START:-10200}-${XPLOGENT_RTP_EXT_END:-10300}/udp"
     environment:
       XPLOGENT_SIP_PORT: ${XPLOGENT_SIP_PORT:-5060}
       XPLOGENT_RTP_START: ${XPLOGENT_RTP_START:-10000}
       XPLOGENT_RTP_END: ${XPLOGENT_RTP_END:-10100}
+      XPLOGENT_SIP_EXT_PORT: ${XPLOGENT_SIP_EXT_PORT:-5062}
+      XPLOGENT_RTP_EXT_START: ${XPLOGENT_RTP_EXT_START:-10200}
+      XPLOGENT_RTP_EXT_END: ${XPLOGENT_RTP_EXT_END:-10300}
       XPLOGENT_HOST_IP: ${XPLOGENT_HOST_IP:-}

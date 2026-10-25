@@ -171,7 +171,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 # ─── dotenv + writable config (used by the setup wizard and the GUI) ──────────
 _SECRET_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_API_KEY",
                 "GEMINI_API_KEY", "TELNYX_API_KEY", "OLLAMA_API_KEY", "SIP_PASSWORD",
-                "SIP_EXTENSION_PASSWORD"]
+                "SIP_EXTENSION_PASSWORD", "XPLOGENT_CRM_API_TOKEN"]
 # Non-secret settings the dashboard may also write to .env. Anything else is refused so
 # an API call can't plant e.g. LD_PRELOAD / PYTHONPATH into the process environment.
 _ENV_SETTINGS = ["XPLOGENT_MODEL", "XPLOGENT_REFLECTION_MODEL", "XPLOGENT_EMBEDDING_MODEL",

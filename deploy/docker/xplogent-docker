@@ -325,8 +325,10 @@ case "$cmd" in
         set_env "$ENV_FILE" COMPOSE_FILE "$(compose_files "$mode_file")"
         apply
         sp="$(get_env XPLOGENT_SIP_PORT)"; rs="$(get_env XPLOGENT_RTP_START)"; re="$(get_env XPLOGENT_RTP_END)"
-        ok "SIP ports open: UDP ${sp:-5060} (signalling) and ${rs:-10000}-${re:-10100} (audio); this server is ${ip:-unknown}."
+        xp="$(get_env XPLOGENT_SIP_EXT_PORT)"; xs="$(get_env XPLOGENT_RTP_EXT_START)"; xe="$(get_env XPLOGENT_RTP_EXT_END)"
+        ok "SIP ports open: trunk UDP ${sp:-5060} + ${rs:-10000}-${re:-10100}, PBX extension line UDP ${xp:-5062} + ${xs:-10200}-${xe:-10300}; this server is ${ip:-unknown}."
         say "Firewall: sudo ufw allow ${sp:-5060}/udp && sudo ufw allow ${rs:-10000}:${re:-10100}/udp"
+        say "  (extension line: sudo ufw allow ${xp:-5062}/udp && sudo ufw allow ${xs:-10200}:${xe:-10300}/udp)"
         say "Behind a router with a SIP provider on the internet: forward those UDP ports here and"
         say "use 'xplogent-docker sip on --ip <public IP>'. Then: dashboard -> Calls -> Phone line -> SIP trunk." ;;
       off)

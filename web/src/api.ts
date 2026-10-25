@@ -147,28 +147,6 @@ export class XplogentSocket {
   }
 }
 
-// Computer-use operator: drives the screen in a screenshot→analyze→act loop.
-export class OperatorSocket {
-  private ws: WebSocket;
-  private outbox: string[] = [];
-  private closed = false;
-  constructor(onEvent: (ev: XplogentEvent) => void, onClose?: () => void) {
-    this.ws = new WebSocket(wsUrl(`/ws/operator?${wsTokenParam()}`));
-    this.ws.onopen = () => { for (const m of this.outbox.splice(0)) this.ws.send(m); };
-    this.ws.onmessage = (m) => { const ev = parseFrame(m.data); if (ev) onEvent(ev); };
-    this.ws.onclose = () => { if (!this.closed) onClose?.(); };
-  }
-  private send(o: unknown) {
-    const msg = JSON.stringify(o);
-    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(msg);
-    else if (this.ws.readyState === WebSocket.CONNECTING) this.outbox.push(msg);
-  }
-  start(goal: string, maxSteps = 30) { this.send({ type: "start", goal, max_steps: maxSteps }); }
-  cancel() { this.send({ type: "cancel" }); }
-  resolveApproval(id: string, allowed: boolean) { this.send({ type: "approval", id, allowed }); }
-  close() { this.closed = true; this.ws.close(); }
-}
-
 // ── Settings / config ─────────────────────────────────────────────────────────
 export async function getFullConfig(): Promise<Record<string, any>> {
   return (await fetch("/config/full")).json();
@@ -290,14 +268,6 @@ export async function setBudget(b: Budget): Promise<{ ok: boolean; budget: Budge
   return (await fetch("/budget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) })).json();
 }
 
-// ── Chrome extension (real-browser control) ───────────────────────────────────
-export interface BrowserTab { id: number; title: string; url: string; active: boolean; }
-export interface InputActivity { field: string; type: string; page: string; url: string; redacted?: boolean; ts?: number; }
-export interface ExtensionStatus { connected: boolean; stale?: boolean; tabs: BrowserTab[]; inputs: InputActivity[]; last_seen: number; }
-export async function getExtensionStatus(): Promise<ExtensionStatus> {
-  return (await fetch("/extension/status")).json();
-}
-
 // ── Phone calling agent (VoIP) ────────────────────────────────────────────────
 export interface CallRow {
   id: number; direction: string; contact_name?: string | null; from_number: string; to_number: string;
@@ -401,6 +371,17 @@ export interface ReadinessItem { id: string; label: string; ok: boolean; detail:
 export async function getVoipReadiness(): Promise<{ ready: boolean; items: ReadinessItem[] }> {
   return (await fetch("/voip/readiness")).json();
 }
+export interface CallAgentInfo {
+  templates: { name: string; direction: string; fields: string[] }[];
+  template: string;
+  crm: { enabled: boolean; base_url: string; token_env: string; token_set: boolean;
+         deliveries: { ts: number; call_id: number; attempt: number; status: string; detail: string }[] };
+  knowledge_gaps: { query: string; count: number; last_ts: number }[];
+}
+export async function getCallAgent(): Promise<CallAgentInfo> {
+  return (await fetch("/voip/agent")).json();
+}
+export const testCrm = () => postJSON<{ ok: boolean; status?: string; detail?: string; error?: string }>("/voip/crm/test");
 export const testTelnyx = () => postJSON<Record<string, any>>("/voip/telnyx/test");
 export const testSpeech = (stt = true) => postJSON<Record<string, any>>("/voip/speech/test", { stt });
 
@@ -418,38 +399,6 @@ export async function ollamaPull(model: string): Promise<{ ok: boolean; output?:
 // ── Provider model discovery ──────────────────────────────────────────────────
 export async function getProviderModels(name: string): Promise<{ models: string[]; error: string }> {
   return (await fetch(`/providers/${encodeURIComponent(name)}/models`)).json();
-}
-
-// ── Vision ────────────────────────────────────────────────────────────────────
-export async function enableLocalVision(model = "llava"): Promise<{ ok: boolean; vision_model?: string; error?: string }> {
-  return (await fetch("/vision/enable-local", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }),
-  })).json();
-}
-export async function testVision(): Promise<{ ok: boolean; model: string; reply: string }> {
-  return (await fetch("/vision/test", { method: "POST" })).json();
-}
-
-// ── Runs & observability ──────────────────────────────────────────────────────
-export interface RunInfo {
-  id: string; goal: string; mode: string; status: string;
-  started_at: number; ended_at: number | null;
-}
-
-export async function getRuns(): Promise<{ runs: RunInfo[]; active: string[] }> {
-  return (await fetch("/runs")).json();
-}
-
-export async function getRun(id: string): Promise<{ run: RunInfo | null; metrics: any[] }> {
-  return (await fetch(`/runs/${id}`)).json();
-}
-
-export async function getRunEvents(id: string): Promise<{ events: any[] }> {
-  return (await fetch(`/runs/${id}/events`)).json();
-}
-
-export async function getRunMessages(runId: string): Promise<{ messages: any[] }> {
-  return (await fetch(`/messages?run_id=${runId}`)).json();
 }
 
 // ── Models & sessions ─────────────────────────────────────────────────────────

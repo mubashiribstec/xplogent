@@ -32,6 +32,15 @@ def _to_ollama(messages: list[Message]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for m in messages:
         payload = m.to_openai()
+        # OpenAI wants tool-call arguments as a JSON string; Ollama wants an object and
+        # rejects the string with 400 ("Value looks like object…") on the next turn.
+        for tc in payload.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            if isinstance(fn.get("arguments"), str):
+                try:
+                    fn["arguments"] = json.loads(fn["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    fn["arguments"] = {}
         if m.images and m.role == Role.USER:
             # Ollama wants plain text content + a separate base64 images list.
             payload["content"] = m.content or ""

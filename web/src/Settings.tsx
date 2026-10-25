@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import {
-  addFact, deleteFact, deleteSkill, enableLocalVision, exportKnowledge, getFacts, getFullConfig,
+  addFact, deleteFact, deleteSkill, exportKnowledge, getFacts, getFullConfig,
   getProviderModels, getRoles, getSkills, getStatus, getTools, importKnowledge, patchConfig, putRole,
-  putSecrets, restoreBackup, saveOllama, StatusInfo, testOllama, testVision,
+  putSecrets, restoreBackup, saveOllama, StatusInfo, testOllama,
   BackupStatus, getBackupModel, pullBackupModel, saveBackupModel, testBackupModel,
 } from "./api";
 
@@ -67,7 +67,6 @@ export function Settings() {
                  placeholder="e.g. ollama:llava, openai:gpt-4o, anthropic:claude-sonnet-4-6"
                  onBlur={(e) => save({ vision_model: e.target.value })} />
         </label>
-        <VisionControls reload={reload} flash={flash} />
         <p className="dim">Providers: {(cfg.providers ?? []).join(", ")}</p>
       </div>
 
@@ -437,35 +436,6 @@ function ExecutionBackend({ execution, onSave }:
           </label>
         </>
       )}
-    </div>
-  );
-}
-
-function VisionControls({ reload, flash }: { reload: () => void; flash: (m: string) => void }) {
-  const [busy, setBusy] = useState("");
-  const [result, setResult] = useState("");
-
-  const enable = async () => {
-    setBusy("enable"); setResult("Pulling llava (first time can take a few minutes)…");
-    const res = await enableLocalVision("llava");
-    setBusy("");
-    if (res.ok) { setResult(`Local vision enabled: ${res.vision_model}`); flash("local vision enabled"); reload(); }
-    else setResult(res.error || "failed to enable local vision");
-  };
-  const test = async () => {
-    setBusy("test"); setResult("Testing the vision model…");
-    const res = await testVision();
-    setBusy("");
-    setResult(res.ok ? `✓ ${res.model} replied: ${res.reply.slice(0, 200)}` : `✗ ${res.reply}`);
-  };
-
-  return (
-    <div style={{ marginTop: 6 }}>
-      <div className="row" style={{ gap: 8 }}>
-        <button onClick={enable} disabled={!!busy}>{busy === "enable" ? "Enabling…" : "Enable local vision (llava)"}</button>
-        <button onClick={test} disabled={!!busy}>{busy === "test" ? "Testing…" : "Test vision"}</button>
-      </div>
-      {result && <p className="dim" style={{ fontSize: 12, marginTop: 6, whiteSpace: "pre-wrap" }}>{result}</p>}
     </div>
   );
 }

@@ -342,6 +342,41 @@ async def voip_playbook_save(body: dict) -> dict:
     return {"ok": True}
 
 
+@router.get("/voip/agent")
+async def voip_agent() -> dict:
+    """Call-agent settings at a glance: template, CRM delivery, knowledge gaps."""
+    from xplogent.voip import crm
+    from xplogent.voip.service import top_knowledge_gaps
+    from xplogent.voip.templates import TEMPLATES
+
+    cfg = load_config()
+    c = crm.crm_config(cfg)
+    return {
+        "templates": [{"name": t["name"], "direction": t["direction"],
+                       "fields": [f["name"] for f in t["fields"]]} for t in TEMPLATES.values()],
+        "template": str((cfg.voip or {}).get("template") or ""),
+        "crm": {"enabled": bool(c.get("enabled")), "base_url": str(c.get("base_url") or ""),
+                "token_env": crm.token_env(cfg), "token_set": bool(os.environ.get(crm.token_env(cfg))),
+                "deliveries": crm.recent_deliveries(20)},
+        "knowledge_gaps": top_knowledge_gaps(20),
+    }
+
+
+@router.post("/voip/crm/test")
+async def voip_crm_test() -> dict:
+    """Send one signed sample summary to the CRM now (marked test, call_id 0)."""
+    from xplogent.voip import crm
+
+    cfg = load_config()
+    if not crm.crm_enabled(cfg):
+        return {"ok": False, "error": "switch CRM delivery on and set the CRM address first"}
+    out = await crm.deliver(cfg, {"event": "call.test", "call_id": 0, "test": True,
+                                  "summary": "Xplogent test delivery", "transcript": []},
+                            attempts=1)
+    deps.audit_event("voip_crm_test", target=out["status"], risk="low")
+    return {"ok": out["status"] == "sent", "status": out["status"], "detail": out["detail"]}
+
+
 @router.post("/voip/playbook/build")
 async def voip_playbook_build() -> dict:
     from xplogent.voip import training

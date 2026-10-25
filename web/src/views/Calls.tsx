@@ -8,6 +8,7 @@ import { useToast } from "../components/Toast";
 import { CallNow, LiveCalls, TestCall } from "./CallControls";
 import { SipCard } from "./SipCard";
 import { SipExtensionCard } from "./SipExtensionCard";
+import { CallAgentCard } from "./CallAgentCard";
 
 const fmtTime = (t?: number | null) => (t ? new Date(t * 1000).toLocaleString() : "—");
 const fmtDur = (c: CallRow) => {
@@ -186,6 +187,7 @@ export function Calls() {
           <p className="dim" style={{ fontSize: 12 }}>Add your scripts and FAQs under Knowledge and your customers under
             Contacts: the agent answers only from those.</p>
         </div>
+        <CallAgentCard toast={toast} onChange={loadReady} />
         </>)}
 
       </div>

@@ -94,3 +94,34 @@ def test_build_session_with_template_applies_playbook_fields_and_guard(tmp_path,
                                      "value": "07700900123", "confirmed": True})
     assert brain._run_tool("end_call", {}) == "call will end after your goodbye"
     store.close()
+
+
+def test_template_only_applies_to_calls_in_its_direction(tmp_path, monkeypatch):
+    monkeypatch.setenv("XPLOGENT_HOME", str(tmp_path))
+    from tests.conftest import ScriptedProvider
+    from tests.test_voip import FakeSTT, FakeTTS
+    from xplogent.core.config import load_config, save_user_config
+    from xplogent.memory.store import Store
+    from xplogent.voip.service import build_session
+
+    save_user_config({"voip": {"enabled": True, "template": "kingsbury_outbound_screener",
+                               "company": "Kingsbury Personnel",
+                               "greeting": "Thanks for calling {company}."}})
+    cfg = load_config()
+    store = Store(cfg.db_path)
+
+    async def send(frame):
+        pass
+
+    def session_for(direction):
+        return build_session(cfg, store, {"direction": direction, "from": "+447700900999",
+                                          "to": "+442071234567"},
+                             send_audio=send, stt=FakeSTT(), tts=FakeTTS(),
+                             provider=ScriptedProvider([]), retrieve=None)
+
+    inbound, _, inbound_brain = session_for("incoming")
+    assert "candidate_name" not in inbound.greeting and "Thanks for calling Kingsbury" in inbound.greeting
+    assert "SCREENING QUESTIONS" not in inbound_brain.playbook
+    outbound, _, outbound_brain = session_for("outgoing")
+    assert outbound.greeting.startswith("Hello, is that") and "SCREENING QUESTIONS" in outbound_brain.playbook
+    store.close()
