@@ -16,6 +16,7 @@ dependencies = [
     "rich>=13.7",
     "typer>=0.12",
     "prompt-toolkit>=3.0",
+    "tzdata>=2024.1; sys_platform == 'win32'",   # time zones for calling hours (Windows has no system database)
 ]
 
 [project.optional-dependencies]
@@ -36,6 +37,7 @@ api = [
 # Phone calling agent (server side: no microphone/speaker needed)
 voip = [
     "faster-whisper>=1.0",
+    "av>=11,<19",   # faster-whisper 1.2 calls av.open(metadata_errors=...), which PyAV 19 removed
     "audioop-lts>=0.2; python_version >= '3.13'",
 ]
 # RAG over documents (PDF support; text/markdown/code work without this)

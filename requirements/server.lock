@@ -18,10 +18,10 @@ anyio==4.15.1
     #   watchfiles
 audioop-lts==0.2.2 ; python_full_version >= '3.13'
     # via xplogent (pyproject.toml)
-av==18.1.0 ; python_full_version < '3.12'
-    # via faster-whisper
-av==19.0.1 ; python_full_version >= '3.12'
-    # via faster-whisper
+av==18.1.0
+    # via
+    #   faster-whisper
+    #   xplogent (pyproject.toml)
 backports-tarfile==1.2.0 ; python_full_version < '3.12'
     # via jaraco-context
 certifi==2026.7.22
@@ -210,6 +210,8 @@ typing-inspection==0.4.4
     #   fastapi
     #   pydantic
     #   pydantic-settings
+tzdata==2026.5 ; sys_platform == 'win32'
+    # via xplogent (pyproject.toml)
 uvicorn==0.54.0
     # via xplogent (pyproject.toml)
 uvloop==0.23.0 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
