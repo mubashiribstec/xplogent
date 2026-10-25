@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw } from "lucide-react";
 import {
   CallRow, CallTurn, ReadinessItem, VoipStatus, getCall, getCalls, getContacts, getFullConfig, getVoipReadiness,
-  getVoipStatus, patchConfig, putSecrets, saveSip, clearSipBusy, getVoices, testSpeech, testTelnyx, deleteRecording, getRecordingUrl, trainOnRecording,
+  getVoipStatus, patchConfig, putSecrets, saveSip, clearSipBusy, getVoices, resendCrm, testSpeech, testTelnyx, deleteRecording, getRecordingUrl, trainOnRecording,
 } from "../api";
 import { useToast } from "../components/Toast";
 import { CallNow, LiveCalls, TestCall } from "./CallControls";
@@ -11,6 +11,7 @@ import { SipExtensionCard } from "./SipExtensionCard";
 import { CallAgentCard } from "./CallAgentCard";
 import { CallDebug } from "./CallDebug";
 
+const CRM_BADGE: Record<string, string> = { sent: "ok", failed: "bad", skipped: "bad", retrying: "warn", sending: "warn" };
 const fmtTime = (t?: number | null) => (t ? new Date(t * 1000).toLocaleString() : "—");
 const fmtDur = (c: CallRow) => {
   const end = c.ended_at ?? Date.now() / 1000;
@@ -104,13 +105,22 @@ export function Calls() {
                       {!!c.via_queue && <span className="badge warn" style={{ marginLeft: 6 }}
                         title={`came through the office queue${c.queue_wait_s ? ` after ${c.queue_wait_s}s` : ""}${c.original_called_number ? `; dialled ${c.original_called_number}` : ""}`}>via queue</span>}</td>
                     <td>{fmtDur(c)}{c.status === "active" && <span className="badge warn" style={{ marginLeft: 6 }}>live</span>}</td>
-                    <td>{c.outcome ? <span className="badge">{c.outcome}</span> : <span className="dim">—</span>}</td>
+                    <td>{c.outcome ? <span className="badge">{c.outcome}</span> : <span className="dim">—</span>}
+                      {c.crm_status && <span className={`badge ${CRM_BADGE[c.crm_status] ?? ""}`} style={{ marginLeft: 6 }}
+                        title={c.crm_detail || ""}>CRM {c.crm_status}</span>}</td>
                     <td className="dim">${(c.cost ?? 0).toFixed(3)}</td>
                   </tr>
                   {open === c.id && (
                     <tr><td colSpan={6}>
                       {c.summary && <p className="dim" style={{ marginBottom: 6 }}><b>Summary:</b> {c.summary}</p>}
                       {c.recording && <Recording callId={c.id} toast={toast} onDeleted={reload} />}
+                      {(c.crm_status === "failed" || c.crm_status === "skipped") && (
+                        <p className="warn" style={{ margin: "4px 0" }}>CRM: {c.crm_status}{c.crm_detail ? ` (${c.crm_detail})` : ""}{" "}
+                          <button className="btn" onClick={async () => {
+                            const r = await resendCrm(c.id);
+                            toast(r.ok ? "sent to the CRM" : r.error ?? r.detail ?? "still failing", r.ok ? "success" : "error");
+                            reload();
+                          }}>Resend</button></p>)}
                       <button className="linkx" onClick={() => setDebugOpen(debugOpen === c.id ? null : c.id)}>
                         {debugOpen === c.id ? "Hide debug" : "Debug this call"}</button>
                       {debugOpen === c.id && <CallDebug callId={c.id} toast={toast} />}

@@ -375,7 +375,12 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
         # Post-call CRM push (Part 3a): fire-and-forget, retried in crm.deliver;
         # a CRM outage never blocks or loses the call record.
         if crm_enabled(cfg):
-            enqueue_delivery(cfg, build_payload(cfg, store, call_id, result, brain, session))
+            from xplogent.voip.crm import status_writer
+
+            payload = build_payload(cfg, store, call_id, result, brain, session)
+            store.set_crm_payload(call_id, payload)          # exactly this is resent, if needed
+            store.set_crm_status(call_id, "sending")
+            enqueue_delivery(cfg, payload, on_status=status_writer(cfg.db_path, call_id))
         return result
     if call.get("test"):        # a test call never changes customer records
         return _deliver({"call_id": call_id, "outcome": outcome, "cost": cost, "test": True,

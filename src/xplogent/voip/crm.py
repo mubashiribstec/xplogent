@@ -116,10 +116,20 @@ def build_payload(cfg: Config, store, call_id: int, result: dict[str, Any],
 
 
 async def deliver(cfg: Config, payload: dict[str, Any], *, attempts: int = 3,
-                  backoff_s: float = 0.5, transport=None) -> dict[str, Any]:
+                  backoff_s: float = 0.5, transport=None, on_status=None) -> dict[str, Any]:
     """POST the payload with retries. Returns the final delivery status and
-    logs every attempt. Never raises: the call record is already safe."""
+    logs every attempt. Never raises: the call record is already safe.
+
+    ``on_status(status, detail)`` follows it on the call row: sending → retrying →
+    sent / failed / skipped."""
     import httpx
+
+    def status(state: str, detail: str = "") -> None:
+        if on_status is not None:
+            try:
+                on_status(state, detail)
+            except Exception:  # noqa: BLE001 - bookkeeping must never break delivery
+                _log.exception("could not record the CRM delivery status")
 
     crm = crm_config(cfg)
     url = str(crm.get("base_url", "")).rstrip("/") + "/api/xplogent/call-summary"
@@ -130,7 +140,9 @@ async def deliver(cfg: Config, payload: dict[str, Any], *, attempts: int = 3,
         last.update(status="skipped", detail=f"no API token ({token_env(cfg)} is not set)")
         _log_attempt(call_id, 0, "skipped", last["detail"])
         _log.warning("CRM delivery for call %s skipped: %s", call_id, last["detail"])
+        status("skipped", last["detail"])
         return last
+    status("sending")
     body = json.dumps(payload).encode()
     ts = str(int(time.time()))
     headers = {"Content-Type": "application/json",
@@ -146,16 +158,29 @@ async def deliver(cfg: Config, payload: dict[str, Any], *, attempts: int = 3,
             if resp.status_code < 300:
                 last.update(status="sent", detail=f"HTTP {resp.status_code}")
                 _log_attempt(call_id, attempt, "sent", last["detail"])
+                status("sent", last["detail"])
                 return last
             last["detail"] = f"HTTP {resp.status_code}"
         except Exception as exc:  # noqa: BLE001 - retry, never propagate
             last["detail"] = f"{type(exc).__name__}: {exc}"
         _log_attempt(call_id, attempt, "failed", last["detail"])
         if attempt < attempts:
+            status("retrying", f"attempt {attempt} of {attempts}: {last['detail']}")
             await asyncio.sleep(backoff_s * (3 ** (attempt - 1)))
     _log.warning("CRM delivery for call %s failed after %s attempts: %s",
                  call_id, attempts, last["detail"])
+    status("failed", last["detail"])
     return last
+
+
+def status_writer(db_path, call_id: int):
+    """An ``on_status`` that records the delivery state on the call row."""
+    def write(state: str, detail: str = "") -> None:
+        from xplogent.memory.store import Store
+
+        with Store(db_path) as store:
+            store.set_crm_status(call_id, state, detail)
+    return write
 
 
 # ── pre-call lookup (phase 2) ──────────────────────────────────────────────────
@@ -241,7 +266,7 @@ async def lookup(cfg: Config, phone: str, *, direction: str = "inbound", line: s
     return out
 
 
-def enqueue_delivery(cfg: Config, payload: dict[str, Any]) -> None:
+def enqueue_delivery(cfg: Config, payload: dict[str, Any], on_status=None) -> None:
     """Fire-and-forget from finalize_call (sync, called inside async wrap-ups)."""
     try:
         loop = asyncio.get_running_loop()
@@ -249,6 +274,6 @@ def enqueue_delivery(cfg: Config, payload: dict[str, Any]) -> None:
         _log.warning("CRM delivery skipped for call %s: no event loop",
                      payload.get("call_id"))
         return
-    task = loop.create_task(deliver(cfg, payload))
+    task = loop.create_task(deliver(cfg, payload, on_status=on_status))
     _TASKS.add(task)
     task.add_done_callback(_TASKS.discard)

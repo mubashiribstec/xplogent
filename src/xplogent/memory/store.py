@@ -234,6 +234,9 @@ _MIGRATIONS = [
     ("calls", "via_queue", "INTEGER DEFAULT 0"),               # reached the AI through a PBX queue
     ("calls", "diversion_reason", "TEXT DEFAULT ''"),
     ("calls", "queue_wait_s", "INTEGER"),                      # seconds waited in the queue, if the PBX said
+    ("calls", "crm_status", "TEXT DEFAULT ''"),     # sending | retrying | sent | failed | skipped
+    ("calls", "crm_detail", "TEXT DEFAULT ''"),
+    ("calls", "crm_payload", "TEXT DEFAULT ''"),    # exactly what was sent, for Resend
 ]
 # Stored in the database (PRAGMA user_version): changes whenever the schema text or
 # the migration list changes, so existing databases get upgraded automatically.
@@ -284,6 +287,11 @@ class SkillRow:
     @property
     def stars(self) -> int:
         return skill_level(self.uses, self.successes, self.failures)[1]
+
+
+def _without_payload(call: dict[str, Any]) -> dict[str, Any]:
+    call.pop("crm_payload", None)       # large, and only Resend needs it (get_crm_payload)
+    return call
 
 
 class Store:
@@ -958,7 +966,17 @@ class Store:
         rows = self._query(
             "SELECT c.*, ct.name AS contact_name FROM calls c "
             "LEFT JOIN contacts ct ON ct.id = c.contact_id ORDER BY c.id DESC LIMIT ?", (limit,))
-        return [dict(r) for r in rows]
+        return [_without_payload(dict(r)) for r in rows]
+
+    def set_crm_payload(self, call_id: int, payload: dict[str, Any]) -> None:
+        self._write("UPDATE calls SET crm_payload=? WHERE id=?", (json.dumps(payload, default=str), call_id))
+
+    def get_crm_payload(self, call_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT crm_payload FROM calls WHERE id=?", (call_id,)).fetchone()
+        return json.loads(row[0]) if row and row[0] else None
+
+    def set_crm_status(self, call_id: int, status: str, detail: str = "") -> None:
+        self._write("UPDATE calls SET crm_status=?, crm_detail=? WHERE id=?", (status, detail[:300], call_id))
 
     def get_call(self, call_id: int) -> dict[str, Any] | None:
         rows = self._query(
@@ -966,7 +984,7 @@ class Store:
             "LEFT JOIN contacts ct ON ct.id = c.contact_id WHERE c.id=?", (call_id,))
         if not rows:
             return None
-        d = dict(rows[0])
+        d = _without_payload(dict(rows[0]))
         d["turns"] = [dict(r) for r in self._query(
             "SELECT speaker, text, created_at FROM call_turns WHERE call_id=? ORDER BY id",
             (call_id,))]

@@ -430,6 +430,24 @@ async def voip_agent() -> dict:
     }
 
 
+@router.post("/voip/calls/{call_id}/crm/resend")
+async def voip_call_crm_resend(call_id: int) -> dict:
+    """Send a call's summary to the CRM again: the exact payload of the first attempt
+    (the receiver dedupes on call_id, so a resend never duplicates the CRM note)."""
+    from xplogent.voip import crm
+
+    cfg = load_config()
+    if not crm.crm_enabled(cfg):
+        return {"ok": False, "error": "switch CRM delivery on and set the CRM address first"}
+    with Store(cfg.db_path) as store:
+        payload = store.get_crm_payload(call_id)
+    if payload is None:
+        return {"ok": False, "error": "this call has no stored CRM summary to resend"}
+    out = await crm.deliver(cfg, payload, attempts=1, on_status=crm.status_writer(cfg.db_path, call_id))
+    deps.audit_event("voip_crm_resend", target=f"{call_id}: {out['status']}", risk="low")
+    return {"ok": out["status"] == "sent", "status": out["status"], "detail": out["detail"]}
+
+
 @router.post("/voip/crm/test")
 async def voip_crm_test() -> dict:
     """Send one signed sample summary to the CRM now (marked test, call_id 0)."""
