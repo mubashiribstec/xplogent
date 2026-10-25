@@ -258,8 +258,8 @@ async def test_turn_timings_are_per_turn():
     for _ in range(2):
         await speak_utterance(session)
         await settle(session)
-    assert len(session.turn_timings) == 2
-    assert session.turn_timings[0]["llm_first_ms"] > 0
+    assert len(session.turn_timings) == 2 and len(session.latencies_ms) == 1   # only turn 1 spoke
+    assert session.turn_timings[0]["llm_first_ms"] == round(session.latencies_ms[0], 1)
     assert session.turn_timings[1]["llm_first_ms"] == 0.0
     await session.stop()
 
