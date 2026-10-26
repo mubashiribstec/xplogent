@@ -153,11 +153,13 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
   const [voice, setVoice] = useState(true);
   const [contact, setContact] = useState<string>("");
   const [mic, setMic] = useState(false);
+  const [thinking, setThinking] = useState(false);
   const ws = useRef<WebSocket | null>(null);
   const audio = useRef<{ ctx: AudioContext; next: number; sources: AudioBufferSourceNode[] } | null>(null);
   const micStop = useRef<(() => void) | null>(null);
   const box = useRef<HTMLDivElement>(null);
-  const canMic = typeof window !== "undefined" && window.isSecureContext && !!navigator.mediaDevices;
+  const canMic = typeof window !== "undefined" && window.isSecureContext && !!navigator.mediaDevices?.getUserMedia;
+  const [useMic, setUseMic] = useState(canMic);
   useEffect(() => { box.current?.scrollTo({ top: box.current.scrollHeight }); }, [lines.length]);
   useEffect(() => () => { ws.current?.close(); micStop.current?.(); audio.current?.ctx.close(); }, []);
 
@@ -184,31 +186,47 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
   };
 
   const start = () => {
-    setLines([]); setState("live");
-    if (voice) {
+    setLines([]); setState("live"); setThinking(false);
+    if (voice || useMic) {
+      // Created and resumed inside the click, so the browser lets it play.
       const ctx = new AudioContext();
+      ctx.resume().catch(() => undefined);
       audio.current = { ctx, next: 0, sources: [] };
     }
+    // Asking here (still inside the click) is what makes the browser show its
+    // microphone prompt; a refusal leaves the call running as text.
+    if (useMic && canMic) startMic().catch((e) => add({ who: "note", text: `⚠ microphone: ${micError(e)}` }));
+    let started = false;
     const sock = new WebSocket(wsUrl(`/ws/voip/test?${wsTokenParam().slice(1)}`));
     sock.binaryType = "arraybuffer";
     ws.current = sock;
-    sock.onopen = () => sock.send(JSON.stringify({ type: "start", voice, contact_id: contact ? Number(contact) : null }));
+    let opened = false;
+    sock.onopen = () => { opened = true; sock.send(JSON.stringify({ type: "start", voice, contact_id: contact ? Number(contact) : null })); };
     sock.onmessage = (ev) => {
       if (typeof ev.data !== "string") { play(ev.data as ArrayBuffer); return; }
       const m = JSON.parse(ev.data);
-      if (m.type === "started") add({ who: "note", text: m.contact ? `test call as ${m.contact}` : "test call started" });
-      else if (m.type === "turn") add({ who: m.speaker === "agent" ? "agent" : "caller", text: m.text });
+      if (m.type === "started") { started = true; add({ who: "note", text: m.contact ? `test call as ${m.contact}` : "test call started" }); }
+      else if (m.type === "turn") { if (m.speaker === "agent") setThinking(false); add({ who: m.speaker === "agent" ? "agent" : "caller", text: m.text }); }
+      else if (m.type === "thinking") setThinking(true);
+      else if (m.type === "voice_failed") add({ who: "note", text: `⚠ voice failed: ${m.error} — continuing as text. Check the voice under Speech (or untick "play the agent's voice").` });
       else if (m.type === "events") m.items.forEach((e: string) => add({ who: "note", text: `🔧 ${e}` }));
       else if (m.type === "clear") clearAudio();
       else if (m.type === "transfer") add({ who: "note", text: `📞 the agent transfers the call${m.to ? ` to ${m.to}` : ""} (${m.reason || "no reason"})` });
       else if (m.type === "hangup") add({ who: "note", text: "📴 the agent hung up" });
       else if (m.type === "dtmf_sent") add({ who: "note", text: `🔢 the agent pressed ${m.digits}` });
-      else if (m.type === "error") add({ who: "note", text: `⚠ ${m.error}` });
+      else if (m.type === "error") { setThinking(false); add({ who: "note", text: `⚠ ${m.error}` }); }
       else if (m.type === "ended") {
+        setThinking(false);
         add({ who: "note", text: `ended · outcome: ${m.outcome || "—"}${m.summary ? ` · ${m.summary}` : ""}${m.latency_ms?.length ? ` · first-word delay ${m.latency_ms.join(", ")} ms` : ""}` });
       }
     };
-    sock.onclose = () => { setState("ended"); stopMic(); };
+    sock.onclose = (ev) => {
+      setState("ended"); setThinking(false); stopMic();
+      if (!started) add({ who: "note", text: `⚠ the test call could not start${
+        !opened ? ": the browser could not open a live connection to the server. If a reverse proxy (nginx, Apache…) is in front of Xplogent, it must pass WebSocket upgrades for /ws; check that Xplogent is running."
+        : ev.code === 1008 ? " (not signed in, or the session expired: reload the page)"
+        : ev.reason ? `: ${ev.reason}` : " (the server closed the connection)"}` });
+    };
   };
   const send = () => {
     if (!text.trim() || ws.current?.readyState !== WebSocket.OPEN) return;
@@ -223,6 +241,9 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
     ws.current.send(JSON.stringify({ type: "dtmf", digit }));
   };
 
+  const micError = (e: any) => e?.name === "NotAllowedError"
+    ? "permission denied. Allow the microphone for this site (the icon in the address bar) and start again; typing still works."
+    : e?.name === "NotFoundError" ? "no microphone found." : String(e?.message || e);
   const stopMic = () => { micStop.current?.(); micStop.current = null; setMic(false); };
   const startMic = async () => {
     const a = audio.current ?? { ctx: new AudioContext(), next: 0, sources: [] };
@@ -251,12 +272,20 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
     <div className="card">
       <h3>Test call in the browser</h3>
       <p className="dim">Talk to the phone agent exactly as a caller would (same greeting, playbook, knowledge and
-        tools), without a phone line. Type as the caller{canMic ? " or use the microphone" : ""}.
-        {!canMic && " The microphone needs HTTPS; typing works everywhere."}</p>
+        tools), without a phone line. Type as the caller{canMic ? " or talk into your microphone" : ""}.</p>
+      {!canMic && (
+        <p className="dim" style={{ fontSize: 12 }}><MicOff size={12} /> Browsers only allow the microphone on HTTPS (or
+          on <span className="mono">localhost</span>), so it is off on this address; typing works. To talk: run{" "}
+          <span className="mono">sudo xplogent-docker https your.domain</span>, or open the dashboard through an SSH
+          tunnel (<span className="mono">ssh -L 8765:localhost:8765 you@server</span>, then{" "}
+          <span className="mono">http://localhost:8765</span>).</p>)}
       {state !== "live" ? (
         <div className="row wrap" style={{ gap: 10 }}>
           <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={voice} onChange={(e) => setVoice(e.target.checked)} />
             play the agent's voice</label>
+          <label className="row" style={{ gap: 6 }} title={canMic ? "" : "needs HTTPS or localhost"}>
+            <input type="checkbox" checked={useMic && canMic} disabled={!canMic} onChange={(e) => setUseMic(e.target.checked)} />
+            talk with my microphone</label>
           {contacts && contacts.length > 0 && (
             <select value={contact} onChange={(e) => setContact(e.target.value)}>
               <option value="">as an unknown caller</option>
@@ -267,10 +296,13 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
       ) : (
         <div className="row wrap" style={{ gap: 8 }}>
           <button className="btn danger" onClick={hang}><PhoneOff size={14} /> Hang up</button>
-          {canMic && (mic
+          {canMic ? (mic
             ? <button className="btn" onClick={stopMic}><MicOff size={14} /> Mic off</button>
-            : <button className="btn" onClick={() => startMic().catch((e) => add({ who: "note", text: `⚠ microphone: ${e.message}` }))}>
-                <Mic size={14} /> Use microphone</button>)}
+            : <button className="btn" onClick={() => startMic().catch((e) => add({ who: "note", text: `⚠ microphone: ${micError(e)}` }))}>
+                <Mic size={14} /> Use microphone</button>)
+            : <button className="btn" disabled title="Browsers only allow the microphone on HTTPS or localhost">
+                <MicOff size={14} /> Microphone needs HTTPS</button>}
+          {mic && <span className="dim" style={{ fontSize: 12 }}>🎙 listening: just talk</span>}
         </div>
       )}
       {lines.length > 0 && (
@@ -279,6 +311,7 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
             ? <div key={i} className="dim" style={{ fontSize: 12 }}>{l.text}</div>
             : <div key={i}><b style={{ color: l.who === "agent" ? "var(--accent)" : "var(--amber)" }}>
                 {l.who === "agent" ? "Agent" : "You"}:</b> {l.text}</div>)}
+          {thinking && state === "live" && <div className="dim" style={{ fontSize: 12 }}>… the agent is thinking</div>}
         </div>
       )}
       {state === "live" && (

@@ -424,6 +424,16 @@ def build_tts(cfg: dict[str, Any]) -> TTS:
 OPENAI_VOICES = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]
 
 
+def _voice_entry(v: Any) -> dict[str, str]:
+    """Kokoro lists voices as plain names (older images) or as objects with ``id`` /
+    ``name`` and quality grades (newer ones): always ``{id, name}`` strings."""
+    if isinstance(v, dict):
+        vid = str(v.get("id") or v.get("name") or "")
+        grade = str(v.get("overall_grade") or "")
+        return {"id": vid, "name": str(v.get("name") or vid) + (f" ({grade})" if grade else "")}
+    return {"id": str(v), "name": str(v)}
+
+
 async def list_voices(cfg: dict[str, Any]) -> list[dict[str, str]]:
     """Voices for the Speech card's picker: ``[{id, name}]`` for the configured provider."""
     kind = str(cfg.get("provider") or "openai")
@@ -435,7 +445,7 @@ async def list_voices(cfg: dict[str, Any]) -> list[dict[str, str]]:
         if "kokoro" in base or "8880" in base:
             resp = await tts._client.get("/audio/voices")
             resp.raise_for_status()
-            return [{"id": v, "name": v} for v in resp.json().get("voices", [])]
+            return [_voice_entry(v) for v in resp.json().get("voices", []) if _voice_entry(v)["id"]]
         return [{"id": v, "name": v} for v in OPENAI_VOICES]
     finally:
         await tts.aclose()

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { FREE_MODELS } from "./lib/models";
 import {
   addFact, deleteFact, deleteSkill, exportKnowledge, getFacts, getFullConfig,
   getProviderModels, getRoles, getSkills, getStatus, getTools, importKnowledge, patchConfig, putRole,
@@ -565,6 +566,12 @@ function ModelBrowser({ providers, models, onAddPresets, onSave, flash }: {
     <div className="card">
       <h3>Browse provider models</h3>
       <p className="dim">Fetch a provider's live catalog and add models without typing ids by hand.</p>
+      {FREE_MODELS.some((f) => !models.some((m) => m.model === f.model)) && (
+        <p className="dim" style={{ fontSize: 12 }}>
+          <button onClick={() => onAddPresets([...models, ...FREE_MODELS.filter((f) => !models.some((m) => m.model === f.model))
+            .map((f) => ({ ...f, temperature: 0.7, effort: "off", thinking: false }))])}>Add free OpenRouter models</button>{" "}
+          {FREE_MODELS.map((f) => f.label).join(" and ")}: they support tools, need an OpenRouter key and are rate-limited.</p>
+      )}
       <div className="row wrap" style={{ gap: 8 }}>
         <select value={provider} onChange={(e) => setProvider(e.target.value)}>
           {providers.map((p) => <option key={p} value={p}>{p}</option>)}

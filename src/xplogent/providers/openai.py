@@ -91,7 +91,10 @@ class OpenAIProvider(Provider):
         usage: dict[str, int] | None = None
 
         async with self._client.stream("POST", "/chat/completions", json=payload) as resp:
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError:
+                await _raise_with_reason(resp)
             async for line in resp.aiter_lines():
                 line = line.strip()
                 if not line or not line.startswith("data:"):
@@ -158,3 +161,21 @@ class OpenAIProvider(Provider):
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+async def _raise_with_reason(resp: httpx.Response) -> None:
+    """``raise_for_status`` with the provider's own reason (OpenRouter puts the useful
+    part, e.g. "temporarily rate-limited upstream", in ``error.metadata.raw``), so
+    retries / backup still see an ``HTTPStatusError`` and logs say what happened."""
+    reason = ""
+    try:
+        err = json.loads(await resp.aread()).get("error") or {}
+        if isinstance(err, dict):
+            raw = (err.get("metadata") or {}).get("raw") if isinstance(err.get("metadata"), dict) else ""
+            reason = str(raw or err.get("message") or "")
+        else:
+            reason = str(err)
+    except Exception:  # noqa: BLE001 - no readable body: the status line is enough
+        pass
+    msg = f"{resp.status_code} {resp.reason_phrase}" + (f": {reason[:300]}" if reason else "")
+    raise httpx.HTTPStatusError(msg, request=resp.request, response=resp)

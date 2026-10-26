@@ -8,8 +8,12 @@ you hear is what a caller would hear — only the phone line is replaced:
   ``{"type": "dtmf", "digit": "5"}`` for keypad presses,
   binary frames of 8 kHz μ-law for microphone audio (HTTPS only), and
   ``{"type": "hangup"}``;
-* server → browser: JSON ``turn`` / ``events`` / ``clear`` / ``transfer`` /
-  ``ended`` messages and binary 8 kHz μ-law audio frames of the agent's voice.
+* server → browser: JSON ``started`` / ``turn`` / ``thinking`` / ``voice_failed`` /
+  ``events`` / ``clear`` / ``transfer`` / ``error`` / ``ended`` messages and binary
+  8 kHz μ-law audio frames of the agent's voice.
+
+If the voice fails (no OpenAI key, speech server down…) the browser is told once and
+the call carries on as text: a test call never goes silent.
 
 The call is stored with ``test`` set, so it is not counted and never changes a
 contact's status or the do-not-call list.
@@ -42,6 +46,34 @@ class SilentTTS:
 
     async def aclose(self) -> None:
         return None
+
+
+class VoiceOrText:
+    """The configured voice, but a failure never silences a test call: the first error
+    is reported to the browser once (``notify``) and the rest of the call is text only.
+    The agent's words are still recorded and shown, since the turn itself succeeds."""
+
+    def __init__(self, tts: Any, notify: Any) -> None:
+        self.inner = tts
+        self.notify = notify
+        self.failed = ""
+
+    def __getattr__(self, name: str) -> Any:            # sample_rate, last, used_fallback…
+        return getattr(self.inner, name)
+
+    async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+        if self.failed:
+            return
+        try:
+            async for chunk in self.inner.synthesize(text):
+                yield chunk
+        except Exception as exc:  # noqa: BLE001 - reported once, then text only
+            self.failed = f"{type(exc).__name__}: {exc}"[:240]
+            _log.warning("test call voice failed (%s): continuing as text", self.failed)
+            self.notify(self.failed)
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
 
 
 async def run_test_call(websocket, cfg: Config | None = None, *, stt=None, tts=None,
@@ -105,6 +137,11 @@ async def run_test_call(websocket, cfg: Config | None = None, *, stt=None, tts=N
         if call_id_box:
             store.add_call_turn(call_id_box[0], speaker, text)
         outbox.put_nowait({"type": "turn", "speaker": speaker, "text": text})
+        if speaker == "caller" and not getattr(brain, "paused", False):
+            outbox.put_nowait({"type": "thinking"})       # cleared by the agent's next turn
+
+    def voice_failed(why: str) -> None:
+        outbox.put_nowait({"type": "voice_failed", "error": why})
 
     contact_id = start.get("contact_id")
     info: dict[str, Any] = {"direction": "inbound", "from": "browser test", "to": "",
@@ -120,6 +157,8 @@ async def run_test_call(websocket, cfg: Config | None = None, *, stt=None, tts=N
             provider=provider, retrieve=retrieve, on_events=on_events, send_dtmf=send_dtmf,
             idle_prompt_s=300.0, idle_hangup_s=900.0)
         box.append(call_id)
+        if voice:
+            session.tts = VoiceOrText(session.tts, voice_failed)
         session.on_turn = lambda speaker, text: on_turn(box, speaker, text)
         outbox.put_nowait({"type": "started", "call_id": call_id, "voice": voice,
                            "contact": (brain.contact or {}).get("name") or ""})

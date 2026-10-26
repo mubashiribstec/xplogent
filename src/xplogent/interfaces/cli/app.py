@@ -308,7 +308,7 @@ def setup() -> None:
     defaults = {
         "ollama": "llama3.1", "openai": "gpt-4o",
         "anthropic": "claude-sonnet-4-6", "gemini": "gemini-2.0-flash",
-        "openrouter": "meta-llama/llama-3.1-70b-instruct",
+        "openrouter": "google/gemma-4-31b-it:free",
     }
     if provider not in defaults:
         console.print(f"[yellow]Unknown provider '{provider}'[/] — "

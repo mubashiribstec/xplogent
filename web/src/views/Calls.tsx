@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw } from "lucide-react";
 import {
   CallRow, CallTurn, ReadinessItem, VoipStatus, getCall, getCalls, getContacts, getFullConfig, getVoipReadiness,
-  getVoipStatus, patchConfig, putSecrets, saveSip, clearSipBusy, getVoices, resendCrm, setDemo, testSpeech, testTelnyx, deleteRecording, getRecordingUrl, trainOnRecording,
+  getVoipStatus, listOllamaServers, patchConfig, testOllama, putSecrets, saveSip, clearSipBusy, getVoices, resendCrm, setDemo, testSpeech, testTelnyx, deleteRecording, getRecordingUrl, trainOnRecording,
 } from "../api";
 import { useToast } from "../components/Toast";
 import { CallNow, LiveCalls, TestCall } from "./CallControls";
@@ -12,6 +12,7 @@ import { CallAgentCard } from "./CallAgentCard";
 import { CallDebug } from "./CallDebug";
 import { GoLive } from "./GoLive";
 import { BrandingCard } from "./BrandingCard";
+import { FREE_MODELS } from "../lib/models";
 
 const CRM_BADGE: Record<string, string> = { sent: "ok", failed: "bad", skipped: "bad", retrying: "warn", sending: "warn" };
 const fmtTime = (t?: number | null) => (t ? new Date(t * 1000).toLocaleString() : "—");
@@ -35,8 +36,10 @@ export function Calls() {
   const [telnyxKeySet, setTelnyxKeySet] = useState(false);
   const [ready, setReady] = useState<{ ready: boolean; items: ReadinessItem[] } | null>(null);
   const [secrets, setSecrets] = useState<Record<string, boolean>>({});
+  const [presets, setPresets] = useState<{ label: string; model: string }[]>([]);
+  const [mainModel, setMainModel] = useState("");
   const loadCfg = () => getFullConfig().then((c) => {
-    setCfg(c.voip ?? {}); setTelnyxKeySet(!!c.secrets?.TELNYX_API_KEY); setSecrets(c.secrets ?? {}); setLoaded(true);
+    setCfg(c.voip ?? {}); setPresets(c.models ?? []); setMainModel(c.model ?? ""); setTelnyxKeySet(!!c.secrets?.TELNYX_API_KEY); setSecrets(c.secrets ?? {}); setLoaded(true);
   }).catch(() => setLoaded(true));
   const loadReady = () => getVoipReadiness().then(setReady).catch(() => {});
   const [contacts, setContacts] = useState<{ id: number; name: string }[]>([]);
@@ -216,9 +219,8 @@ export function Calls() {
             <textarea defaultValue={cfg.greeting ?? ""} rows={2} style={{ width: "100%" }}
               onBlur={(e) => save({ greeting: e.target.value })} /></label>
           <div className="row wrap" style={{ gap: 10 }}>
-            <label className="bud"><span className="lbl-sm">Model for calls (blank = main model)</span>
-              <input defaultValue={cfg.model ?? ""} placeholder="ollama:llama3.1"
-                onBlur={(e) => save({ model: e.target.value.trim() })} /></label>
+            {loaded && <CallModelPicker value={cfg.model ?? ""} mainModel={mainModel} presets={presets}
+              keySet={!!secrets.OPENROUTER_API_KEY} onPick={(m) => save({ model: m })} />}
             <label className="bud"><span className="lbl-sm">Est. cost per minute ($)</span>
               <input type="number" step="0.001" defaultValue={cfg.cost_per_minute ?? 0}
                 onBlur={(e) => save({ cost_per_minute: Number(e.target.value) || 0 })} style={{ width: 90 }} /></label>
@@ -387,7 +389,11 @@ function SpeechCard({ cfg, secrets, save, toast, onKey }: {
     : (stt.provider ?? "whisper-local") === "whisper-local" ? "local" : "openai";
   const loadVoices = () => {
     setVoices(null); setVoiceErr("");
-    getVoices().then((r) => { setVoices(r.voices); if (!r.ok) setVoiceErr(r.error ?? "could not list voices"); })
+    getVoices().then((r) => {
+      // Always plain strings: an unexpected shape from a voice server must not crash the page.
+      setVoices((r.voices ?? []).map((v: any) => typeof v === "string" ? { id: v, name: v }
+        : { id: String(v?.id?.id ?? v?.id ?? ""), name: String(v?.name?.name ?? v?.name ?? v?.id ?? "") }).filter((v) => v.id));
+      if (!r.ok) setVoiceErr(r.error ?? "could not list voices"); })
       .catch((e) => setVoiceErr(String(e)));
   };
   useEffect(() => { loadVoices(); /* eslint-disable-next-line */ }, [tts.provider, tts.base_url]);
@@ -408,6 +414,9 @@ function SpeechCard({ cfg, secrets, save, toast, onKey }: {
   return (
     <div className="card">
       <h3>Speech</h3>
+      <p className="dim" style={{ fontSize: 12 }}>Small server without a GPU? Local voice and built-in Whisper
+        (auto) run fine on a few CPU cores; put the <b>model for calls</b> on a hosted model (e.g. a free OpenRouter
+        one) or on your stronger Ollama server, and keep a backup model.</p>
       <div className="row wrap" style={{ gap: 10, alignItems: "end" }}>
         <label className="bud"><span className="lbl-sm">Voice (text-to-speech)</span>
           <select value={ttsKind} onChange={async (e) => {
@@ -477,6 +486,58 @@ function SpeechCard({ cfg, secrets, save, toast, onKey }: {
       <p className="dim" style={{ fontSize: 12 }}>Cloud choices send call audio (OpenAI, Deepgram) or the agent's
         words (OpenAI, ElevenLabs, Cartesia) to that company; the local choices keep everything on this server.
         If the main voice fails, the call keeps going on the fallback (<code>voip.tts_fallback</code>).</p>
+    </div>
+  );
+}
+
+// "Model for calls": the free OpenRouter models, your presets and the models on your
+// named Ollama servers (listed live), or any provider:model typed by hand.
+function CallModelPicker({ value, mainModel, presets, keySet, onPick }: {
+  value: string; mainModel: string; presets: { label: string; model: string }[]; keySet: boolean;
+  onPick: (m: string) => void;
+}) {
+  const [remote, setRemote] = useState<{ server: string; models: string[] }[]>([]);
+  const [custom, setCustom] = useState(false);
+  useEffect(() => {
+    listOllamaServers().then(async ({ servers }) => {
+      const found = await Promise.all((servers ?? []).map(async (s) => {
+        const probe = await testOllama("", "", s.name).catch(() => null);
+        return { server: s.name, models: probe?.ok ? probe.models ?? [] : [] };
+      }));
+      setRemote(found.filter((f) => f.models.length));
+    }).catch(() => undefined);
+  }, []);
+  const free = FREE_MODELS.map((f) => f.model);
+  const own = presets.filter((p) => !free.includes(p.model));
+  const known = new Set(["", ...free, ...own.map((p) => p.model),
+    ...remote.flatMap((r) => r.models.map((m) => `ollama:${m}@${r.server}`))]);
+  const isFree = value.startsWith("openrouter:") && value.endsWith(":free");
+  return (
+    <div className="bud" style={{ minWidth: 260 }}>
+      <span className="lbl-sm">Model for calls</span>
+      {custom || !known.has(value) ? (
+        <span className="row" style={{ gap: 6 }}>
+          <input defaultValue={value} placeholder="provider:model" autoFocus={custom}
+            onBlur={(e) => onPick(e.target.value.trim())} style={{ width: 240 }} />
+          <button className="linkx" onClick={() => setCustom(false)} title="back to the list">list</button>
+        </span>
+      ) : (
+        <select value={value} onChange={(e) => e.target.value === "__custom" ? setCustom(true) : onPick(e.target.value)}>
+          <option value="">Main model{mainModel ? ` (${mainModel})` : ""}</option>
+          <optgroup label="OpenRouter, free">
+            {FREE_MODELS.map((f) => <option key={f.model} value={f.model}>{f.label}</option>)}</optgroup>
+          {remote.map((r) => (
+            <optgroup key={r.server} label={`Ollama server "${r.server}"`}>
+              {r.models.map((m) => <option key={m} value={`ollama:${m}@${r.server}`}>{m}</option>)}</optgroup>))}
+          {own.length > 0 && <optgroup label="Your presets">
+            {own.map((p) => <option key={p.model} value={p.model}>{p.label}</option>)}</optgroup>}
+          <option value="__custom">Other (type provider:model)…</option>
+        </select>
+      )}
+      {value.startsWith("openrouter:") && !keySet &&
+        <span className="err" style={{ fontSize: 12 }}>Add your OpenRouter key under Settings → API keys.</span>}
+      {isFree && <span className="dim" style={{ fontSize: 12 }}>Free models are rate-limited by OpenRouter;
+        set a backup model (Settings → Backup model) so a busy minute never leaves a caller waiting.</span>}
     </div>
   );
 }

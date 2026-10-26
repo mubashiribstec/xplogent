@@ -313,6 +313,8 @@ class CallSession:
         self._run_turn(self._reply(text.strip()))
 
     async def _reply(self, text: str, record_as: str | None = None) -> None:
+        reply_parts: list[str] = []
+        recorded = False
         try:
             if len(text) < 2 and record_as is None:
                 return
@@ -320,7 +322,6 @@ class CallSession:
             self._record("caller", record_as or text)
             if getattr(self.brain, "paused", False):
                 return              # a person is handling the call
-            reply_parts: list[str] = []
             first = True
             first_ms = 0.0          # this turn's own first-word delay (0 = it didn't speak)
             info, self._turn_info = self._turn_info, {}
@@ -354,6 +355,7 @@ class CallSession:
                 raise
             if reply_parts:
                 self._record("agent", " ".join(reply_parts))
+                recorded = True
             tts_last = getattr(self.tts, "last", None) or {}
             fallbacks = list(info.get("fallbacks") or [])
             if tts_last.get("fallback"):
@@ -388,6 +390,8 @@ class CallSession:
             raise
         except Exception as exc:  # noqa: BLE001 - one bad turn must not drop the call
             _log.exception("turn failed")
+            if reply_parts and not recorded:     # e.g. the voice failed: keep what the agent said
+                self._record("agent", " ".join(reply_parts))
             self.turn_timings.append({"stt_ms": round(self._last_stt_ms, 1),
                                       "llm": llm_label(self.brain.provider),
                                       "tts": label_of(self.tts),

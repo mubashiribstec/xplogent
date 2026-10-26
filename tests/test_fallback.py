@@ -147,3 +147,30 @@ def test_backup_routes(local_ollama, monkeypatch):
     res = c.post("/providers/backup/test").json()
     assert res["ok"] and res["reply"] == "Hello there!"
     assert made == [("ollama-local:llama3.2:3b", False)]
+
+
+async def test_openrouter_free_model_rate_limit_hands_the_turn_to_the_backup(monkeypatch):
+    """A free OpenRouter model answering 429 is the common case: the backup must answer."""
+    from xplogent.providers.openrouter import OpenRouterProvider
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, request.headers.get("authorization")))
+        return httpx.Response(429, json={"error": {"message": "Provider returned error", "metadata": {
+            "raw": "google/gemma-4-31b-it:free is temporarily rate-limited upstream."}}})
+
+    primary = OpenRouterProvider("google/gemma-4-31b-it:free")
+    primary._client = httpx.AsyncClient(base_url=primary.base_url, headers=primary._client.headers,
+                                        transport=httpx.MockTransport(handler))
+    backup = Scripted("b", reply="backup here")
+    fb = FallbackProvider(primary, lambda: backup, backup_spec="ollama:qwen2.5:7b@gpu")
+    text = "".join([ev.text or "" async for ev in fb.stream([Message(role=Role.USER, content="hi")])
+                    if ev.kind == StreamKind.TOKEN])
+    assert text == "backup here" and fb.used_backup
+    assert seen == [("/api/v1/chat/completions", "Bearer sk-or-test")]
+
+    with pytest.raises(httpx.HTTPStatusError, match="429 Too Many Requests: google/gemma-4-31b-it:free is temporarily"):
+        async for _ in primary.stream([Message(role=Role.USER, content="hi")]):
+            pass

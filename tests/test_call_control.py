@@ -274,3 +274,77 @@ async def test_interrupted_reply_keeps_what_was_said():
     agent = [t for s, t in turns if s == "agent"]
     assert agent[0].startswith("First part.") and agent[0].endswith("…")
     assert agent[-1] == "Let me stop you there."
+
+
+def test_browser_test_call_carries_on_as_text_when_the_voice_fails(monkeypatch):
+    """No OpenAI key / speech server down: the greeting and replies still show, the
+    browser is told once, and a thinking status precedes each reply."""
+    from xplogent.interfaces.api import deps
+
+    class BrokenTTS:
+        sample_rate = 24000
+        calls = 0
+
+        async def synthesize(self, text):
+            BrokenTTS.calls += 1
+            raise RuntimeError("401 Unauthorized: no OpenAI key")
+            yield b""                                       # pragma: no cover
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(service_mod, "_speech_tts", lambda v: BrokenTTS())
+    monkeypatch.setattr(deps, "build_provider", lambda spec, **kw: ScriptedProvider(
+        [Message(role=Role.ASSISTANT, content="We open at nine."),
+         Message(role=Role.ASSISTANT, content="Bye now.")]))
+
+    async def no_knowledge(q):
+        return []
+
+    monkeypatch.setattr(service_mod, "_make_retriever", lambda cfg, store, k: no_knowledge)
+    got = []
+    with _client().websocket_connect("/ws/voip/test") as ws:
+        ws.send_text(json.dumps({"type": "start", "voice": True}))
+        assert json.loads(ws.receive_text())["type"] == "started"
+        ws.send_text(json.dumps({"type": "text", "text": "when do you open?"}))
+        while not any(m.get("text") == "We open at nine." for m in got):
+            got.append(json.loads(ws.receive_text()))
+        ws.send_text(json.dumps({"type": "text", "text": "thanks"}))
+        while not any(m.get("text") == "Bye now." for m in got):
+            got.append(json.loads(ws.receive_text()))
+        ws.send_text(json.dumps({"type": "hangup"}))
+    kinds = [m["type"] for m in got]
+    assert got[0]["type"] == "turn" and got[0]["speaker"] == "agent"       # the greeting is shown
+    failed = [m for m in got if m["type"] == "voice_failed"]
+    assert len(failed) == 1 and "no OpenAI key" in failed[0]["error"]
+    assert BrokenTTS.calls == 1                                              # then text only
+    caller = kinds.index("turn", 1)
+    assert got[caller]["speaker"] == "caller" and kinds[caller + 1] == "thinking"
+    assert not any("Sorry, I had a problem" in (m.get("text") or "") for m in got)
+
+
+def test_browser_test_call_reports_a_session_that_cannot_start(monkeypatch):
+    from xplogent.interfaces.api import deps
+
+    def bad(spec, **kw):
+        raise ValueError("no Ollama server named 'gpu': add it under Settings → Ollama servers")
+
+    monkeypatch.setattr(deps, "build_provider", bad)
+    with _client().websocket_connect("/ws/voip/test") as ws:
+        ws.send_text(json.dumps({"type": "start", "voice": False}))
+        msg = json.loads(ws.receive_text())
+    assert msg["type"] == "error" and "no Ollama server named 'gpu'" in msg["error"]
+
+
+async def test_a_failed_turn_still_records_what_the_agent_said():
+    class FailingTTS(FakeTTS):
+        async def synthesize(self, text):
+            raise RuntimeError("speech server down")
+            yield b""                                       # pragma: no cover
+
+    provider = ScriptedProvider([Message(role=Role.ASSISTANT, content="We open at nine.")])
+    session, _sent, _c, turns, _h = make_session(provider, tts=FailingTTS(), realtime=False)
+    await session.on_text("when do you open?")
+    await settle(session)
+    assert ("agent", "We open at nine.") in turns
+    assert "speech server down" in session.turn_timings[-1]["error"]

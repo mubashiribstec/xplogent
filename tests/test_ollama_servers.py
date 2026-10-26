@@ -120,3 +120,30 @@ def test_backup_status_probes_the_named_server(client, monkeypatch):
     st = client.get("/providers/backup").json()
     assert st["server"] == "gpu" and st["reachable"] and st["installed"]
     assert seen[-1] == ("https://gpu.example.com", "t-999999")
+
+
+def test_readiness_warns_about_a_local_cpu_only_call_model(home):
+    from xplogent.voip.readiness import checklist, slow_model_problem
+
+    local = "http://localhost:11434"
+    assert "no GPU" in slow_model_problem("ollama:llama3.1", gpu=False, ollama_host=local)
+    assert "no GPU" in slow_model_problem("ollama-local:qwen2.5:3b", gpu=False)
+    assert slow_model_problem("ollama:llama3.1", gpu=True, ollama_host=local) == ""
+    assert slow_model_problem("ollama:qwen2.5:14b@gpu", gpu=False) == ""          # a named remote server
+    assert slow_model_problem("ollama:llama3.1", gpu=False, ollama_host="https://gpu.example.com") == ""
+    assert slow_model_problem("openrouter:google/gemma-4-31b-it:free", gpu=False) == ""
+    items = {i["id"]: i for i in checklist({"model": "ollama:llama3.1"}, "x", env={}, gpu=False,
+                                           ollama_host="http://ollama:11434")}
+    assert items["model_speed"]["required"] is False and not items["model_speed"]["ok"]
+    items = {i["id"]: i for i in checklist({"model": "openrouter:google/gemma-4-31b-it:free"}, "x",
+                                           env={"OPENROUTER_API_KEY": "k"}, gpu=False)}
+    assert "model_speed" not in items and items["model"]["ok"]
+
+
+def test_kokoro_voice_lists_old_and_new_shapes():
+    from xplogent.voip.providers import _voice_entry
+
+    assert _voice_entry("af_heart") == {"id": "af_heart", "name": "af_heart"}
+    assert _voice_entry({"id": "af_bella", "name": "af_bella", "overall_grade": "A-"}) == \
+        {"id": "af_bella", "name": "af_bella (A-)"}
+    assert _voice_entry({"id": "af_amelia_inno", "name": "af_amelia_inno"})["id"] == "af_amelia_inno"

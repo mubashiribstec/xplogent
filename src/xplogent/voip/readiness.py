@@ -36,6 +36,41 @@ def public_url_problem(url: str) -> str:
     return "use a domain name: HTTPS certificates are issued for domains, not IPs"
 
 
+_LOCAL_OLLAMA = ("localhost", "127.0.0.1", "::1", "ollama", "host.docker.internal")
+
+
+def has_gpu() -> bool:
+    """An NVIDIA GPU visible to this server (device node or driver tool)."""
+    import shutil
+
+    return os.path.exists("/dev/nvidia0") or shutil.which("nvidia-smi") is not None
+
+
+def slow_model_problem(call_model: str, *, gpu: bool | None = None, ollama_host: str | None = None) -> str:
+    """Why the call model will likely answer too slowly ("" when it looks fine): an
+    Ollama model on this very server when it has no GPU (a 4-core CPU needs several
+    seconds per reply; callers hang up)."""
+    provider, _, model = call_model.partition(":")
+    if provider not in ("ollama", "ollama-local") or "@" in model:
+        return ""                                        # hosted, or a named (remote) Ollama server
+    if provider == "ollama":
+        if ollama_host is None:
+            from xplogent.providers.ollama import ollama_server
+
+            try:
+                ollama_host = ollama_server("")[0]
+            except Exception:  # noqa: BLE001
+                ollama_host = ""
+        if (urlparse(ollama_host or "http://localhost").hostname or "") not in _LOCAL_OLLAMA:
+            return ""                                    # Ollama on another machine
+    if has_gpu() if gpu is None else gpu:
+        return ""
+    cores = os.cpu_count() or 0
+    return (f"{call_model} runs on this server's CPU{f' ({cores} cores)' if cores else ''} with no GPU: "
+            "replies will be slow on calls. Pick a free OpenRouter model or your GPU Ollama server "
+            "under Calls → Model for calls (keep the local model as backup)")
+
+
 def _key(env: dict[str, str], name: str) -> bool:
     return bool(env.get(name, "").strip())
 
@@ -93,7 +128,8 @@ def _capacity(add, id_: str, label: str, st: dict[str, Any]) -> None:
 
 def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
               sip_status: dict[str, Any] | None = None,
-              sip_extension_status: dict[str, Any] | None = None) -> list[dict]:
+              sip_extension_status: dict[str, Any] | None = None, *,
+              gpu: bool | None = None, ollama_host: str | None = None) -> list[dict]:
     """Ordered readiness items: ``{id, label, ok, detail, required}``.
 
     Which telephony items appear depends on ``voip.telephony``: ``telnyx`` (Voice API,
@@ -157,6 +193,8 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
     model_ok = not needs or _key(env, needs)
     add("model", "Model for calls", model_ok,
         call_model if model_ok else f"{call_model} needs {needs}: add it in Settings or pick an Ollama model")
+    if slow := slow_model_problem(call_model, gpu=gpu, ollama_host=ollama_host):
+        add("model_speed", "Call model speed", False, slow, required=False)
     ok, detail = speech_status(v, env)
     add("speech", "Speech (listen + speak)", ok, detail)
     rec_on = bool((v.get("recording") or {}).get("enabled", True))

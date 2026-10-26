@@ -181,6 +181,25 @@ from their price pages (local Whisper and Kokoro add nothing). **Privacy:** clou
 receives the caller's audio; cloud voices receive the agent's words. The local choices keep both
 on your server; say which you use in your privacy notice.
 
+### A small server without a GPU (e.g. 4 CPU cores)
+
+Speech runs fine on a small CPU; the model is what gets slow. Keep speech local and put the
+model elsewhere:
+
+- **Listening**: built-in Whisper with `auto` (picks `small.en` on CPU).
+- **Voice**: local Kokoro (`xplogent-docker speech on`, the CPU image).
+- **Model for calls** (Calls → Conversation): a hosted model, e.g. one of the free OpenRouter
+  models (*Gemma 4 31B (free)*, *Nemotron 3 Ultra (free)*; both support the agent's tools, and
+  you need an OpenRouter key), or a model on your stronger Ollama server (Settings → Ollama servers
+  → Add server; with its bearer token, it shows up in the list as `model@server`).
+- **Backup model**: keep a small model as backup (Settings → Backup model, on this server or on
+  a named Ollama server). Free OpenRouter models are rate-limited and sometimes refuse with
+  "temporarily rate-limited upstream" (HTTP 429); the backup then answers that turn, so the
+  caller isn't left waiting.
+
+The Go-live checklist shows a "Call model speed" warning when the call model is an Ollama model
+on this server and no GPU is found.
+
 ## Call recording
 
 Every call is recorded as a stereo WAV (caller on the left, agent on the right) on all lines:
@@ -213,8 +232,14 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
 - **Call now**: the AI calls a number, or a customer from Contacts (📞). The do-not-call list
   is enforced; outside `voip.calling_hours` (09:00–20:00 in the contact's time zone by
   default) you are asked first.
-- **Test call in the browser**: talk to the agent exactly as a caller would, typing (or with
-  the microphone on HTTPS), hearing its real voice and seeing the tools it uses.
+- **Test call in the browser**: talk to the agent exactly as a caller would, typing or with
+  the microphone, hearing its real voice and seeing the tools it uses. **Start test call** asks
+  for the microphone straight away. Browsers only allow the microphone on HTTPS or `localhost`:
+  over `http://<server-ip>` it is off (typing still works). Either set up HTTPS
+  (`sudo xplogent-docker https your.domain`), or open the dashboard through an SSH tunnel
+  (`ssh -L 8765:localhost:8765 you@server`, then `http://localhost:8765`). If the voice fails
+  (for example OpenAI voice with no OpenAI key), the panel says so once and the call carries on
+  as text; "the agent is thinking" shows while a reply is on its way.
 - **Call me**: rings your phone. Test calls are marked "test", not counted, and never change
   a contact or the do-not-call list.
 
@@ -240,8 +265,9 @@ long as recordings (`voip.recording.retention_days`).
 
 ## Backup model
 
-If the call model's server is down, a small local model can answer instead
-(`xplogent-docker backup-model on`, Settings → Backup model), so calls aren't dropped.
+If the call model's server is down or rate-limited, a small model answers instead
+(`xplogent-docker backup-model on`, Settings → Backup model), so calls aren't dropped. The
+backup runs on this server's Docker Ollama or on any named Ollama server (**Runs on**).
 
 ## Cost control
 

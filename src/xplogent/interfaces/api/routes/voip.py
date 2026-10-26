@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import os
 import re
 from pathlib import Path
@@ -619,7 +621,17 @@ async def ws_voip_test(websocket: WebSocket) -> None:
         await websocket.close(code=1008)
         return
     await websocket.accept()
-    await run_test_call(websocket, provider=_test_provider(), retrieve=None)
+    try:
+        provider = _test_provider()
+    except Exception as exc:  # noqa: BLE001 - bad model spec / unknown server: say so, don't just close
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(websocket.receive_text(), timeout=5)
+            await websocket.send_text(json.dumps({"type": "error",
+                                                  "error": f"the call model can't start: {exc}"[:300]}))
+        with contextlib.suppress(Exception):
+            await websocket.close()
+        return
+    await run_test_call(websocket, provider=provider, retrieve=None)
 
 
 def _test_provider():
