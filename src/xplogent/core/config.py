@@ -9,6 +9,7 @@ Precedence (highest wins):
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -179,8 +180,22 @@ _ENV_SETTINGS = ["XPLOGENT_MODEL", "XPLOGENT_REFLECTION_MODEL", "XPLOGENT_EMBEDD
                  "OLLAMA_HOST", "XPLOGENT_LOG_LEVEL"]
 
 
+# Per-server Ollama tokens (Settings → Ollama servers): OLLAMA_API_KEY_<NAME>.
+_NAMED_SECRET = re.compile(r"OLLAMA_API_KEY_[A-Z0-9_]{1,32}")
+
+
+def is_secret_key(key: str) -> bool:
+    return key in _SECRET_KEYS or bool(_NAMED_SECRET.fullmatch(key))
+
+
+def secret_names() -> list[str]:
+    """Every secret name in use: the fixed list plus named-server tokens present."""
+    named = sorted(k for k in os.environ if _NAMED_SECRET.fullmatch(k))
+    return [*_SECRET_KEYS, *named]
+
+
 def allowed_env_key(key: str) -> bool:
-    return key in _SECRET_KEYS or key in _ENV_SETTINGS
+    return is_secret_key(key) or key in _ENV_SETTINGS
 
 
 def valid_env_value(value: str) -> bool:
@@ -222,12 +237,12 @@ def _migrate_plaintext_secrets() -> None:
         if not _sec.available():
             return
         env = _read_env_file()
-        leaked = {k: v for k, v in env.items() if k in _SECRET_KEYS and v}
+        leaked = {k: v for k, v in env.items() if is_secret_key(k) and v}
         if not leaked:
             return
         if _sec.write_secrets(leaked):
             # Rewrite .env keeping only non-secret entries.
-            kept = {k: v for k, v in env.items() if k not in _SECRET_KEYS}
+            kept = {k: v for k, v in env.items() if not is_secret_key(k)}
             path = env_path()
             if kept:
                 path.write_text("\n".join(f"{k}={v}" for k, v in kept.items()) + "\n",
@@ -247,7 +262,8 @@ def load_dotenv() -> None:
     try:
         from xplogent.core import secrets as _sec
 
-        _sec.load_into_env(_SECRET_KEYS)
+        stored = _sec.read_secrets() if _sec.available() else {}
+        _sec.load_into_env([*_SECRET_KEYS, *(k for k in stored if _NAMED_SECRET.fullmatch(k))])
     except Exception:  # noqa: BLE001
         pass
     for key, value in _read_env_file().items():
@@ -266,8 +282,8 @@ def save_env(updates: dict[str, str]) -> None:
     bad = [k for k, v in updates.items() if not allowed_env_key(k) or not valid_env_value(v)]
     if bad:
         raise ValueError(f"refusing to save unknown key or invalid value: {', '.join(bad)}")
-    secret_updates = {k: v for k, v in updates.items() if k in _SECRET_KEYS and v}
-    plain_updates = {k: v for k, v in updates.items() if k not in _SECRET_KEYS}
+    secret_updates = {k: v for k, v in updates.items() if is_secret_key(k) and v}
+    plain_updates = {k: v for k, v in updates.items() if not is_secret_key(k)}
 
     encrypted = bool(secret_updates) and _sec.write_secrets(secret_updates)
     # Anything not stored encrypted (incl. secrets when crypto is unavailable)
@@ -290,9 +306,26 @@ def save_env(updates: dict[str, str]) -> None:
             pass
 
 
+def delete_env(keys: list[str]) -> None:
+    """Forget secrets/settings everywhere: encrypted store, ``.env`` and this process."""
+    from xplogent.core import secrets as _sec
+
+    keys = [k for k in keys if allowed_env_key(k)]
+    if not keys:
+        return
+    if _sec.available():
+        _sec.write_secrets({}, remove=keys)
+    existing = _read_env_file()
+    if any(k in existing for k in keys):
+        kept = {k: v for k, v in existing.items() if k not in keys}
+        env_path().write_text("".join(f"{k}={v}\n" for k, v in kept.items()), encoding="utf-8")
+    for k in keys:
+        os.environ.pop(k, None)
+
+
 def secret_status() -> dict[str, bool]:
     """Which provider keys are set (without revealing them)."""
-    return {k: bool(os.environ.get(k)) for k in _SECRET_KEYS}
+    return {k: bool(os.environ.get(k)) for k in secret_names()}
 
 
 def save_user_config(updates: dict[str, Any]) -> dict[str, Any]:

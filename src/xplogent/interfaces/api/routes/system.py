@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 
 from fastapi import APIRouter, Request
 
@@ -95,9 +96,18 @@ async def ollama_test(body: dict) -> dict:
     Falls back to the saved values for anything not given, so the token never has to be
     sent back to the browser.
     """
-    from xplogent.providers.ollama import ollama_settings
+    from xplogent.providers.ollama import ollama_server, ollama_settings, server_token_env
 
-    saved_host, saved_token = ollama_settings()
+    server = str(body.get("server") or "").strip()
+    if server and not body.get("host"):
+        try:
+            saved_host, saved_token = ollama_server(server)
+        except ValueError as exc:
+            return {"ok": False, "models": [], "error": str(exc)}
+    elif server:
+        saved_host, saved_token = "", os.environ.get(server_token_env(server), "")
+    else:
+        saved_host, saved_token = ollama_settings()
     host = str(body.get("host") or saved_host).strip()
     token = str(body.get("token") or saved_token).strip()
     if not host.startswith(("http://", "https://")):
@@ -122,18 +132,97 @@ async def ollama_save(body: dict) -> dict:
     return {"ok": True, "host": host}
 
 
+_SERVER_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+
+
+@router.get("/providers/ollama/servers")
+async def ollama_servers_list() -> dict:
+    """Named Ollama servers (Settings → Ollama servers); tokens are never returned."""
+    from xplogent.providers.ollama import ollama_servers, server_token_env
+
+    return {"servers": [{**s, "token_set": bool(os.environ.get(server_token_env(s["name"])))}
+                        for s in ollama_servers()]}
+
+
+@router.post("/providers/ollama/servers")
+async def ollama_servers_save(body: dict) -> dict:
+    """Add or update a named server ``{name, host, token?}`` (token → encrypted store)."""
+    from xplogent.providers.ollama import ollama_servers, server_token_env
+
+    name = str(body.get("name") or "").strip().lower()
+    host = str(body.get("host") or "").strip().rstrip("/")
+    if not _SERVER_NAME.fullmatch(name) or name == "default":
+        return {"ok": False, "error": "the name must be letters, digits or dashes (e.g. gpu-box), not 'default'"}
+    if not host.startswith(("http://", "https://")):
+        return {"ok": False, "error": "the URL must start with http:// or https://"}
+    servers = [s for s in ollama_servers() if s["name"] != name] + [{"name": name, "host": host}]
+    _save_servers(servers)
+    token = str(body.get("token") or "").strip()
+    if token:
+        try:
+            save_env({server_token_env(name): token})
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+    deps.audit_event("ollama_server_saved", target=f"{name} {host}", risk="medium")
+    return {"ok": True, **(await ollama_servers_list())}
+
+
+@router.delete("/providers/ollama/servers/{name}")
+async def ollama_servers_delete(name: str) -> dict:
+    from xplogent.core.config import delete_env
+    from xplogent.providers.ollama import ollama_servers, server_token_env
+
+    _save_servers([s for s in ollama_servers() if s["name"] != name])
+    delete_env([server_token_env(name)])
+    deps.audit_event("ollama_server_removed", target=name, risk="medium")
+    return {"ok": True, **(await ollama_servers_list())}
+
+
+def _save_servers(servers: list[dict]) -> None:
+    """The servers list replaces the stored one (a deep merge can't remove entries)."""
+    from xplogent.core.config import xplogent_home
+
+    path = xplogent_home() / "config.yaml"
+    import yaml
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
+    data = data if isinstance(data, dict) else {}
+    ollama = data.get("ollama") if isinstance(data.get("ollama"), dict) else {}
+    ollama["servers"] = servers
+    data["ollama"] = ollama
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+def _backup_target() -> tuple[str, str, str, str]:
+    """``(spec, host, token, server)`` of the backup model: the local Docker Ollama, or a
+    named server (config ``fallback.server``), or any other provider spec."""
+    from xplogent.providers.ollama import local_ollama_host, ollama_server
+    from xplogent.providers.registry import backup_target_spec
+
+    fb = load_config().raw.get("fallback") or {}
+    server = str(fb.get("server") or "").strip()
+    spec = backup_target_spec(fb)
+    if server:
+        try:
+            host, token = ollama_server(server)
+        except ValueError:
+            host, token = "", ""
+        return spec, host, token, server
+    return spec, local_ollama_host(), "", ""
+
+
 # ── Backup model (local Ollama in Docker) ─────────────────────────────────────
 @router.get("/providers/backup")
 async def backup_model_status() -> dict:
-    from xplogent.providers.ollama import local_ollama_host
-
     fb = load_config().raw.get("fallback") or {}
-    host = local_ollama_host()
-    probe = await _probe_ollama(host, "", timeout=4.0)
+    _spec, host, token, server = _backup_target()
+    probe = await _probe_ollama(host, token, timeout=4.0) if host else {
+        "ok": False, "models": [], "error": f"no Ollama server named '{server}'"}
     model = str(fb.get("model") or "llama3.2:3b")
     installed = any(m == model or m == f"{model}:latest" or m.split(":")[0] == model
                     for m in probe["models"])
-    return {"enabled": bool(fb.get("enabled")), "model": model, "host": host,
+    return {"enabled": bool(fb.get("enabled")), "model": model, "host": host, "server": server,
             "reachable": probe["ok"], "models": probe["models"], "installed": installed,
             "error": probe.get("error", "")}
 
@@ -145,6 +234,8 @@ async def backup_model_save(body: dict) -> dict:
         updates["enabled"] = bool(body["enabled"])
     if str(body.get("model") or "").strip():
         updates["model"] = str(body["model"]).strip()
+    if "server" in body:
+        updates["server"] = str(body.get("server") or "").strip()
     if "host" in body:
         host = str(body.get("host") or "").strip().rstrip("/")
         if host and not host.startswith(("http://", "https://")):
@@ -160,13 +251,14 @@ async def backup_model_pull(body: dict) -> dict:
     """Download the backup model onto the local Ollama (can take several minutes)."""
     import httpx
 
-    from xplogent.providers.ollama import local_ollama_host
+    from xplogent.providers.ollama import ollama_headers
 
     model = str(body.get("model") or (load_config().raw.get("fallback") or {}).get("model")
                 or "llama3.2:3b").strip()
-    host = local_ollama_host()
+    _spec, host, token, _server = _backup_target()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(3600.0, connect=10.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3600.0, connect=10.0),
+                                     headers=ollama_headers(token)) as client:
             resp = await client.post(f"{host}/api/pull", json={"model": model, "stream": False})
     except (httpx.HTTPError, httpx.InvalidURL) as exc:
         return {"ok": False, "error": f"local Ollama not reachable at {host} ({type(exc).__name__}): "
@@ -184,10 +276,7 @@ async def backup_model_test() -> dict:
     from xplogent.providers.base import Message, Role
     from xplogent.providers.registry import build_provider
 
-    fb = load_config().raw.get("fallback") or {}
-    model = str(fb.get("model") or "llama3.2:3b")
-    spec = model if ":" in model and model.split(":", 1)[0] in available_providers() \
-        else f"ollama-local:{model}"
+    spec = _backup_target()[0]
     provider = build_provider(spec, fallback=False)
     started = time.monotonic()
     try:

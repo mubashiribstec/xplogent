@@ -90,9 +90,9 @@ def redact_config(value: Any, key: str = "") -> Any:
 
 
 def secret_values() -> list[str]:
-    from xplogent.core.config import _SECRET_KEYS
+    from xplogent.core.config import secret_names
 
-    names = [*_SECRET_KEYS, "XPLOGENT_AUTH_TOKEN"]
+    names = [*secret_names(), "XPLOGENT_AUTH_TOKEN"]
     return [v for v in (os.environ.get(n, "") for n in names) if len(v) >= 6]
 
 

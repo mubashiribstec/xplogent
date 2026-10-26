@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import {
   addFact, deleteFact, deleteSkill, exportKnowledge, getFacts, getFullConfig,
   getProviderModels, getRoles, getSkills, getStatus, getTools, importKnowledge, patchConfig, putRole,
-  putSecrets, restoreBackup, saveOllama, StatusInfo, testOllama,
+  putSecrets, restoreBackup, saveOllama, StatusInfo, testOllama, listOllamaServers, saveOllamaServer,
+  deleteOllamaServer, type OllamaServer,
   BackupStatus, getBackupModel, pullBackupModel, saveBackupModel, testBackupModel,
 } from "./api";
 
@@ -47,6 +48,7 @@ export function Settings() {
       <HealthCard />
       <OllamaCard host={cfg.ollama?.host ?? ""} hasToken={!!cfg.secrets?.OLLAMA_API_KEY}
         onUse={async (u) => { await save(u); reload(); }} onSaved={reload} flash={flash} />
+      <OllamaServersCard onUse={async (u) => { await save(u); reload(); }} flash={flash} />
       <BackupModelCard flash={flash} />
 
       <div className="card">
@@ -183,18 +185,12 @@ function OllamaCard({ host, hasToken, onUse, onSaved, flash }: {
     onSaved();  // refresh "✓ set" and the saved URL
     await test();
   };
-  const use = (m: string) => [
-    ["chat", { model: `ollama:${m}` }],
-    ["embeddings", { embedding_model: `ollama:${m}` }],
-    ["calls", { voip: { model: `ollama:${m}` } }],
-    ["reflection", { reflection_model: `ollama:${m}` }],
-  ] as const;
-
   return (
     <div className="card">
-      <h3>Ollama server</h3>
+      <h3>Ollama server (default)</h3>
       <p className="dim">Your own Ollama, e.g. <code>https://ai.example.com</code>. If it sits behind a proxy that
-        needs a bearer token, enter it below (stored encrypted, never shown again).</p>
+        needs a bearer token, enter it below (stored encrypted, never shown again). More servers, each with its
+        own token: <b>Other Ollama servers</b> below.</p>
       <label>Server URL
         <input value={url} placeholder="https://ai.example.com" onChange={(e) => setUrl(e.target.value)} />
       </label>
@@ -209,20 +205,109 @@ function OllamaCard({ host, hasToken, onUse, onSaved, flash }: {
       {probe && (probe.ok
         ? <p className="ok">✓ Connected: {probe.models.length} model(s)</p>
         : <p className="warn">✗ {probe.error}</p>)}
-      {probe?.ok && probe.models.length > 0 && (
-        <table className="data-table" style={{ marginTop: 8 }}>
-          <tbody>
-            {probe.models.map((m) => (
-              <tr key={m}><td><code>{m}</code></td><td style={{ textAlign: "right" }}>
-                {use(m).map(([label, update]) => (
-                  <button key={label} className="btn" style={{ marginLeft: 4 }}
-                    onClick={async () => { await onUse(update); flash(`${m} → ${label}`); }}>use for {label}</button>
-                ))}
-              </td></tr>
+      {probe?.ok && probe.models.length > 0 && <ModelUseTable models={probe.models} server="" onUse={onUse} flash={flash} />}
+    </div>
+  );
+}
+
+/** "use for chat / calls / …" buttons for the models of one Ollama server. */
+function ModelUseTable({ models, server, onUse, flash }: {
+  models: string[]; server: string; flash: (m: string) => void;
+  onUse: (u: Record<string, any>) => Promise<void>;
+}) {
+  const spec = (m: string) => `ollama:${m}${server ? `@${server}` : ""}`;
+  const use = (m: string) => [
+    ["chat", { model: spec(m) }],
+    ["embeddings", { embedding_model: spec(m) }],
+    ["calls", { voip: { model: spec(m) } }],
+    ["reflection", { reflection_model: spec(m) }],
+  ] as const;
+  return (
+    <table className="data-table" style={{ marginTop: 8 }}>
+      <tbody>
+        {models.map((m) => (
+          <tr key={m}><td><code>{m}</code></td><td style={{ textAlign: "right" }}>
+            {use(m).map(([label, update]) => (
+              <button key={label} className="btn" style={{ marginLeft: 4 }}
+                onClick={async () => { await onUse(update); flash(`${spec(m)} → ${label}`); }}>use for {label}</button>
             ))}
-          </tbody>
-        </table>
-      )}
+          </td></tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** Any number of extra Ollama servers, each with its own bearer token (OLLAMA_API_KEY_<NAME>). */
+function OllamaServersCard({ onUse, flash }: {
+  flash: (m: string) => void; onUse: (u: Record<string, any>) => Promise<void>;
+}) {
+  const [servers, setServers] = useState<OllamaServer[]>([]);
+  const [adding, setAdding] = useState(false);
+  const load = () => listOllamaServers().then((r) => setServers(r.servers)).catch(() => {});
+  useEffect(() => { load(); }, []);
+  return (
+    <div className="card" data-tour="ollama-servers">
+      <h3>Other Ollama servers</h3>
+      <p className="dim">For example a GPU machine for calls while this server stays small. Each server has its own
+        address and bearer token; pick its models for chat, calls, embeddings or as the backup. In settings they
+        are written as <code>ollama:model@name</code>.</p>
+      {servers.map((s) => <OllamaServerRow key={s.name} server={s} onUse={onUse} flash={flash} onChange={load} />)}
+      {servers.length === 0 && !adding && <p className="dim">No other servers yet.</p>}
+      {adding
+        ? <OllamaServerRow server={{ name: "", host: "", token_set: false }} onUse={onUse} flash={flash}
+            onChange={() => { setAdding(false); load(); }} onCancel={() => setAdding(false)} />
+        : <button onClick={() => setAdding(true)}>+ Add server</button>}
+    </div>
+  );
+}
+
+function OllamaServerRow({ server, onUse, flash, onChange, onCancel }: {
+  server: OllamaServer; flash: (m: string) => void; onChange: () => void; onCancel?: () => void;
+  onUse: (u: Record<string, any>) => Promise<void>;
+}) {
+  const isNew = !server.name;
+  const [name, setName] = useState(server.name);
+  const [url, setUrl] = useState(server.host);
+  const [token, setToken] = useState("");
+  const [probe, setProbe] = useState<{ ok: boolean; models: string[]; error?: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const test = async () => {
+    setBusy(true);
+    try { setProbe(await testOllama(url.trim(), token.trim(), name.trim())); }
+    catch (e) { setProbe({ ok: false, models: [], error: String(e) }); }
+    finally { setBusy(false); }
+  };
+  const save = async () => {
+    const r = await saveOllamaServer({ name: name.trim().toLowerCase(), host: url.trim(), token: token.trim() || undefined });
+    if (!r.ok) { flash(r.error || "not saved"); return; }
+    setToken(""); flash(`server ${name.trim()} saved`); onChange(); await test();
+  };
+  return (
+    <div className="server-row" style={{ borderTop: "1px solid var(--glass-border)", paddingTop: 10, marginTop: 10 }}>
+      <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
+        <label className="bud"><span className="lbl-sm">Name</span>
+          <input value={name} disabled={!isNew} placeholder="gpu" style={{ width: 110 }}
+            onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} /></label>
+        <label className="bud"><span className="lbl-sm">Server URL</span>
+          <input value={url} placeholder="https://gpu.example.com" style={{ width: 230 }} onChange={(e) => setUrl(e.target.value)} /></label>
+        <label className="bud"><span className="lbl-sm">Bearer token {server.token_set ? "✓ set" : "(optional)"}</span>
+          <input type="password" value={token} placeholder={server.token_set ? "•••••• (type to replace)" : "paste token"}
+            style={{ width: 170 }} onChange={(e) => setToken(e.target.value)} /></label>
+      </div>
+      <div className="row wrap" style={{ gap: 8 }}>
+        <button onClick={test} disabled={busy || !url.trim()}>{busy ? "Testing…" : "Test connection"}</button>
+        <button className="primary" onClick={save} disabled={!name.trim() || !url.trim()}>Save</button>
+        {isNew ? <button onClick={onCancel}>Cancel</button>
+          : <button className="danger" onClick={async () => {
+              if (!confirm(`Remove the server "${server.name}" and its token?`)) return;
+              await deleteOllamaServer(server.name); flash(`server ${server.name} removed`); onChange();
+            }}>Remove</button>}
+      </div>
+      {probe && (probe.ok
+        ? <p className="ok">✓ Connected: {probe.models.length} model(s)</p>
+        : <p className="warn">✗ {probe.error}</p>)}
+      {probe?.ok && probe.models.length > 0 && !isNew && <ModelUseTable models={probe.models} server={server.name} onUse={onUse} flash={flash} />}
     </div>
   );
 }
@@ -239,9 +324,11 @@ function BackupModelCard({ flash }: { flash: (m: string) => void }) {
   const [model, setModel] = useState("");
   const [busy, setBusy] = useState("");
   const [result, setResult] = useState<string>("");
+  const [servers, setServers] = useState<OllamaServer[]>([]);
   const load = () => getBackupModel().then((s) => { setSt(s); setModel((m) => m || s.model); }).catch(() => {});
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); listOllamaServers().then((r) => setServers(r.servers)).catch(() => {}); }, []);
   if (!st) return null;
+  const where = st.server ? `Ollama "${st.server}"` : "local Ollama";
 
   const run = async (label: string, fn: () => Promise<void>) => {
     setBusy(label); setResult("");
@@ -249,13 +336,21 @@ function BackupModelCard({ flash }: { flash: (m: string) => void }) {
   };
   return (
     <div className="card">
-      <h3>Backup model (local)</h3>
-      <p className="dim">If your main model or server can't answer (down, no key, rate limit), a small model on
-        this server's own Ollama answers instead, for chat and phone calls. On the server, run
-        {" "}<code>xplogent-docker backup-model on</code> once to start the local Ollama.</p>
+      <h3>Backup model</h3>
+      <p className="dim">If your main model or server can't answer (down, no key, a free model's rate limit), the
+        backup answers instead, for chat and phone calls. It can run on this server's own Ollama
+        (<code>xplogent-docker backup-model on</code> once) or on one of your other Ollama servers.</p>
+      <label>Runs on
+        <select value={st.server ?? ""} onChange={(e) => run("server", async () => {
+          await saveBackupModel({ server: e.target.value }); flash("backup server saved");
+        })}>
+          <option value="">this server's Docker Ollama</option>
+          {servers.map((s) => <option key={s.name} value={s.name}>Ollama server "{s.name}" ({s.host})</option>)}
+        </select>
+      </label>
       <div className="row wrap" style={{ gap: 8 }}>
         <span className={`badge ${st.reachable ? "ok" : "bad"}`} title={st.error || st.host}>
-          local Ollama {st.reachable ? "running" : "not running"}</span>
+          {where} {st.reachable ? "reachable" : "not reachable"}</span>
         <span className={`badge ${st.installed ? "ok" : "warn"}`}>{st.model} {st.installed ? "downloaded" : "not downloaded"}</span>
         <span className={`badge ${st.enabled ? "ok" : ""}`}>{st.enabled ? "backup on" : "backup off"}</span>
       </div>
@@ -281,7 +376,7 @@ function BackupModelCard({ flash }: { flash: (m: string) => void }) {
         })}>{busy === "test" ? "Testing…" : "Test backup"}</button>
       </div>
       {result && <p className={result.startsWith("✓") ? "ok" : "warn"}>{result}</p>}
-      {st.reachable && st.models.length > 0 && <p className="dim">On the local Ollama: {st.models.join(", ")}</p>}
+      {st.reachable && st.models.length > 0 && <p className="dim">On the {where}: {st.models.join(", ")}</p>}
     </div>
   );
 }

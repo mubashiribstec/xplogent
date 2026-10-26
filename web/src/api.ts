@@ -352,18 +352,27 @@ async function postJSON<T>(url: string, body: unknown = {}): Promise<T> {
 
 // ── Ollama server (remote, optional bearer token) ─────────────────────────────
 export interface OllamaProbe { ok: boolean; models: string[]; error?: string }
-export const testOllama = (host: string, token: string) =>
-  postJSON<OllamaProbe>("/providers/ollama/test", { host, token });
+export const testOllama = (host: string, token: string, server = "") =>
+  postJSON<OllamaProbe>("/providers/ollama/test", { host, token, ...(server ? { server } : {}) });
+export interface OllamaServer { name: string; host: string; token_set: boolean; }
+export async function listOllamaServers(): Promise<{ servers: OllamaServer[] }> {
+  return (await fetch("/providers/ollama/servers")).json();
+}
+export const saveOllamaServer = (s: { name: string; host: string; token?: string }) =>
+  postJSON<{ ok: boolean; error?: string; servers?: OllamaServer[] }>("/providers/ollama/servers", s);
+export async function deleteOllamaServer(name: string): Promise<{ ok: boolean; servers: OllamaServer[] }> {
+  return (await fetch(`/providers/ollama/servers/${encodeURIComponent(name)}`, { method: "DELETE" })).json();
+}
 export const saveOllama = (host: string, token: string) =>
   postJSON<{ ok: boolean; host?: string; error?: string }>("/providers/ollama/settings", { host, token });
 
 // ── Backup model (local Ollama in Docker) ─────────────────────────────────────
 export interface BackupStatus {
   enabled: boolean; model: string; host: string; reachable: boolean; models: string[];
-  installed: boolean; error?: string;
+  installed: boolean; error?: string; server?: string;
 }
 export async function getBackupModel(): Promise<BackupStatus> { return (await fetch("/providers/backup")).json(); }
-export const saveBackupModel = (u: { enabled?: boolean; model?: string; host?: string }) =>
+export const saveBackupModel = (u: { enabled?: boolean; model?: string; host?: string; server?: string }) =>
   postJSON<Record<string, any>>("/providers/backup", u);
 export const pullBackupModel = (model: string) => postJSON<Record<string, any>>("/providers/backup/pull", { model });
 export const testBackupModel = () => postJSON<Record<string, any>>("/providers/backup/test");

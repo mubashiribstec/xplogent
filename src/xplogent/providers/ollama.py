@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -70,6 +71,44 @@ def ollama_settings() -> tuple[str, str]:
     return host.rstrip("/"), os.environ.get("OLLAMA_API_KEY", "").strip()
 
 
+def server_token_env(name: str) -> str:
+    """Secret name holding a named server's bearer token: ``OLLAMA_API_KEY_<NAME>``."""
+    return "OLLAMA_API_KEY_" + re.sub(r"[^A-Z0-9]", "_", name.strip().upper())[:32]
+
+
+def ollama_servers() -> list[dict[str, str]]:
+    """Named Ollama servers from Settings (config ``ollama.servers``): ``[{name, host}]``."""
+    try:
+        from xplogent.core.config import load_config
+
+        raw = (load_config().raw.get("ollama") or {}).get("servers") or []
+    except Exception:  # noqa: BLE001
+        raw = []
+    out = []
+    for s in raw if isinstance(raw, list) else []:
+        if isinstance(s, dict) and str(s.get("name") or "").strip() and str(s.get("host") or "").strip():
+            out.append({"name": str(s["name"]).strip(), "host": str(s["host"]).strip().rstrip("/")})
+    return out
+
+
+def ollama_server(name: str = "") -> tuple[str, str]:
+    """``(host, token)`` for a named server, or the default server when ``name`` is empty."""
+    if not name or name == "default":
+        return ollama_settings()
+    for s in ollama_servers():
+        if s["name"] == name:
+            return s["host"], os.environ.get(server_token_env(name), "").strip()
+    raise ValueError(f"no Ollama server named '{name}': add it under Settings → Ollama servers")
+
+
+def split_server(model: str) -> tuple[str, str]:
+    """``qwen2.5:14b@gpu`` → ``("qwen2.5:14b", "gpu")`` (model names never contain ``@``)."""
+    if "@" in model:
+        base, _, server = model.rpartition("@")
+        return base, server.strip()
+    return model, ""
+
+
 def ollama_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
@@ -79,8 +118,9 @@ class OllamaProvider(Provider):
 
     def __init__(self, model: str, host: str | None = None, api_key: str | None = None,
                  **kwargs: Any) -> None:
+        model, self.server = split_server(model)
         super().__init__(model, **kwargs)
-        cfg_host, cfg_token = ollama_settings()
+        cfg_host, cfg_token = ollama_server(self.server)
         self.host = (host or cfg_host).rstrip("/")
         token = cfg_token if api_key is None else api_key
         self._client = httpx.AsyncClient(base_url=self.host, timeout=httpx.Timeout(300.0),

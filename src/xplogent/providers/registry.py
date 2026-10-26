@@ -43,6 +43,16 @@ def _make(spec: str, **kwargs: Any) -> Provider:
     return _PROVIDERS[provider_name](model=model, **kwargs)
 
 
+def backup_target_spec(fb: dict) -> str:
+    """Spec for the configured backup model (enabled or not): a full spec as given, a
+    model on a named Ollama server (``fallback.server``), or the local Docker Ollama."""
+    model = str(fb.get("model") or "llama3.2:3b").strip()
+    if ":" in model and model.split(":", 1)[0] in _PROVIDERS:
+        return model
+    server = str(fb.get("server") or "").strip()
+    return f"ollama:{model}@{server}" if server else f"ollama-local:{model}"
+
+
 def backup_spec() -> str:
     """The backup model spec when the backup is enabled (config ``fallback``), else ""."""
     try:
@@ -53,8 +63,7 @@ def backup_spec() -> str:
         return ""
     if not fb.get("enabled") or not str(fb.get("model") or "").strip():
         return ""
-    model = str(fb["model"]).strip()
-    return model if ":" in model and model.split(":", 1)[0] in _PROVIDERS else f"ollama-local:{model}"
+    return backup_target_spec(fb)
 
 
 def build_provider(spec: str, *, fallback: bool = True, **kwargs: Any) -> Provider:

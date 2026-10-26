@@ -133,9 +133,10 @@ def read_secrets() -> dict[str, str]:
         return {}
 
 
-def write_secrets(updates: dict[str, str]) -> bool:
-    """Merge ``updates`` into the encrypted store. Returns False if unavailable, or if an
-    existing store can't be decrypted (it is never overwritten in that case)."""
+def write_secrets(updates: dict[str, str], remove: tuple[str, ...] | list[str] = ()) -> bool:
+    """Merge ``updates`` into the encrypted store (and drop the ``remove`` names). Returns
+    False if unavailable, or if an existing store can't be decrypted (it is never
+    overwritten in that case)."""
     if not available():
         return False
     try:
@@ -148,6 +149,8 @@ def write_secrets(updates: dict[str, str]) -> bool:
         for k, v in updates.items():
             if v:
                 current[k] = v
+        for k in remove:
+            current.pop(k, None)
         blob = Fernet(key).encrypt(json.dumps(current).encode("utf-8"))
         path = _store_path()
         tmp = path.with_suffix(".tmp")
