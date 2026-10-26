@@ -237,6 +237,13 @@ voip:
     api_key_env: OPENAI_API_KEY
     language: en
     device: auto                   # whisper-local: auto | cpu | cuda
+  mode: cascaded                   # cascaded = speech-to-text -> model -> voice; realtime = OpenAI speech-to-speech (OPENAI_API_KEY; the greeting still uses the voice below)
+  realtime:                        # voip.mode: realtime
+    provider: openai
+    model: gpt-realtime
+    voice: marin
+    transcription_model: gpt-4o-transcribe   # the transcript of what the caller said
+    url: "wss://api.openai.com/v1/realtime"
   tts:                             # openai = any OpenAI-compatible /audio/speech (OpenAI, local Kokoro); or elevenlabs / cartesia
     provider: openai               # openai | elevenlabs | cartesia (keys: ELEVENLABS_API_KEY / CARTESIA_API_KEY)
     language: en                   # cartesia

@@ -8,6 +8,7 @@ socket loop, wrap up the call record, honour do-not-call).
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -97,6 +98,27 @@ def call_variables(v: dict[str, Any], info: dict[str, Any],
     for key, value in ((contact or {}).get("fields") or {}).items():
         variables.setdefault(str(key), value)
     return variables
+
+
+def _session_class(v: dict[str, Any], session_kw: dict[str, Any]) -> tuple[type, dict[str, Any]]:
+    """The normal engine, or the realtime speech-to-speech one (``voip.mode: realtime``).
+
+    Tests may pass ``rt_url`` / ``rt_api_key`` in ``session_kw`` to point it at a fake server."""
+    overrides = {k: session_kw.pop(k) for k in ("rt_url", "rt_api_key") if k in session_kw}
+    if str(v.get("mode") or "cascaded") != "realtime":
+        return CallSession, {}
+    from urllib.parse import urlencode
+
+    from xplogent.voip.realtime import RealtimeSession
+
+    rt = v.get("realtime") or {}
+    model = str(rt.get("model") or "gpt-realtime")
+    url = str(rt.get("url") or "wss://api.openai.com/v1/realtime")
+    url += ("&" if "?" in url else "?") + urlencode({"model": model})
+    return RealtimeSession, {"rt_url": overrides.get("rt_url", url), "rt_model": model,
+                             "rt_api_key": overrides.get("rt_api_key", os.environ.get("OPENAI_API_KEY", "")),
+                             "rt_voice": str(rt.get("voice") or "marin"),
+                             "rt_transcription_model": str(rt.get("transcription_model") or "gpt-4o-transcribe")}
 
 
 def merge_crm_contact(contact: dict[str, Any] | None, crm: dict[str, Any], phone: str) -> dict[str, Any]:
@@ -252,7 +274,8 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
     # Live speech-to-text only with the configured provider (an injected stt is a test's).
     stream_stt = session_kw.pop("stream_stt") if "stream_stt" in session_kw else (
         build_streaming_stt(v.get("stt") or {}) if stt is None else None)
-    session = CallSession(
+    session_cls, rt_kw = _session_class(v, session_kw)
+    session = session_cls(
         brain=brain, stt=stt or _speech_stt(v), tts=tts or _speech_tts(v),
         send_audio=send_audio, clear_audio=clear_audio, hangup=hangup, transfer=transfer,
         on_turn=lambda speaker, text: store.add_call_turn(call_id, speaker, text),
@@ -263,7 +286,7 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
                 max_utterance_ms=int(vad_cfg.get("max_utterance_ms", 15000))),
         max_call_s=float(v.get("max_call_seconds", 900)),
         send_dtmf=send_dtmf if dtmf_on else None, recorder=_recorder(v, call_id),
-        stream_stt=stream_stt, **session_kw)
+        stream_stt=stream_stt, **rt_kw, **session_kw)
     session.dtmf_enabled = dtmf_on
     if lookup:
         session.event("crm_lookup", ("found " + (lookup["contact"].get("name") or "a record")

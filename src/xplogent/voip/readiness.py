@@ -146,6 +146,11 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
             add("sip_extension_registered", "PBX extension registration", bool(st.get("registered")),
                 "registered" if st.get("registered") else (st.get("error") or "not registered yet"))
         _capacity(add, "sip_extension_capacity", "PBX extension capacity", sip_extension_status or {})
+    if str(v.get("mode") or "cascaded") == "realtime":
+        ok = _key(env, "OPENAI_API_KEY")
+        add("realtime", "Realtime voice (OpenAI)", ok,
+            str((v.get("realtime") or {}).get("model") or "gpt-realtime") if ok
+            else "realtime mode needs an OpenAI key (Settings); calls fall back to the normal mode without it")
     call_model = str(v.get("model") or model)
     provider = call_model.split(":", 1)[0]
     needs = _PROVIDER_KEYS.get(provider)

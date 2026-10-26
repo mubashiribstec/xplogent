@@ -435,6 +435,24 @@ function SpeechCard({ cfg, secrets, save, toast, onKey }: {
               onBlur={(e) => save({ tts: { ...tts, base_url: e.target.value.trim() } })} /></label>)}
       </div>
       <div className="row wrap" style={{ gap: 10, alignItems: "end", marginTop: 10 }}>
+        <label className="bud"><span className="lbl-sm">Conversation mode</span>
+          <select value={cfg.mode === "realtime" ? "realtime" : "cascaded"}
+            onChange={async (e) => { await save({ mode: e.target.value }); toast("conversation mode saved", "success"); }}>
+            <option value="cascaded">Standard: speech-to-text, model, voice</option>
+            <option value="realtime">Realtime speech-to-speech (OpenAI: lowest delay, higher cost)</option>
+          </select></label>
+        {cfg.mode === "realtime" && (<>
+          {keyInput("OPENAI_API_KEY")}
+          <label className="bud"><span className="lbl-sm">Realtime voice</span>
+            <input defaultValue={cfg.realtime?.voice ?? "marin"} style={{ width: 110 }}
+              onBlur={(e) => save({ realtime: { ...(cfg.realtime ?? {}), voice: e.target.value.trim() || "marin" } })} /></label>
+        </>)}
+      </div>
+      {cfg.mode === "realtime" && <p className="dim" style={{ fontSize: 12 }}>Realtime: the OpenAI model hears the
+        caller and answers with its own voice. The greeting (with the AI and recording notice) is still spoken by
+        the voice above, required fields and "Pause AI" still apply, and if OpenAI can't be reached the call runs
+        in standard mode. OpenAI receives the call audio.</p>}
+      <div className="row wrap" style={{ gap: 10, alignItems: "end", marginTop: 10 }}>
         <label className="bud"><span className="lbl-sm">Listening (speech-to-text)</span>
           <select value={sttKind} onChange={async (e) => {
             await save({ stt: { ...STT_PRESETS[e.target.value] } }); toast("speech-to-text saved", "success");

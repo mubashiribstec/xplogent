@@ -162,6 +162,20 @@ Keys are stored encrypted (Speech card or Settings). If the main voice fails bef
 it is retried once, then `voip.tts_fallback` (any of the above) takes over for that sentence; the
 call's debug view shows which provider served each turn and why a fallback happened.
 
+**Realtime speech-to-speech (optional).** Set **Conversation mode → Realtime** (`voip.mode:
+realtime`, OpenAI key; `voip.realtime` holds the model, voice and transcription model). The OpenAI
+model then hears the caller directly (G.711 μ-law, no resampling) and answers with its own voice,
+which removes the speech-to-text and text-to-speech steps from every turn. What stays the same:
+the greeting with the AI and recording notice is still spoken word for word by the normal voice
+and can't be interrupted; tools run through the same rules (a required field still blocks
+`end_call`; do-not-call, callbacks and transfers work as usual); knowledge is looked up with a
+`search_knowledge` tool; the model only speaks when Xplogent asks it to, so **Pause AI** works;
+recording, transcripts, live control, the debug view and the CRM work unchanged. If OpenAI can't
+be reached when the call starts, the call runs in the standard mode (the debug timeline says so).
+Trade-offs: lower delay and more natural turn-taking, but cloud-only, a higher per-minute price
+than the standard mode with local speech, and less exact control over wording; OpenAI receives
+the call audio.
+
 **Cost:** set `voip.cost_per_minute` to carrier + model + the speech providers' per-minute rates
 from their price pages (local Whisper and Kokoro add nothing). **Privacy:** cloud speech-to-text
 receives the caller's audio; cloud voices receive the agent's words. The local choices keep both
