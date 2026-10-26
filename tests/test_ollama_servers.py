@@ -6,7 +6,13 @@ import json
 
 import pytest
 
-from xplogent.core.config import allowed_env_key, load_config, save_env, save_user_config, secret_status
+from xplogent.core.config import (
+    allowed_env_key,
+    load_config,
+    save_env,
+    save_user_config,
+    secret_status,
+)
 from xplogent.providers import ollama as oll
 
 
