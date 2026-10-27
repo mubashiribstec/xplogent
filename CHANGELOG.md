@@ -71,6 +71,11 @@ All notable changes to Xplogent. Format follows
 - Windows ignored the contact's time zone for calling hours: added `tzdata`.
 - The Calls page crashed with newer Kokoro images (their voice list has objects).
 - API keys pasted with a stray space or newline were refused by the provider; they are trimmed.
+- Gemini: a 404 ("models/gemini-2.5-flash is not found") now says why and what to use.
+  Google shut down Gemini 1.x and 2.0, and serves 2.5 only to keys that used it before. The
+  defaults (preset, onboarding, CLI setup, Test key) moved to `gemini-3.6-flash`; the
+  readiness check flags a shut-down Gemini model; chat errors carry the same explanation
+  and fix.
 - Fixes from a deployment audit:
   - The Guide page was empty in Docker: the image now ships the guide pages.
   - Dashboard chat ran file tools on a greeting and learned junk facts. Small talk now gets

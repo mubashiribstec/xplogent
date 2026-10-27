@@ -71,6 +71,20 @@ def slow_model_problem(call_model: str, *, gpu: bool | None = None, ollama_host:
             "under Calls → Model for calls (keep the local model as backup)")
 
 
+# Models the provider has shut down: every request 404s.
+_RETIRED = (("gemini:gemini-1.", "Gemini 1.x"), ("gemini:gemini-2.0", "Gemini 2.0"), ("gemini:gemini-pro", "Gemini Pro 1.0"))
+
+
+def retired_model(spec: str) -> str:
+    """Why ``spec`` can't work any more ("" when it may): Google shut down Gemini 1.x
+    and 2.0 (2.0 on 1 June 2026); 2.5 still answers only keys that used it before."""
+    for prefix, name in _RETIRED:
+        if spec.startswith(prefix):
+            return (f"{spec}: Google has shut down {name}, so every request fails (404). "
+                    "Pick gemini:gemini-3.6-flash or another model")
+    return ""
+
+
 def _key(env: dict[str, str], name: str) -> bool:
     return bool(env.get(name, "").strip())
 
@@ -191,8 +205,9 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
     provider = call_model.split(":", 1)[0]
     needs = _PROVIDER_KEYS.get(provider)
     model_ok = not needs or _key(env, needs)
-    add("model", "Model for calls", model_ok,
-        call_model if model_ok else f"{call_model} needs {needs}: add it in Settings or pick an Ollama model")
+    retired = retired_model(call_model)
+    add("model", "Model for calls", model_ok and not retired,
+        retired or (call_model if model_ok else f"{call_model} needs {needs}: add it in Settings or pick an Ollama model"))
     company = str(v.get("company") or "").strip()
     placeholder = company.lower() in ("", "our company")
     add("company", "Company name", not placeholder,

@@ -44,7 +44,7 @@ def diagnose(exc: BaseException, spec: str = "", quota: dict[str, Any] | None = 
                    "Check the server's internet connection (or the Ollama server's address).")
     if isinstance(exc, ValueError) and "ollama server named" in text:
         return out("unknown_server", str(exc), "Add that server under Settings → Ollama servers, or pick another model.")
-    if status == 401 or "invalid api key" in text or "user not found" in text or "no auth credentials" in text:
+    if status == 401 or "api key not valid" in text or "api_key_invalid" in text or "invalid api key" in text or "user not found" in text or "no auth credentials" in text:
         return out("bad_key", "The API key was refused (wrong, revoked or disabled).",
                    f"Create a new key at the provider and paste it in {where}.")
     if status == 402 or "insufficient credits" in text or "requires more credits" in text:
@@ -57,6 +57,12 @@ def diagnose(exc: BaseException, spec: str = "", quota: dict[str, Any] | None = 
     if status == 403:
         return out("forbidden", f"Refused by the provider: {raw}",
                    "The key may not be allowed to use this model (guardrail/moderation), try another model.")
+    if provider == "gemini" and (status == 404 or "is not found for api version" in text):
+        return out("unknown_model",
+                   f"Google doesn't serve {model} to this key. Gemini 2.0 and 1.5 are shut down, and 2.5 "
+                   "models are only available to accounts that used them before.",
+                   "Use gemini:gemini-3.6-flash (Google's pick for new projects). Settings → Browse provider "
+                   "models → gemini lists exactly what your key can use.")
     if status == 404 or "no endpoints found" in text or "not a valid model" in text or "model not found" in text:
         return out("unknown_model", f"The model {model or spec} was not found.",
                    "Check the model id (Settings → Browse provider models lists the exact ids).")

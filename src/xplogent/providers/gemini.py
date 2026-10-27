@@ -27,6 +27,7 @@ from xplogent.providers.base import (
     extract_gen_params,
     image_data_uri,
 )
+from xplogent.providers.openai import _raise_with_reason
 
 
 class GeminiProvider(Provider):
@@ -114,7 +115,10 @@ class GeminiProvider(Provider):
         url = f"/models/{self.model}:streamGenerateContent?alt=sse"
 
         async with self._client.stream("POST", url, json=payload) as resp:
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError:
+                await _raise_with_reason(resp)      # Google's own message, for diagnose()
             async for line in resp.aiter_lines():
                 line = line.strip()
                 if not line or not line.startswith("data:"):

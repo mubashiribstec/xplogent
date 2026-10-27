@@ -307,7 +307,7 @@ def setup() -> None:
     ).strip().lower() or "ollama"
     defaults = {
         "ollama": "llama3.1", "openai": "gpt-4o",
-        "anthropic": "claude-sonnet-4-6", "gemini": "gemini-2.0-flash",
+        "anthropic": "claude-sonnet-4-6", "gemini": "gemini-3.6-flash",
         "openrouter": "google/gemma-4-31b-it:free",
     }
     if provider not in defaults:

@@ -343,7 +343,7 @@ class Agent:
                 if emitted or kind not in RETRYABLE or attempt >= policy.max_attempts:
                     self.last_exception = exc
                     _log.warning("provider error for agent %s: %s", self.name, exc)
-                    await self._emit(EventType.ERROR, message=f"provider error: {exc}")
+                    await self._emit(EventType.ERROR, message=_explain(exc, self.provider))
                     return None
                 _log.warning("provider %s for agent %s; retry %d", kind, self.name, attempt)
                 await asyncio.sleep(policy.delay_for(attempt))
@@ -476,6 +476,20 @@ class Agent:
         summary = await self.skills.apply(result)
         if summary.get("facts") or summary.get("skill"):
             await self._emit(EventType.SKILL, **summary)
+
+
+def _explain(exc: BaseException, provider) -> str:
+    """The chat's error line: what went wrong and what to do, then the raw error."""
+    from xplogent.providers.diagnose import diagnose
+
+    spec = f"{getattr(provider, 'name', '')}:{getattr(provider, 'model', '')}"
+    try:
+        d = diagnose(exc, spec)
+    except Exception:  # noqa: BLE001 - never hide the real error behind a diagnosis bug
+        return f"provider error: {exc}"
+    if d.get("code") == "error":
+        return f"provider error: {exc}"
+    return f"provider error: {d['reason']} → {d['fix']} ({_short(str(exc), 160)})"
 
 
 def _short(value, limit: int = 300) -> str:

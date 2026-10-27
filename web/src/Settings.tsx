@@ -19,7 +19,7 @@ const usedWith = (cfg: Record<string, any>, p: string) =>
 const KEY_TEST_MODEL: Record<string, (cfg: Record<string, any>) => string> = {
   OPENAI_API_KEY: (c) => usedWith(c, "openai") ?? "openai:gpt-4o-mini",
   ANTHROPIC_API_KEY: (c) => usedWith(c, "anthropic") ?? "",
-  GEMINI_API_KEY: (c) => usedWith(c, "gemini") ?? "gemini:gemini-2.0-flash",
+  GEMINI_API_KEY: (c) => usedWith(c, "gemini") ?? "gemini:gemini-3.6-flash",
   OPENROUTER_API_KEY: (c) => usedWith(c, "openrouter") ?? FREE_MODELS[1].model,
 };
 // Tool groups that drive a real screen/mouse: unusable on a server without a display.

@@ -11,7 +11,7 @@ models:
   - { label: "Llama 3.1 (local)", model: "ollama:llama3.1", temperature: 0.7, effort: "off", thinking: false }
   - { label: "GPT-4o", model: "openai:gpt-4o", temperature: 0.7, effort: "off", thinking: false }
   - { label: "Claude Sonnet", model: "anthropic:claude-sonnet-4-6", temperature: 0.7, effort: "medium", thinking: true }
-  - { label: "Gemini 1.5 Pro", model: "gemini:gemini-1.5-pro", temperature: 0.7, effort: "off", thinking: false }
+  - { label: "Gemini 3.6 Flash", model: "gemini:gemini-3.6-flash", temperature: 0.7, effort: "off", thinking: false }
   - { label: "Gemma 4 31B (free)", model: "openrouter:google/gemma-4-31b-it:free", temperature: 0.7, effort: "off", thinking: false }
   - { label: "Nemotron 3 Ultra (free)", model: "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", temperature: 0.7, effort: "off", thinking: false }
   - { label: "LLaVA (local vision)", model: "ollama:llava", temperature: 0.7, effort: "off", thinking: false, vision: true }

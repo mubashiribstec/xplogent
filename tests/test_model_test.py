@@ -143,3 +143,77 @@ def test_pasted_api_keys_are_trimmed(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "")         # restored after the test
     save_env({"OPENROUTER_API_KEY": "  sk-or-v1-abc  \t"})
     assert os.environ["OPENROUTER_API_KEY"] == "sk-or-v1-abc"
+
+
+GEMINI_404 = {"error": {"code": 404, "status": "NOT_FOUND", "message":
+              "models/gemini-2.5-flash is not found for API version v1beta, or is not supported for "
+              "generateContent. Call ListModels to see the list of available models."}}
+GEMINI_BAD_KEY = {"error": {"code": 400, "status": "INVALID_ARGUMENT", "message":
+                  "API key not valid. Please pass a valid API key.",
+                  "details": [{"reason": "API_KEY_INVALID"}]}}
+
+
+@pytest.mark.parametrize("status, body, code, words", [
+    (404, GEMINI_404, "unknown_model", "gemini-3.6-flash"),
+    (400, GEMINI_BAD_KEY, "bad_key", "Settings → API keys → GEMINI_API_KEY"),
+])
+async def test_gemini_errors_are_explained(monkeypatch, status, body, code, words):
+    from xplogent.providers.gemini import GeminiProvider
+
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
+    p = GeminiProvider("gemini-2.5-flash")
+    p._client = httpx.AsyncClient(base_url=p.base_url, transport=httpx.MockTransport(
+        lambda r: httpx.Response(status, json=body)))
+    with pytest.raises(httpx.HTTPStatusError) as info:
+        async for _ in p.stream([]):
+            pass
+    assert "not found for API version" in str(info.value) or "API key not valid" in str(info.value)
+    d = diagnose(info.value, "gemini:gemini-2.5-flash")
+    assert d["code"] == code and words in (d["reason"] + d["fix"])
+
+
+def test_retired_gemini_models_fail_the_readiness_check():
+    from xplogent.voip.readiness import checklist, retired_model
+
+    assert "shut down Gemini 2.0" in retired_model("gemini:gemini-2.0-flash")
+    assert retired_model("gemini:gemini-1.5-pro") and not retired_model("gemini:gemini-3.6-flash")
+    items = {i["id"]: i for i in checklist({"model": "gemini:gemini-2.0-flash"}, "x",
+                                           env={"GEMINI_API_KEY": "k"}, gpu=True)}
+    assert not items["model"]["ok"] and "gemini-3.6-flash" in items["model"]["detail"]
+
+
+def test_shipped_gemini_defaults_are_current():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for f in ("src/xplogent/config/default.yaml", "src/xplogent/interfaces/cli/app.py",
+              "web/src/components/Onboarding.tsx", "web/src/Settings.tsx"):
+        text = (root / f).read_text()
+        assert "gemini-2.0" not in text and "gemini-1.5" not in text, f
+
+
+async def test_chat_error_line_explains_a_gemini_404(tmp_path, monkeypatch):
+    from xplogent.core.agent import Agent
+    from xplogent.core.config import load_config
+    from xplogent.core.events import EventType
+    from xplogent.providers.gemini import GeminiProvider
+    from xplogent.safety.approval import SafetyManager
+    from xplogent.tools.registry import ToolRegistry
+
+    monkeypatch.setenv("XPLOGENT_HOME", str(tmp_path))
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
+    p = GeminiProvider("gemini-2.5-flash")
+    p._client = httpx.AsyncClient(base_url=p.base_url, transport=httpx.MockTransport(
+        lambda r: httpx.Response(404, json=GEMINI_404)))
+    agent = Agent(load_config(), p, ToolRegistry.from_config([]), SafetyManager())
+    errors = []
+    real_emit = agent._emit
+
+    async def emit(kind, **data):
+        if kind == EventType.ERROR:
+            errors.append(data.get("message", ""))
+        await real_emit(kind, **data)
+
+    monkeypatch.setattr(agent, "_emit", emit)
+    await agent.run("what is the weather like")
+    assert errors and "doesn't serve gemini-2.5-flash" in errors[0] and "gemini-3.6-flash" in errors[0]
