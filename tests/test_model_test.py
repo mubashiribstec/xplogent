@@ -217,3 +217,19 @@ async def test_chat_error_line_explains_a_gemini_404(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_emit", emit)
     await agent.run("what is the weather like")
     assert errors and "doesn't serve gemini-2.5-flash" in errors[0] and "gemini-3.6-flash" in errors[0]
+
+
+async def test_gemini_high_demand_is_temporary_not_down(monkeypatch):
+    from xplogent.providers.gemini import GeminiProvider
+
+    monkeypatch.setenv("GEMINI_API_KEY", "AQ.test")
+    p = GeminiProvider("gemini-flash-latest")
+    body = {"error": {"code": 503, "status": "UNAVAILABLE", "message": "This model is currently experiencing "
+                      "high demand. Spikes in demand are usually temporary. Please try again later."}}
+    p._client = httpx.AsyncClient(base_url=p.base_url, transport=httpx.MockTransport(
+        lambda r: httpx.Response(503, json=body)))
+    with pytest.raises(httpx.HTTPStatusError) as info:
+        async for _ in p.stream([]):
+            pass
+    d = diagnose(info.value, "gemini:gemini-flash-latest")
+    assert d["code"] == "busy" and "your key is fine" in d["reason"]

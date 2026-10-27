@@ -81,6 +81,10 @@ def diagnose(exc: BaseException, spec: str = "", quota: dict[str, Any] | None = 
         return out("rate_limited", "Too many requests right now"
                    + (" (free models: 20 per minute)" if free else "") + ".",
                    "Wait a minute and retry; keep a backup model on so calls are still answered.")
+    if "high demand" in text or "overloaded" in text:
+        return out("busy", f"{model or spec} is overloaded at the provider right now (temporary; your key is fine).",
+                   "Retry in a minute, or pick another model (e.g. gemini:gemini-3.6-flash). Keep a backup "
+                   "model on so calls are still answered.")
     if status in (502, 503) or ("provider returned error" in text and status is None):
         return out("provider_down", f"The model is down or no provider is available: {raw}",
                    "Retry later or pick another model.")
