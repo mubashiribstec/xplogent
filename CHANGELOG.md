@@ -71,6 +71,22 @@ All notable changes to Xplogent. Format follows
 - Windows ignored the contact's time zone for calling hours: added `tzdata`.
 - The Calls page crashed with newer Kokoro images (their voice list has objects).
 - API keys pasted with a stray space or newline were refused by the provider; they are trimmed.
+- Fixes from a deployment audit:
+  - The Guide page was empty in Docker: the image now ships the guide pages.
+  - Dashboard chat ran file tools on a greeting and learned junk facts. Small talk now gets
+    no tools; only tool calls that worked feed reflection, which may no longer learn from
+    errors or the assistant's own claims. Settings → Memory shows where each fact came
+    from and can forget the facts learned in the last 24 h.
+  - The PBX/SIP password label flashed "not set" on every load. Disabled buttons now say why,
+    and an extension that's switched off says how to register it.
+  - Go-live shows "Model speed" (a CPU-only call model, including a named server on this
+    machine) and the placeholder company name in words. A slow test call (first word
+    after more than 3 s) says why and what to change.
+  - Greetings are no longer logged as knowledge gaps.
+  - The debug view explains why a browser test call has no SIP or audio data.
+  - One accent colour (Branding) instead of two.
+  - Run checks no longer leaves a test call behind (it uses `/ws/voip/ping`); model tests say
+    they use a free OpenRouter request.
 - A provider error now includes the provider's reason (e.g. "temporarily rate-limited
   upstream"), and a turn whose voice failed still records what the agent said.
 - A caller speaking over the greeting cut off the AI/recording disclosure; the

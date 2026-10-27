@@ -29,6 +29,10 @@ Return ONLY a JSON object with this shape:
 }
 Rules:
 - "facts" may be empty. Only include genuinely durable, reusable facts.
+- A fact must come from what the USER said or what a TOOL result confirmed. Never record
+  error messages, failed attempts, files that don't exist, or the assistant's own plans,
+  claims or promises ("I will create the file") as facts.
+- Greetings and small talk teach nothing: return no facts for them.
 - Include "skill" ONLY if a clearly repeatable, non-trivial procedure was used; otherwise set it to null.
 - Do not wrap the JSON in markdown fences."""
 

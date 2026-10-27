@@ -4,10 +4,11 @@ import { SipStatus, detectSipIp, getSipStatus, saveSip, testSip } from "../api";
 type Toaster = (m: string, kind?: any) => void;
 
 /** Built-in SIP trunk client: account, network, registration status. */
-export function SipCard({ cfg, toast, onChange }: { cfg: Record<string, any>; toast: Toaster; onChange: () => void }) {
+export function SipCard({ cfg, passwordSet, toast, onChange }: { cfg: Record<string, any>; passwordSet?: boolean; toast: Toaster; onChange: () => void }) {
   const sip = (cfg.sip ?? {}) as Record<string, any>;
   const [st, setSt] = useState<SipStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const pwSet: boolean | undefined = st ? !!st.password_set : passwordSet;
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [ips, setIps] = useState<{ lan: string; internet: string; note: string } | null>(null);
   const [form, setForm] = useState<Record<string, any>>({});
@@ -61,8 +62,8 @@ export function SipCard({ cfg, toast, onChange }: { cfg: Record<string, any>; to
         {input("server", "SIP server / PBX", "pbx.example.com or 192.168.1.10", 210)}
         {input("port", "Port", "5060", 80, "number")}
         {input("username", "Username / extension", "2000", 130)}
-        <label className="bud"><span className="lbl-sm">Password {st?.password_set ? "✓ set" : "✗ not set"}</span>
-          <input type="password" value={form.password ?? ""} placeholder={st?.password_set ? "•••••• (type to replace)" : "secret"}
+        <label className="bud"><span className="lbl-sm">Password {pwSet === undefined ? "…" : pwSet ? "✓ set" : "✗ not set"}</span>
+          <input type="password" value={form.password ?? ""} placeholder={pwSet ? "•••••• (type to replace)" : "secret"}
             onChange={(e) => set("password", e.target.value)} style={{ width: 150 }} /></label>
         {input("auth_username", "Auth username (if different)", "", 150)}
         {input("caller_id", "Caller ID for outbound", "+15551234567", 150)}
@@ -92,8 +93,10 @@ export function SipCard({ cfg, toast, onChange }: { cfg: Record<string, any>; to
           </p>)}
       </details>
       <div className="row wrap" style={{ gap: 8, marginTop: 10 }}>
-        <button className="btn primary" disabled={busy || !Object.keys(form).length} onClick={save}>{busy ? "Working…" : "Save & connect"}</button>
-        <button className="btn" disabled={busy || !st?.configured} onClick={test}>Test registration</button>
+        <button className="btn primary" disabled={busy || !Object.keys(form).length} onClick={save}
+          title={Object.keys(form).length ? "" : "Change a field first"}>{busy ? "Working…" : "Save & connect"}</button>
+        <button className="btn" disabled={busy || !st?.configured} onClick={test}
+          title={st?.configured ? "" : "Enter the trunk's server, username and password, then Save & connect"}>Test registration</button>
       </div>
       {msg && <p className={msg.ok ? "ok" : "warn"}>{msg.ok ? "✓" : "✗"} {msg.text}</p>}
       {st?.last_error && <p className="dim" style={{ fontSize: 12 }}>Last problem: {st.last_error}</p>}

@@ -3,7 +3,7 @@ import { FREE_MODELS } from "./lib/models";
 import { CardBoundary } from "./components/CardBoundary";
 import { ModelTestButton } from "./components/ModelTest";
 import {
-  addFact, deleteFact, deleteSkill, exportKnowledge, getFacts, getFullConfig,
+  addFact, deleteFact, forgetLearnedFacts, deleteSkill, exportKnowledge, getFacts, getFullConfig,
   getProviderModels, getRoles, getSkills, getStatus, getTools, importKnowledge, patchConfig, putRole,
   putSecrets, restoreBackup, saveOllama, StatusInfo, testOllama, listOllamaServers, saveOllamaServer,
   deleteOllamaServer, type OllamaServer,
@@ -29,7 +29,7 @@ export function Settings() {
   const [cfg, setCfg] = useState<Record<string, any> | null>(null);
   const [tools, setTools] = useState<any[]>([]);
   const [roles, setRoles] = useState<Record<string, any>>({});
-  const [facts, setFacts] = useState<{ id: number; content: string }[]>([]);
+  const [facts, setFacts] = useState<{ id: number; content: string; source?: string; created_at?: number }[]>([]);
   const [skills, setSkills] = useState<{ name: string; uses: number; description: string }[]>([]);
   const [saved, setSaved] = useState("");
   const [caps, setCaps] = useState<StatusInfo["capabilities"]>();
@@ -152,9 +152,18 @@ export function Settings() {
             if (el.value) { await addFact(el.value); el.value = ""; reload(); }
           }}>Add</button>
         </div>
+        <p className="dim" style={{ fontSize: 12 }}>"learned" facts were picked up by the agent from chats; check them
+          now and then. {facts.some((f) => f.source === "reflection" && (f.created_at ?? 0) * 1000 > Date.now() - 864e5) && (
+          <button className="btn sm" onClick={async () => {
+            if (!confirm("Forget every fact the agent learned by itself in the last 24 hours? Facts you added stay.")) return;
+            const r = await forgetLearnedFacts(24); flash(`forgot ${r.removed} learned fact(s)`); reload();
+          }}>Forget facts learned in the last 24 h</button>)}</p>
         <ul className="list">
           {facts.map((f) => (
-            <li key={f.id}>{f.content}
+            <li key={f.id}>{f.content}{" "}
+              <span className="dim" style={{ fontSize: 11 }}>
+                {f.source === "reflection" ? "learned" : f.source === "gui" ? "added by you" : f.source || ""}
+                {f.created_at ? ` · ${new Date(f.created_at * 1000).toLocaleDateString()}` : ""}</span>
               <button className="x" onClick={async () => { await deleteFact(f.id); reload(); }}>✕</button>
             </li>
           ))}
@@ -434,17 +443,11 @@ function HealthCard() {
 
 function Appearance() {
   const [theme, setTheme] = useState(localStorage.getItem("xplogent_theme") || "auto");
-  const [accent, setAccent] = useState(localStorage.getItem("xplogent_accent") || "#58a6ff");
   const applyTheme = (t: string) => {
     setTheme(t);
     localStorage.setItem("xplogent_theme", t);
     if (t === "auto") document.documentElement.removeAttribute("data-theme");
     else document.documentElement.setAttribute("data-theme", t);
-  };
-  const applyAccent = (c: string) => {
-    setAccent(c);
-    localStorage.setItem("xplogent_accent", c);
-    document.documentElement.style.setProperty("--accent", c);
   };
   return (
     <div className="card">
@@ -454,9 +457,8 @@ function Appearance() {
           {["auto", "dark", "light"].map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
       </label>
-      <label className="check">Accent color
-        <input type="color" value={accent} onChange={(e) => applyAccent(e.target.value)} />
-      </label>
+      <p className="dim" style={{ fontSize: 12 }}>The accent colour, logo and company name are set once, for everyone,
+        under Calls → Setup → Branding.</p>
     </div>
   );
 }

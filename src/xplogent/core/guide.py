@@ -11,7 +11,15 @@ _PACKAGE_FALLBACK = Path(__file__).resolve().parents[3] / "docs" / "guide"
 
 
 def guide_dir() -> Path | None:
-    """Return the directory holding the guide markdown, or None."""
+    """Return the directory holding the guide markdown, or None.
+
+    Docker images copy the pages to ``/app/guide`` and point ``XPLOGENT_GUIDE_DIR``
+    there (they carry no ``docs/`` folder); a checkout reads ``docs/guide``."""
+    import os
+
+    env = os.environ.get("XPLOGENT_GUIDE_DIR", "").strip()
+    if env and Path(env).is_dir():
+        return Path(env)
     root = repo_root()
     if root and (root / "docs" / "guide").is_dir():
         return root / "docs" / "guide"

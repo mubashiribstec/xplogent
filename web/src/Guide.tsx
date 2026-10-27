@@ -30,7 +30,8 @@ export function Guide() {
             {p.title}
           </button>
         ))}
-        {pages.length === 0 && <p className="dim">guide unavailable</p>}
+        {pages.length === 0 && <p className="dim">The guide pages are missing from this install. Update the
+          server (<span className="mono">sudo xplogent-docker update</span>); the tour above works meanwhile.</p>}
       </aside>
       <article className="guide-body markdown">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>

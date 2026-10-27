@@ -31,6 +31,9 @@ export function CallDebug({ callId, toast }: { callId: number; toast: Toaster })
         <button className="btn" onClick={() => downloadDebugBundle(callId).then(() => toast("debug bundle saved", "success"))
           .catch((e) => toast(String(e), "error"))}>Download debug bundle</button>
       </div>
+      {(d.kept || d.live) && sip.length === 0 && !(dbg.rtp && Object.keys(dbg.rtp).length) && !(dbg.telnyx_events ?? []).length && (
+        <p className="dim" style={{ fontSize: 12 }}>No phone-line data for this call (a browser test call has no phone line):
+          SIP messages and audio stats appear on SIP calls, Telnyx events on Telnyx calls.</p>)}
       {!d.kept && !d.live && <p className="dim">No diagnostics were kept for this call (older than the retention period, or made before this version).</p>}
 
       {turns.length > 0 && (<>

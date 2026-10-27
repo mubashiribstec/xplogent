@@ -215,17 +215,18 @@ function RunChecks() {
         ? { state: "bad", detail: "blocked for this site", fix: "Allow the microphone with the icon in the address bar, then reload." }
         : { state: "ok", detail: perm === "granted" ? "allowed" : "the browser will ask when you start the test call" });
     }
-    // 6. the live connection a test call uses (a 1-second test call, not counted)
+    // 6. the live connection a test call uses
     set("live", { state: "run" });
     await new Promise<void>((done) => {
       let ok = false, told = false;
-      const sock = new WebSocket(wsUrl(`/ws/voip/test?${wsTokenParam().slice(1)}`));
+      // The same path and sign-in as a test call, but nothing is started or stored.
+      const sock = new WebSocket(wsUrl(`/ws/voip/ping?${wsTokenParam().slice(1)}`));
       const timer = setTimeout(() => { sock.close(); }, 8000);
-      sock.onopen = () => sock.send(JSON.stringify({ type: "start", voice: false }));
+      sock.onopen = () => sock.send("{}");
       sock.onmessage = (ev) => {
         if (typeof ev.data !== "string") return;
         const m = JSON.parse(ev.data);
-        if (m.type === "started") { ok = true; set("live", { state: "ok", detail: "connected" }); sock.send(JSON.stringify({ type: "hangup" })); }
+        if (m.type === "pong") { ok = true; set("live", { state: "ok", detail: "connected" }); sock.close(); }
         if (m.type === "error") { told = true; set("live", { state: "bad", detail: m.error }); }
       };
       sock.onclose = () => {
@@ -243,7 +244,8 @@ function RunChecks() {
   return (
     <div style={{ marginTop: 10 }}>
       <button className="btn" onClick={run} disabled={busy}>{busy ? "Checking…" : "Run checks"}</button>
-      <span className="dim" style={{ fontSize: 12, marginLeft: 8 }}>tests the model, backup, voice, hearing, microphone and connection</span>
+      <span className="dim" style={{ fontSize: 12, marginLeft: 8 }}>tests the model, backup, voice, hearing, microphone and connection
+        (with a free OpenRouter model this uses 1 of your daily free requests)</span>
       {checks && (
         <ul className="list checks" style={{ marginTop: 8 }}>
           {checks.map((c) => (
@@ -266,6 +268,11 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
   const [contact, setContact] = useState<string>("");
   const [mic, setMic] = useState(false);
   const [thinking, setThinking] = useState(false);
+  useEffect(() => {                       // a turn that produced nothing must not leave it on
+    if (!thinking) return;
+    const id = setTimeout(() => setThinking(false), 60000);
+    return () => clearTimeout(id);
+  }, [thinking]);
   const ws = useRef<WebSocket | null>(null);
   const audio = useRef<{ ctx: AudioContext; next: number; sources: AudioBufferSourceNode[] } | null>(null);
   const micStop = useRef<(() => void) | null>(null);
@@ -320,6 +327,7 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
       if (m.type === "started") { started = true; add({ who: "note", text: m.contact ? `test call as ${m.contact}` : "test call started" }); }
       else if (m.type === "turn") { if (m.speaker === "agent") setThinking(false); add({ who: m.speaker === "agent" ? "agent" : "caller", text: m.text }); }
       else if (m.type === "thinking") setThinking(true);
+      else if (m.type === "events") setThinking(false);
       else if (m.type === "voice_failed") add({ who: "note", text: `⚠ voice failed: ${m.error} — continuing as text. Check the voice under Speech (or untick "play the agent's voice").` });
       else if (m.type === "events") m.items.forEach((e: string) => add({ who: "note", text: `🔧 ${e}` }));
       else if (m.type === "clear") clearAudio();
@@ -329,6 +337,8 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
       else if (m.type === "error") { setThinking(false); add({ who: "note", text: `⚠ ${m.error}` }); }
       else if (m.type === "ended") {
         setThinking(false);
+        const slowest = Math.max(0, ...(m.latency_ms ?? []));
+        if (slowest > 3000) add({ who: "note", text: `⚠ ${(slowest / 1000).toFixed(1)} s before the agent's first word: callers start hanging up after about 3 s. If the call model runs on this server's CPU, pick a hosted or GPU model (Calls → Model for calls → Test this model).` });
         add({ who: "note", text: `ended · outcome: ${m.outcome || "—"}${m.summary ? ` · ${m.summary}` : ""}${m.latency_ms?.length ? ` · first-word delay ${m.latency_ms.join(", ")} ms` : ""}` });
       }
     };

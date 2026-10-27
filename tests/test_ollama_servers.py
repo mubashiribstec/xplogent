@@ -129,7 +129,11 @@ def test_readiness_warns_about_a_local_cpu_only_call_model(home):
     assert "no GPU" in slow_model_problem("ollama:llama3.1", gpu=False, ollama_host=local)
     assert "no GPU" in slow_model_problem("ollama-local:qwen2.5:3b", gpu=False)
     assert slow_model_problem("ollama:llama3.1", gpu=True, ollama_host=local) == ""
+    save_user_config({"ollama": {"servers": [{"name": "gpu", "host": "https://gpu.example.com"},
+                                             {"name": "here", "host": "http://127.0.0.1:11434"}]}})
     assert slow_model_problem("ollama:qwen2.5:14b@gpu", gpu=False) == ""          # a named remote server
+    assert "no GPU" in slow_model_problem("ollama:qwen2.5:0.5b@here", gpu=False)  # named, but this machine
+    assert slow_model_problem("ollama:x@unknown", gpu=False) == ""
     assert slow_model_problem("ollama:llama3.1", gpu=False, ollama_host="https://gpu.example.com") == ""
     assert slow_model_problem("openrouter:google/gemma-4-31b-it:free", gpu=False) == ""
     items = {i["id"]: i for i in checklist({"model": "ollama:llama3.1"}, "x", env={}, gpu=False,

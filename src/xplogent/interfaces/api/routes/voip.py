@@ -634,6 +634,21 @@ async def ws_voip_test(websocket: WebSocket) -> None:
     await run_test_call(websocket, provider=provider, retrieve=None)
 
 
+@router.websocket("/ws/voip/ping")
+async def ws_voip_ping(websocket: WebSocket) -> None:
+    """Run checks' connection test: the same WebSocket path and auth as a test call,
+    through any reverse proxy, without starting (or storing) a call."""
+    if not deps.ws_authorized(websocket):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(websocket.receive_text(), timeout=5)
+        await websocket.send_text(json.dumps({"type": "pong"}))
+    with contextlib.suppress(Exception):
+        await websocket.close()
+
+
 def _test_provider():
     """The call model, through deps so tests can script it (None: build_session decides)."""
     cfg = load_config()

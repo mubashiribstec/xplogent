@@ -633,3 +633,6 @@ export interface ModelTest {
   quota?: { free_used?: number; free_limit?: number; free_remaining?: number; is_free_tier?: boolean; limit_remaining?: number | null };
 }
 export const testModel = (spec = "") => postJSON<ModelTest>("/providers/test-model", { spec });
+
+export const forgetLearnedFacts = (hours = 24) =>
+  postJSON<{ ok: boolean; removed: number }>("/memory/facts/forget-learned", { hours });

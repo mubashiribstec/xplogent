@@ -14,6 +14,7 @@ web/node_modules
 web/dist
 src/xplogent/web_dist
 docs
+!docs/guide
 tests
 extension
 dist

@@ -19,6 +19,7 @@ from xplogent.core.events import Event, EventBus, EventType
 from xplogent.core.limits import context_window, estimate_cost
 from xplogent.core.logging import get_logger
 from xplogent.core.retry import RETRYABLE, RetryPolicy, classify_error
+from xplogent.core.smalltalk import is_small_talk
 from xplogent.memory.manager import MemoryManager
 from xplogent.providers.base import Message, Provider, Role, StreamKind
 from xplogent.safety.approval import ApprovalRequest, SafetyManager
@@ -170,7 +171,10 @@ class Agent:
         if self.memory:
             self.memory.log("user", task)
         transcript: list[str] = [f"USER: {task}"]
-        tool_steps = 0
+        tool_steps = 0              # tool calls that worked: only those are worth reflecting on
+        # "hi" / "thanks": answer without tools (a small model would otherwise go and
+        # read files) and learn nothing from it.
+        small_talk = is_small_talk(task) and not images
         final_answer = ""
         nudged = False
         # Callers need to know the run *failed*,
@@ -193,7 +197,7 @@ class Agent:
                 # a pure perception turn unless the user opts into vision+tools.
                 has_images = any(getattr(m, "images", None) for m in messages)
                 tool_specs = ([] if (has_images and not self.config.agent.get("vision_tools", False))
-                              else self.tools.specs())
+                              or small_talk else self.tools.specs())
 
                 assistant = await self._stream_assistant(messages, tool_specs)
                 if assistant is None:  # provider failed; error already emitted
@@ -222,8 +226,9 @@ class Agent:
 
                 # Execute each requested tool through the safety gate.
                 for call in assistant.tool_calls:
-                    tool_steps += 1
                     result_text = await self._run_tool(call.name, call.arguments)
+                    if not result_text.startswith(("ERROR", "BLOCKED")):
+                        tool_steps += 1
                     transcript.append(
                         f"TOOL[{call.name}]({_short(call.arguments)}) -> {_short(result_text)}"
                     )

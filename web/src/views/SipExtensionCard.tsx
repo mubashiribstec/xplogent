@@ -5,10 +5,11 @@ type Toaster = (m: string, kind?: any) => void;
 
 /** Second SIP login: a FreePBX extension for the agent (internal calls, queue
  *  overflow), independent of the SIP trunk above it. */
-export function SipExtensionCard({ cfg, toast, onChange }: { cfg: Record<string, any>; toast: Toaster; onChange: () => void }) {
+export function SipExtensionCard({ cfg, passwordSet, toast, onChange }: { cfg: Record<string, any>; passwordSet?: boolean; toast: Toaster; onChange: () => void }) {
   const ext = (cfg.sip_extension ?? {}) as Record<string, any>;
   const [st, setSt] = useState<SipExtensionStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const pwSet: boolean | undefined = st ? !!st.password_set : passwordSet;
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [ips, setIps] = useState<{ lan: string; internet: string; note: string } | null>(null);
   const [form, setForm] = useState<Record<string, any>>({});
@@ -72,8 +73,8 @@ export function SipExtensionCard({ cfg, toast, onChange }: { cfg: Record<string,
         {input("server", "FreePBX / PBX address", "192.168.1.10", 210)}
         {input("port", "Port", "5060", 80, "number")}
         {input("username", "Extension number", "2000", 130)}
-        <label className="bud"><span className="lbl-sm">Password {st?.password_set ? "✓ set" : "✗ not set"}</span>
-          <input type="password" value={form.password ?? ""} placeholder={st?.password_set ? "•••••• (type to replace)" : "extension secret"}
+        <label className="bud"><span className="lbl-sm">Password {pwSet === undefined ? "…" : pwSet ? "✓ set" : "✗ not set"}</span>
+          <input type="password" value={form.password ?? ""} placeholder={pwSet ? "•••••• (type to replace)" : "extension secret"}
             onChange={(e) => set("password", e.target.value)} style={{ width: 150 }} /></label>
         {input("auth_username", "Auth username (if different)", "", 150)}
         {input("caller_id", "Caller ID for outbound", "", 150)}
@@ -102,9 +103,16 @@ export function SipExtensionCard({ cfg, toast, onChange }: { cfg: Record<string,
           </p>)}
       </details>
       <div className="row wrap" style={{ gap: 8, marginTop: 10 }}>
-        <button className="btn primary" disabled={busy || !Object.keys(form).length} onClick={save}>{busy ? "Working…" : "Save & connect"}</button>
-        <button className="btn" disabled={busy || !st?.configured || !enabled} onClick={test}>Test registration</button>
+        <button className="btn primary" disabled={busy || !Object.keys(form).length} onClick={save}
+          title={Object.keys(form).length ? "" : "Change a field (or tick the switch) first"}>{busy ? "Working…" : "Save & connect"}</button>
+        <button className="btn" disabled={busy || !st?.configured || !enabled} onClick={test}
+          title={!enabled ? "Switch the extension line on and Save & connect first" : !st?.configured ? "Enter the PBX address and extension, then Save & connect" : ""}>
+          Test registration</button>
       </div>
+      {!busy && (!enabled || !st?.configured) && (
+        <p className="dim" style={{ fontSize: 12 }}>Registration: {!enabled
+          ? "off. Tick \"Extension line switched on\", then Save & connect to register with the PBX."
+          : "not set up. Enter the PBX address, extension number and password, then Save & connect."}</p>)}
       {msg && <p className={msg.ok ? "ok" : "warn"}>{msg.ok ? "✓" : "✗"} {msg.text}</p>}
       {st?.last_error && <p className="dim" style={{ fontSize: 12 }}>Last problem: {st.last_error}</p>}
       <details style={{ marginTop: 8 }}>

@@ -42,6 +42,8 @@ export function GoLive({ ready, items, calls, cfg }: {
     ...(extItem ? [{ label: "PBX extension", state: health(extItem), title: extItem.detail }] : []),
     { label: "Voices", state: health(find(items, "speech")), title: find(items, "speech")?.detail ?? "" },
     { label: "CRM", state: crmHealth, title: agent?.crm.deliveries[0] ? `last delivery: ${agent.crm.deliveries[0].status}` : "no deliveries yet" },
+    ...(find(items, "model_speed") ? [{ label: "Model speed", state: health(find(items, "model_speed")), title: find(items, "model_speed")!.detail }] : []),
+    ...(find(items, "company") && !find(items, "company")!.ok ? [{ label: "Company name", state: "amber" as Health, title: find(items, "company")!.detail }] : []),
     ...["sip_capacity", "sip_extension_capacity"].filter((id) => find(items, id)).map((id) => ({
       label: id === "sip_capacity" ? "Trunk capacity" : "Extension capacity", state: health(find(items, id)), title: find(items, id)!.detail })),
   ];
@@ -61,6 +63,9 @@ export function GoLive({ ready, items, calls, cfg }: {
       <div className="health-row" aria-label="health">
         {pills.map((p) => <span key={p.label} className={`pill ${p.state}`} title={p.title}><span className="dot" />{p.label}</span>)}
       </div>
+      {/* Warnings that don't block going live but will hurt a demo: said in words, not only on hover. */}
+      {["model_speed", "company"].map((id) => find(items, id)).filter((i) => i && !i.ok).map((i) => (
+        <p key={i!.id} className="warn" style={{ fontSize: 12, margin: "6px 0 0" }}>⚠ {i!.label}: {i!.detail}</p>))}
     </div>
   );
 }

@@ -15,6 +15,7 @@ Operate as an autonomous agent:
 - Prefer using tools to gather real information instead of guessing.
 - After a tool returns, read its output and decide the next step.
 - When the task is complete, give a clear final answer WITHOUT calling more tools.
+- For greetings and small talk ("hi", "thanks"), just reply briefly: no tools.
 - Be careful with destructive actions; the user must approve risky operations.
 
 You have persistent memory across sessions. Relevant facts and learned skills are \

@@ -25,8 +25,27 @@ router = APIRouter()
 @router.get("/memory/facts")
 async def list_facts() -> dict:
     with Store(load_config().db_path) as store:
-        out = [{"id": f.id, "content": f.content, "source": f.source} for f in store.all_facts()]
+        out = [{"id": f.id, "content": f.content, "source": f.source, "created_at": f.created_at}
+               for f in store.all_facts()]
     return {"facts": out}
+
+
+@router.post("/memory/facts/forget-learned")
+async def forget_learned_facts(body: dict | None = None) -> dict:
+    """Remove facts the agent learned by itself (reflection) in the last ``hours``
+    (default 24): the clean-up after a bad exchange taught it junk. Facts you added
+    yourself or imported stay."""
+    import time
+
+    hours = max(0.0, float((body or {}).get("hours", 24)))
+    since = time.time() - hours * 3600
+    with Store(load_config().db_path) as store:
+        gone = [f.id for f in store.all_facts()
+                if f.source in ("reflection", "learned") and (f.created_at or 0) >= since]
+        for fid in gone:
+            store.delete_fact(fid)
+    deps.audit_event("memory_forget_learned", target=f"{len(gone)} facts, last {hours:g} h", risk="low")
+    return {"ok": True, "removed": len(gone)}
 
 
 @router.post("/memory/facts")

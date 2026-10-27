@@ -211,8 +211,8 @@ export function Calls() {
 
         {cfg.telephony !== "sip" && <CardBoundary name="Telnyx"><TelnyxCard cfg={cfg} keySet={telnyxKeySet} save={save} toast={toast}
           onKeySaved={() => { setTelnyxKeySet(true); loadReady(); }} /></CardBoundary>}
-        {(cfg.telephony === "sip" || cfg.telephony === "both") && <CardBoundary name="SIP trunk"><SipCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} /></CardBoundary>}
-        <div data-tour="pbx-extension"><CardBoundary name="PBX extension"><SipExtensionCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} /></CardBoundary></div>
+        {(cfg.telephony === "sip" || cfg.telephony === "both") && <CardBoundary name="SIP trunk"><SipCard cfg={cfg} passwordSet={!!secrets.SIP_PASSWORD} toast={toast} onChange={() => { loadCfg(); loadReady(); }} /></CardBoundary>}
+        <div data-tour="pbx-extension"><CardBoundary name="PBX extension"><SipExtensionCard cfg={cfg} passwordSet={!!secrets.SIP_EXTENSION_PASSWORD} toast={toast} onChange={() => { loadCfg(); loadReady(); }} /></CardBoundary></div>
         <CardBoundary name="Speech"><SpeechCard cfg={cfg} secrets={secrets} save={save} toast={toast} onKey={loadCfg} /></CardBoundary>
 
         <CardBoundary name="Conversation"><div className="card">
@@ -500,7 +500,11 @@ function CallModelPicker({ value, mainModel, presets, keySet, onPick }: {
 }) {
   const [remote, setRemote] = useState<{ server: string; models: string[] }[]>([]);
   const [custom, setCustom] = useState(false);
-  useEffect(() => {
+  const [asked, setAsked] = useState(false);
+  // Ask the Ollama servers for their models only when the list is opened, once per visit.
+  const loadRemote = () => {
+    if (asked) return;
+    setAsked(true);
     listOllamaServers().then(async ({ servers }) => {
       const found = await Promise.all((servers ?? []).map(async (s) => {
         const probe = await testOllama("", "", s.name).catch(() => null);
@@ -508,7 +512,8 @@ function CallModelPicker({ value, mainModel, presets, keySet, onPick }: {
       }));
       setRemote(found.filter((f) => f.models.length));
     }).catch(() => undefined);
-  }, []);
+  };
+  useEffect(() => { if (value.includes("@")) loadRemote(); }, []);   // the saved model is on a server: show it
   const free = FREE_MODELS.map((f) => f.model);
   const own = presets.filter((p) => !free.includes(p.model));
   const known = new Set(["", ...free, ...own.map((p) => p.model),
@@ -524,7 +529,8 @@ function CallModelPicker({ value, mainModel, presets, keySet, onPick }: {
           <button className="linkx" onClick={() => setCustom(false)} title="back to the list">list</button>
         </span>
       ) : (
-        <select value={value} onChange={(e) => e.target.value === "__custom" ? setCustom(true) : onPick(e.target.value)}>
+        <select value={value} onFocus={loadRemote} onMouseDown={loadRemote}
+          onChange={(e) => e.target.value === "__custom" ? setCustom(true) : onPick(e.target.value)}>
           <option value="">Main model{mainModel ? ` (${mainModel})` : ""}</option>
           <optgroup label="OpenRouter, free">
             {FREE_MODELS.map((f) => <option key={f.model} value={f.model}>{f.label}</option>)}</optgroup>

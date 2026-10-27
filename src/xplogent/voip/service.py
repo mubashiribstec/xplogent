@@ -14,6 +14,7 @@ from typing import Any
 
 from xplogent.core.config import Config, data_dir, load_config
 from xplogent.core.logging import get_logger
+from xplogent.core.smalltalk import is_small_talk
 from xplogent.memory.store import Store
 from xplogent.voip.audio import VAD
 from xplogent.voip.brain import CallBrain
@@ -314,7 +315,7 @@ def top_knowledge_gaps(limit: int = 20) -> list[dict[str, Any]]:
     latest: dict[str, tuple[str, float]] = {}   # key -> (wording last used, when)
     for rec in jsonl.read(knowledge_gap_path()):
         query = " ".join(str(rec.get("query", "")).split())
-        if query:
+        if query and not is_small_talk(query):           # "hi" is not a knowledge gap
             counts[query.lower()] += 1
             latest[query.lower()] = (query, float(rec.get("ts") or 0))
     return [{"query": latest[k][0], "count": n, "last_ts": latest[k][1]}
@@ -327,6 +328,8 @@ def log_knowledge_gap(query: str) -> None:
 
     from xplogent.voip import jsonl
 
+    if is_small_talk(query):
+        return
     try:
         jsonl.append(knowledge_gap_path(), {"ts": time.time(), "query": query[:500]})
     except Exception:  # noqa: BLE001

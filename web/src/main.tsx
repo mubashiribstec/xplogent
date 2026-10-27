@@ -9,8 +9,8 @@ import "./styles.css";
 try {
   const theme = localStorage.getItem("xplogent_theme") || "auto";
   if (theme !== "auto") document.documentElement.setAttribute("data-theme", theme);
-  const accent = localStorage.getItem("xplogent_accent");
-  if (accent) document.documentElement.style.setProperty("--accent", accent);
+  // Branding (server side) is the only accent now; an old browser-only one would fight it.
+  localStorage.removeItem("xplogent_accent");
 } catch { /* defaults */ }
 
 // Any render error used to unmount everything and leave a blank white page.

@@ -14,7 +14,9 @@ export function ModelTestButton({ spec, label = "Test" }: { spec: string; label?
   };
   return (
     <span className="model-test">
-      <button className="btn" onClick={run} disabled={busy}>{busy ? "Testing…" : label}</button>
+      <button className="btn" onClick={run} disabled={busy}
+        title={spec.endsWith(":free") ? "Sends one request: uses 1 of your daily free OpenRouter requests" : "Sends one short request to the model"}>
+        {busy ? "Testing…" : label}</button>
       {res && <ModelTestResult res={res} />}
     </span>
   );

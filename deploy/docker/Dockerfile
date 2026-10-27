@@ -42,6 +42,8 @@ COPY src ./src
 RUN pip install --no-deps .
 
 COPY --from=web /web/dist /app/web_dist
+# The in-app Guide reads these pages (the image has no docs/ folder otherwise).
+COPY docs/guide /app/guide
 
 # Unprivileged user; all state lives in the /data volume.
 RUN useradd --system --uid 10001 --create-home --home-dir /home/xplogent xplogent \
@@ -50,6 +52,7 @@ USER xplogent
 
 ENV XPLOGENT_HOME=/data \
     XPLOGENT_WEB_DIR=/app/web_dist \
+    XPLOGENT_GUIDE_DIR=/app/guide \
     XPLOGENT_API_HOST=0.0.0.0 \
     XPLOGENT_API_PORT=8765 \
     XPLOGENT_BEHIND_PROXY=1 \

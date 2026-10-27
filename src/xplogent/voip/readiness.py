@@ -51,16 +51,16 @@ def slow_model_problem(call_model: str, *, gpu: bool | None = None, ollama_host:
     Ollama model on this very server when it has no GPU (a 4-core CPU needs several
     seconds per reply; callers hang up)."""
     provider, _, model = call_model.partition(":")
-    if provider not in ("ollama", "ollama-local") or "@" in model:
-        return ""                                        # hosted, or a named (remote) Ollama server
+    if provider not in ("ollama", "ollama-local"):
+        return ""                                        # a hosted model
     if provider == "ollama":
         if ollama_host is None:
-            from xplogent.providers.ollama import ollama_server
+            from xplogent.providers.ollama import ollama_server, split_server
 
-            try:
-                ollama_host = ollama_server("")[0]
+            try:                                         # a named server can still be this machine
+                ollama_host = ollama_server(split_server(model)[1])[0]
             except Exception:  # noqa: BLE001
-                ollama_host = ""
+                ollama_host = "http://remote.invalid"
         if (urlparse(ollama_host or "http://localhost").hostname or "") not in _LOCAL_OLLAMA:
             return ""                                    # Ollama on another machine
     if has_gpu() if gpu is None else gpu:
@@ -193,6 +193,11 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
     model_ok = not needs or _key(env, needs)
     add("model", "Model for calls", model_ok,
         call_model if model_ok else f"{call_model} needs {needs}: add it in Settings or pick an Ollama model")
+    company = str(v.get("company") or "").strip()
+    placeholder = company.lower() in ("", "our company")
+    add("company", "Company name", not placeholder,
+        "still the placeholder: callers hear \"our company\"; set it in Calls → Setup or Branding"
+        if placeholder else company, required=False)
     if slow := slow_model_problem(call_model, gpu=gpu, ollama_host=ollama_host):
         add("model_speed", "Call model speed", False, slow, required=False)
     ok, detail = speech_status(v, env)
