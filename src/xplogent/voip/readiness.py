@@ -147,7 +147,8 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
     """Ordered readiness items: ``{id, label, ok, detail, required}``.
 
     Which telephony items appear depends on ``voip.telephony``: ``telnyx`` (Voice API,
-    needs a public HTTPS address), ``sip`` (built-in SIP trunk client) or ``both``.
+    needs a public HTTPS address), ``sip`` (built-in SIP trunk client), ``both``, or
+    ``extension`` (only the PBX extension: internal calls and testing, no carrier).
     """
     env = dict(os.environ) if env is None else env
     items: list[dict] = []
@@ -185,6 +186,10 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
                 "registered" if st.get("registered") else (st.get("error") or "not registered yet"))
         _capacity(add, "sip_capacity", "SIP trunk capacity", st)
     ext = v.get("sip_extension") or {}
+    if mode == "extension" and not ext.get("enabled"):
+        # Extension-only mode: the extension IS the phone line, so it must be on.
+        add("sip_extension_account", "PBX extension account", False,
+            "this mode uses only the PBX extension: switch it on in the PBX extension card and fill it in")
     if ext.get("enabled"):
         configured = bool(ext.get("server") and ext.get("username"))
         add("sip_extension_account", "PBX extension account",

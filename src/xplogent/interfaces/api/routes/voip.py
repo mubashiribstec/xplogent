@@ -590,7 +590,8 @@ async def voip_dial(body: dict):
     """Manual call (or "call me" test call) to a number or a contact."""
     from xplogent.voip.service import get_service
 
-    default_via = "sip" if (load_config().voip or {}).get("telephony") == "sip" else "telnyx"
+    mode = (load_config().voip or {}).get("telephony")
+    default_via = {"sip": "sip", "extension": "extension"}.get(str(mode), "telnyx")
     via = str(body.get("via") or default_via)
     if via not in ("telnyx", "sip", "extension"):
         return {"ok": False, "error": "via must be telnyx, sip or extension"}
@@ -711,13 +712,15 @@ def _sip_updates(body: dict, fields: dict) -> tuple[dict, str]:
             return {}, f"{key} must be a {kind.__name__}"
         if kind is str:
             updates[key] = updates[key].strip()
-    for key in ("allow_from", "queue_numbers"):
+    for key in ("allow_from", "queue_numbers", "test_callers"):
         if key in body:
             raw = body[key]
             updates[key] = [str(a).strip() for a in (raw if isinstance(raw, list) else str(raw).split(","))
                             if str(a).strip()]
     if any(not re.fullmatch(r"\+?[0-9*#]{1,20}", q) for q in updates.get("queue_numbers", [])):
         return {}, "queue numbers must be extension/queue numbers like 600"
+    if any(not re.fullmatch(r"\+?[0-9*#]{1,20}", q) for q in updates.get("test_callers", [])):
+        return {}, "test callers must be extension numbers like 201"
     host = updates.get("server", "")
     if host and not re.fullmatch(r"[A-Za-z0-9.\-]+", host):
         return {}, "server must be a host name or IP (no sip:, no port)"
@@ -739,7 +742,7 @@ async def voip_sip_settings(body: dict) -> dict:
     if error:
         return {"ok": False, "error": error}
     patch: dict = {"sip": updates}
-    if body.get("telephony") in ("telnyx", "sip", "both"):
+    if body.get("telephony") in ("telnyx", "sip", "both", "extension"):
         patch["telephony"] = body["telephony"]
     save_user_config({"voip": patch})
     if body.get("password"):

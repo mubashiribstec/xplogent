@@ -90,6 +90,9 @@ class SipSettings:
     strict_source: bool = False          # accept calls only from the server / allow_from addresses
     enabled: bool = False                # only the extension line uses this: off = fully inert
     queue_numbers: list[str] = field(default_factory=list)   # PBX queues that overflow to this line
+    # Extensions still answered while the phone agent is switched off (marked test calls),
+    # so it can be tried from a desk phone before it goes live.
+    test_callers: list[str] = field(default_factory=list)
 
     @classmethod
     def from_config(cls, v: dict[str, Any], block: str = "sip", *,
@@ -117,6 +120,9 @@ class SipSettings:
         queues = s.get("queue_numbers") or []
         if isinstance(queues, str):
             queues = [q.strip() for q in queues.split(",") if q.strip()]
+        testers = s.get("test_callers") or []
+        if isinstance(testers, str):
+            testers = [t.strip() for t in testers.split(",") if t.strip()]
         return cls(server=str(s.get("server") or "").strip(), username=str(s.get("username") or "").strip(),
                    password=os.environ.get(password_env, ""), port=int(s.get("port") or 5060),
                    auth_username=str(s.get("auth_username") or "").strip(),
@@ -130,7 +136,7 @@ class SipSettings:
                    strict_source=bool(s.get("strict_source", False)),
                    ring_timeout=float(s.get("ring_timeout") or 45),
                    enabled=bool(s.get("enabled", False)),
-                   queue_numbers=[str(q) for q in queues])
+                   queue_numbers=[str(q) for q in queues], test_callers=[str(t) for t in testers])
 
     @classmethod
     def extension_from_config(cls, v: dict[str, Any]) -> SipSettings:
@@ -605,9 +611,17 @@ class SipTrunk(asyncio.DatagramProtocol):
                          "'Also accept calls from' if it is yours)", addr[0], user_of(req.uri) or "?")
             self._reply(req, addr, 403, "Forbidden")
             return
+        # Identity headers (PAI, Diversion, queue hints) count only when the PBX sent them.
+        ident = call_identity(req, trusted=addr[0] in self.trusted, queue_numbers=self.s.queue_numbers)
+        test_only = False
         if self.service is not None and not self._agent_enabled():
-            self._reply(req, addr, 480, "Temporarily Unavailable")
-            return
+            if not (self.s.test_callers and str(ident["caller"]).lstrip("+") in
+                    {t.lstrip("+") for t in self.s.test_callers}):
+                _log.info("SIP %s: call from %s refused (480): the phone agent is switched off", self.line,
+                          ident["caller"] or "?")
+                self._reply(req, addr, 480, "Temporarily Unavailable")
+                return
+            test_only = True        # agent off, but one of the test extensions: answer as a test
         if len(self.calls) >= self.s.max_calls:
             self.busy_at = [t for t in self.busy_at if t > time.time() - 86400][-999:] + [time.time()]
             _log.warning("SIP %s line full (%s calls): caller %s got busy", self.line,
@@ -624,8 +638,6 @@ class SipTrunk(asyncio.DatagramProtocol):
         if codec is None or not sdp.get("port"):
             self._reply(req, addr, 488, "Not Acceptable Here")
             return
-        # Identity headers (PAI, Diversion, queue hints) count only when the PBX sent them.
-        ident = call_identity(req, trusted=addr[0] in self.trusted, queue_numbers=self.s.queue_numbers)
         call = SipCall(call_id=req.call_id, local_tag=new_tag(), outbound=False,
                        local_uri=req.get("To"), remote_uri=req.get("From"),
                        remote_tag=header_param(req.get("From"), "tag"),
@@ -653,6 +665,8 @@ class SipTrunk(asyncio.DatagramProtocol):
                 "queue_wait_s": ident["queue_wait_s"]}
         if crm_lookup is not None:
             info["crm_lookup"] = crm_lookup
+        if test_only:
+            info["test"] = True
         # Retransmit the 200 OK until the ACK arrives (UDP may drop it).
         data, wait = ok.encode(), T1
         deadline = time.monotonic() + self.ack_timeout

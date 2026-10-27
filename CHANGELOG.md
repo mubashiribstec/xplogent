@@ -71,6 +71,11 @@ All notable changes to Xplogent. Format follows
 - Windows ignored the contact's time zone for calling hours: added `tzdata`.
 - The Calls page crashed with newer Kokoro images (their voice list has objects).
 - API keys pasted with a stray space or newline were refused by the provider; they are trimmed.
+- **PBX extension only** phone-line mode, for testing on FreePBX without Telnyx, a public
+  address or a webhook. The checklist asks only for the extension, and Call now dials
+  extensions (e.g. `201`). **Test extensions** are still answered (as test calls) while
+  the agent is off. Go live has a real **Switch on / Switch off** for the phone agent and
+  says what "off" means (incoming calls get "unavailable").
 - Gemini: a 404 ("models/gemini-2.5-flash is not found") now says why and what to use.
   Google shut down Gemini 1.x and 2.0, and serves 2.5 only to keys that used it before. The
   defaults (preset, onboarding, CLI setup, Test key) moved to `gemini-3.6-flash`; the

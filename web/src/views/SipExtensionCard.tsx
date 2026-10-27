@@ -78,7 +78,12 @@ export function SipExtensionCard({ cfg, passwordSet, toast, onChange }: { cfg: R
             onChange={(e) => set("password", e.target.value)} style={{ width: 150 }} /></label>
         {input("auth_username", "Auth username (if different)", "", 150)}
         {input("caller_id", "Caller ID for outbound", "", 150)}
+        {input("test_callers", "Test extensions (answered even while the agent is off)", "201, 202", 210)}
       </div>
+      {!cfg.enabled && enabled && (
+        <p className="warn" style={{ fontSize: 12 }}>The phone agent is switched off: calls to extension {val("username") || "…"} get
+          "unavailable"{String(val("test_callers") || "").trim() ? `, except from ${val("test_callers")} (answered as test calls)` : ""}.
+          Switch it on in Go live, or list your own extension above to try it from your desk phone.</p>)}
       <details style={{ marginTop: 8 }}>
         <summary className="dim">Network (NAT, ports)</summary>
         <div className="row wrap" style={{ gap: 10, marginTop: 8, alignItems: "flex-end" }}>

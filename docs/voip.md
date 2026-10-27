@@ -49,7 +49,23 @@ Xplogent registers like a desk phone and answers/places calls itself: no domain 
    username/extension, password (stored encrypted as `SIP_PASSWORD`), optional caller ID.
    **Save & connect** registers and shows the result; the checklist shows it too.
 3. **FreePBX**: Applications → Extensions → add a **PJSIP** extension (e.g. 2000) for the AI,
-   keep NAT on (rtp_symmetric, force_rport, rewrite_contact) and allow ulaw/alaw. Point an
+   keep NAT on (rtp_symmetric, force_rport, rewrite_contact) and allow ulaw/alaw.
+
+#### Testing with only a FreePBX extension (no Telnyx)
+
+For a first test you don't need Telnyx, a public address or a webhook:
+
+1. Calls → Setup → **Phone line: PBX extension only (internal calls, testing)**. The
+   checklist then asks only for the extension. Telnyx, the public address and the webhook
+   disappear.
+2. Fill in the **PBX extension** card (PBX address and port, the extension, its secret), tick
+   *Extension line switched on*, **Save & connect**, then **Test registration**.
+3. **Agent calls an extension**: Call now → type the extension (e.g. `201`) → **Call me** (a
+   test call: not counted, no CRM). Short extension numbers are accepted on this line.
+4. **You call the agent** from a desk phone: switch the phone agent on (**Switch on** in Go
+   live), or keep it off and list your extension under **Test extensions**. While it's off,
+   every other caller gets "unavailable" (SIP 480), and calls from the test extensions are
+   answered and marked test. Point an
    inbound route or ring group at it. The AI's outbound calls use the PBX's outbound routes,
    and the hand-off number can be an extension (e.g. `101`).
 4. **Telnyx SIP connection**: Voice → SIP Trunking → connection with credentials auth; server

@@ -105,16 +105,17 @@ export function CallNow({ toast, via, onCalled }: { toast: Toaster; via: string[
     <div className="card">
       <h3><Phone size={16} /> Call now</h3>
       <div className="row wrap" style={{ gap: 8 }}>
-        <input value={number} placeholder="+15551234567" onChange={(e) => setNumber(e.target.value)} style={{ width: 200 }} />
+        <input value={number} placeholder={line === "extension" ? "extension (e.g. 201) or number" : "+15551234567"}
+          onChange={(e) => setNumber(e.target.value)} style={{ width: 200 }} />
         {via.length > 1 && <select value={line} onChange={(e) => setLine(e.target.value)}>
           {via.map((v) => <option key={v} value={v}>{v === "sip" ? "SIP trunk" : v === "extension" ? "PBX extension" : "Telnyx API"}</option>)}</select>}
         <button className="btn primary" disabled={busy || !number.trim()} onClick={() => call(number, false)}>Call</button>
       </div>
       <p className="dim" style={{ fontSize: 12 }}>The AI agent places the call. Numbers on the do-not-call list are refused;
         outside calling hours you're asked first. You can also call a customer from Contacts.</p>
-      <h3 style={{ marginTop: 14 }}>Test on my phone</h3>
+      <h3 style={{ marginTop: 14 }}>{line === "extension" ? "Test call to my extension" : "Test on my phone"}</h3>
       <div className="row wrap" style={{ gap: 8 }}>
-        <input value={me} placeholder="your mobile, +1555…" style={{ width: 200 }}
+        <input value={me} placeholder={line === "extension" ? "your extension, e.g. 201" : "your mobile, +1555…"} style={{ width: 200 }}
           onChange={(e) => { setMe(e.target.value); try { localStorage.setItem("xpl_test_phone", e.target.value); } catch { /* not saved */ } }} />
         <button className="btn" disabled={busy || !me.trim()} onClick={() => call(me, true)}>Call me</button>
       </div>

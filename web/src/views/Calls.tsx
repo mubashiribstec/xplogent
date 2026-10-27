@@ -67,6 +67,8 @@ export function Calls() {
     reload(); loadReady();
   };
 
+  // Telnyx (public address, webhook, API key) only matters in the modes that use it.
+  const usesTelnyx = !["sip", "extension"].includes(String(cfg.telephony ?? "telnyx"));
   const webhook = cfg.public_url && cfg.webhook_secret
     ? `${String(cfg.public_url).replace(/\/$/, "")}/telephony/webhook/${cfg.webhook_secret}` : "";
 
@@ -84,7 +86,8 @@ export function Calls() {
         <p className="dim">Answers inbound calls using your scripts and knowledge base. Calls are transcribed live (and recorded, unless you switch recording off);
           the agent only answers from your knowledge and hands off to a person when it can't.</p>
 
-        {ready && loaded && <CardBoundary name="Go live"><GoLive ready={ready.ready} items={ready.items} calls={calls} cfg={cfg} /></CardBoundary>}
+        {ready && loaded && <CardBoundary name="Go live"><GoLive ready={ready.ready} items={ready.items} calls={calls} cfg={cfg}
+          onSwitch={(on) => save({ enabled: on })} /></CardBoundary>}
         {ready && <details className="card" open={ready.items.some((i) => !i.ok && i.required)}>
           <summary><b>All checks</b> <span className="dim">({ready.items.filter((i) => i.ok).length} of {ready.items.length} fine)</span></summary>
           <Readiness ready={ready.ready} items={ready.items} onClearBusy={async (line) => {
@@ -95,7 +98,7 @@ export function Calls() {
         <CardBoundary name="Live calls"><LiveCalls active={status?.active ?? []} toast={toast} onChange={reload} /></CardBoundary>
 
         {loaded && <CardBoundary name="Call now"><CallNow toast={toast} onCalled={reload}
-          via={[...(cfg.telephony === "sip" ? ["sip"] : cfg.telephony === "both" ? ["telnyx", "sip"] : ["telnyx"]),
+          via={cfg.telephony === "extension" ? ["extension"] : [...(cfg.telephony === "sip" ? ["sip"] : cfg.telephony === "both" ? ["telnyx", "sip"] : ["telnyx"]),
                 ...(cfg.sip_extension?.enabled && cfg.sip_extension?.server ? ["extension"] : [])]} /></CardBoundary>}
         <div data-tour="test-call"><CardBoundary name="Test call in the browser"><TestCall contacts={contacts} /></CardBoundary></div>
 
@@ -185,10 +188,11 @@ export function Calls() {
                 <option value="telnyx">Telnyx Voice API</option>
                 <option value="sip">SIP trunk (FreePBX, Telnyx SIP…)</option>
                 <option value="both">Both</option>
+                <option value="extension">PBX extension only (internal calls, testing)</option>
               </select></label>
             <label className="bud"><span className="lbl-sm">Company name</span>
               <input defaultValue={cfg.company ?? ""} onBlur={(e) => save({ company: e.target.value })} /></label>
-            {cfg.telephony !== "sip" && (
+            {usesTelnyx && (
             <label className="bud"><span className="lbl-sm">Public HTTPS address of this server</span>
               <input defaultValue={cfg.public_url ?? ""} placeholder="https://agent.example.com"
                 onBlur={(e) => save({ public_url: e.target.value.trim().replace(/\/$/, "") })} style={{ width: 240 }} /></label>)}
@@ -196,7 +200,7 @@ export function Calls() {
               <input defaultValue={cfg.transfer_number ?? ""} placeholder="+15551234567"
                 onBlur={(e) => save({ transfer_number: e.target.value.trim() })} /></label>
           </div>
-          {cfg.telephony !== "sip" && <div className="row wrap" style={{ gap: 8, marginTop: 10, alignItems: "center" }}>
+          {usesTelnyx && <div className="row wrap" style={{ gap: 8, marginTop: 10, alignItems: "center" }}>
             <button className="btn" onClick={() => save({ webhook_secret: randomSecret() })}>
               {cfg.webhook_secret ? "Regenerate webhook secret" : "Generate webhook secret"}</button>
             {webhook && (
@@ -209,7 +213,7 @@ export function Calls() {
           </div>}
         </div>
 
-        {cfg.telephony !== "sip" && <CardBoundary name="Telnyx"><TelnyxCard cfg={cfg} keySet={telnyxKeySet} save={save} toast={toast}
+        {usesTelnyx && <CardBoundary name="Telnyx"><TelnyxCard cfg={cfg} keySet={telnyxKeySet} save={save} toast={toast}
           onKeySaved={() => { setTelnyxKeySet(true); loadReady(); }} /></CardBoundary>}
         {(cfg.telephony === "sip" || cfg.telephony === "both") && <CardBoundary name="SIP trunk"><SipCard cfg={cfg} passwordSet={!!secrets.SIP_PASSWORD} toast={toast} onChange={() => { loadCfg(); loadReady(); }} /></CardBoundary>}
         <div data-tour="pbx-extension"><CardBoundary name="PBX extension"><SipExtensionCard cfg={cfg} passwordSet={!!secrets.SIP_EXTENSION_PASSWORD} toast={toast} onChange={() => { loadCfg(); loadReady(); }} /></CardBoundary></div>
