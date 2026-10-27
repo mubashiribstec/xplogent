@@ -68,7 +68,7 @@ when the main model can't; default `llama3.2:3b`, fine on a CPU with 8 GB RAM), 
 | `xplogent-docker restore FILE` | restore a backup (overwrites current data) |
 | `xplogent-docker token [--rotate]` | show the access token, or replace it (the old one stops working) |
 | `xplogent-docker config` | edit `.env` in your editor, then apply |
-| `xplogent-docker https DOMAIN` | switch to HTTPS with a domain |
+| `xplogent-docker https DOMAIN [--force]` | switch to HTTPS with a free Let's Encrypt certificate: checks DNS and ports first, waits for the certificate, says why if it fails, and sets the phone agent's public address |
 | `xplogent-docker local [--lan]` | switch to no-domain mode |
 | `xplogent-docker ollama on [--gpu] \| off` | run local models (then `pull-model llama3.1`) |
 | `xplogent-docker speech on [--gpu] \| off` | local voices for the phone agent (Kokoro) |
@@ -76,6 +76,22 @@ when the main model can't; default `llama3.2:3b`, fine on a CPU with 8 GB RAM), 
 | `xplogent-docker sip on [--ip ADDR] \| off` | open UDP 5060 + 10000-10100 for the built-in SIP trunk client |
 | `xplogent-docker restart \| stop \| start` | |
 | `xplogent-docker uninstall [--purge]` | remove containers; `--purge` also deletes all data |
+
+### HTTPS on a home or office connection
+
+Let's Encrypt proves you own the domain by connecting to it on **port 80** (or 443). A forward of
+another port (such as 8765) alone can't get a certificate.
+
+1. At your DNS provider, add an **A record**: the host (e.g. `xplogent` for
+   `xplogent.example.com`) → your public IP.
+2. On your router, forward **TCP 80** and **TCP 443** (UDP 443 optional) to the server's local IP.
+3. `sudo xplogent-docker https xplogent.example.com`
+4. Open `https://xplogent.example.com`. You can now remove the old 8765 forward: in HTTPS mode the
+   dashboard is only served through Caddy on 443. The browser microphone (test calls) needs
+   this HTTPS address.
+
+Caddy renews the certificate by itself (port 80 must stay forwarded). If your provider blocks
+port 80, ask them to open it, or use a DNS challenge with your own Caddy build (not built in).
 
 Pin a version for production: set `XPLOGENT_IMAGE=ghcr.io/mubashiribstec/xplogent:1.2.3` in `.env`
 (`xplogent-docker config`), then `xplogent-docker update`.
@@ -227,7 +243,7 @@ Caddy forwards WebSockets automatically, which the call audio stream needs.
 
 | Symptom | Check |
 |---|---|
-| Browser shows a certificate error | DNS not pointing at the server yet, or ports 80/443 blocked; see `docker compose logs caddy` / `journalctl -u caddy` |
+| Browser shows a certificate error | DNS not pointing at the server yet, or ports 80/443 not forwarded / blocked; `xplogent-docker https DOMAIN` checks both and explains, or see `xplogent-docker logs caddy` / `journalctl -u caddy` |
 | `401` everywhere | Paste the token from `.env` / `/etc/xplogent/xplogent.env` (not the one printed by an old `xplogent token`) |
 | Dashboard blank, API works | Dashboard not built: install Node.js and re-run the installer (the Docker image includes it) |
 | `could not download the Xplogent image` | The GHCR package is still private (see "The prebuilt image"), or no internet; `docker compose build` builds it locally from a checkout |

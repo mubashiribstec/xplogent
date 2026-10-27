@@ -40,6 +40,20 @@ All notable changes to Xplogent. Format follows
   - branding (logo, colour, company name);
   - actionable empty states;
   - phone layout.
+- **Named Ollama servers**: any number of Ollama servers, each with its own bearer token
+  (stored encrypted), in Settings → Ollama servers. Use one for any task as
+  `ollama:<model>@<server>`; the backup model can run on one too.
+- **Free OpenRouter models**: Gemma 4 31B (free) and Nemotron 3 Ultra (free) as presets
+  (both support tools), and a **Model for calls** picker in Calls. The picker lists free
+  models, your presets and each Ollama server's models.
+- **Browser test call**: Start asks for the microphone; a failing voice is reported once,
+  then the call continues as text; an "agent is thinking" status; clear reasons when the
+  call can't start (bad model, WebSocket blocked by a reverse proxy, expired sign-in);
+  over plain HTTP a disabled mic button explains HTTPS or an SSH tunnel.
+- **`xplogent-docker https`** checks DNS and ports 80/443 first, waits for the Let's
+  Encrypt certificate and explains a failure (e.g. port 80 not forwarded), and sets the
+  phone agent's public address. Docs: HTTPS on a home or office connection.
+- Go-live checklist: "Call model speed" warns when calls run on a CPU-only local model.
 - **Realtime speech-to-speech mode** (optional, `voip.mode: realtime`, OpenAI). The
   greeting, field guard, Pause AI, transfers and recording are kept, and the call falls
   back to the normal mode if OpenAI can't be reached.
@@ -48,6 +62,9 @@ All notable changes to Xplogent. Format follows
 - Training recordings failed to transcribe in the Docker image (PyAV 19 vs
   faster-whisper 1.2): pinned `av<19`.
 - Windows ignored the contact's time zone for calling hours: added `tzdata`.
+- The Calls page crashed with newer Kokoro images (their voice list has objects).
+- A provider error now includes the provider's reason (e.g. "temporarily rate-limited
+  upstream"), and a turn whose voice failed still records what the agent said.
 - A caller speaking over the greeting cut off the AI/recording disclosure; the
   greeting now always plays to the end.
 

@@ -9,7 +9,7 @@
 #   xplogent-docker token [--rotate]    show (or replace) the dashboard access token
 #   xplogent-docker config              edit settings (.env), then apply them
 #   xplogent-docker restart | stop | start
-#   xplogent-docker https DOMAIN        switch to HTTPS with your domain
+#   xplogent-docker https DOMAIN [--force]   switch to HTTPS (Let's Encrypt; needs ports 80/443)
 #   xplogent-docker local [--lan]       switch to no-domain mode (port 8765)
 #   xplogent-docker ollama on [--gpu] | off
 #   xplogent-docker speech on [--gpu] | off   local voices for the phone agent
@@ -111,6 +111,85 @@ add_profile() {  # add_profile NAME / remove with "-NAME"
   done
   case "$want" in -*) ;; *) new="${new:+$new,}$want" ;; esac
   set_env "$ENV_FILE" COMPOSE_PROFILES "$new"
+}
+
+# ── HTTPS helpers ──────────────────────────────────────────────────────────────
+public_ip() {
+  local ip=""
+  for u in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
+    ip="$(curl -4 -fsS -m 6 "$u" 2>/dev/null | tr -d ' \r\n')" || ip=""
+    case "$ip" in *[!0-9.]*|"") ip="" ;; *) break ;; esac
+  done
+  echo "$ip"
+}
+
+domain_ips() {  # A records of $1, one per line
+  { if command -v getent >/dev/null 2>&1; then getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u
+    elif command -v dig >/dev/null 2>&1; then dig +short A "$1"
+    fi; } || true
+}
+
+# Checks that catch the usual reasons Let's Encrypt can't issue a certificate.
+https_precheck() {
+  local domain="$1" mine ips busy
+  say "Checking $domain before switching to HTTPS…"
+  ips="$(domain_ips "$domain")"
+  [ -n "$ips" ] || die "$domain has no A record yet. Add one at your DNS provider pointing to this \
+server's public IP, wait a few minutes, then run this again (or add --force)."
+  mine="$(public_ip)"
+  if [ -n "$mine" ] && ! printf '%s\n' "$ips" | grep -qx "$mine"; then
+    die "$domain points to $(echo $ips | tr '\n' ' ')but this server's public IP is $mine. Fix the A \
+record (or add --force if a proxy/NAT in front of you makes this expected)."
+  fi
+  ok "DNS: $domain → ${mine:-$(echo $ips | head -1)}"
+  if command -v ss >/dev/null 2>&1; then
+    busy="$(ss -Hltnp '( sport = :80 or sport = :443 )' 2>/dev/null | grep -v docker-proxy || true)"
+    if [ -n "$busy" ] && ! dc ps caddy 2>/dev/null | grep -q caddy; then
+      die "something else on this server already listens on port 80 or 443 (e.g. Apache or nginx): \
+stop it first, or put Xplogent behind it instead (see docs/deploy-linux.md)."
+    fi
+  fi
+  say "Your router must forward TCP 80 and 443 to this server (Let's Encrypt checks port 80)."
+}
+
+set_public_url() {  # the phone agent's public address, unless one is already set to https
+  dc exec -T -e XPL_URL="https://$1" xplogent python -c '
+import os
+from xplogent.core.config import load_config, save_user_config
+cur = str((load_config().voip or {}).get("public_url") or "")
+if not cur.startswith("https://"):
+    save_user_config({"voip": {"public_url": os.environ["XPL_URL"]}})
+' >/dev/null 2>&1 || true
+}
+
+# Follow Caddy's log until the certificate is issued or Let's Encrypt says why not.
+wait_certificate() {
+  local domain="$1" log ip
+  say "Getting a Let's Encrypt certificate for $domain (up to 2 minutes)…"
+  for _ in $(seq 1 "${XPL_CERT_TRIES:-15}"); do
+    # A real, trusted certificate: fetch it locally with normal certificate checks.
+    if curl -fsS -m 4 --resolve "$domain:443:127.0.0.1" "https://$domain/health" >/dev/null 2>&1; then
+      ok "HTTPS is live: https://$domain"
+      say "Remove the old port-8765 forward on your router: the dashboard is now only served through HTTPS."
+      return 0
+    fi
+    sleep 3
+  done
+  log="$(dc logs --no-color --since 10m caddy 2>&1 || true)"
+  ip="$(public_ip)"
+  if printf '%s' "$log" | grep -qiE "timeout during connect|connection refused|no route to host|i/o timeout"; then
+    warn "Let's Encrypt could not reach port 80 on ${ip:-your public IP}."
+    warn "Forward TCP 80 and 443 on your router to this server ($(hostname -I 2>/dev/null | awk '{print $1}')),"
+    warn "check that your provider doesn't block port 80, then run: xplogent-docker https $domain"
+  elif printf '%s' "$log" | grep -qiE "rateLimited|too many certificates"; then
+    warn "Let's Encrypt rate limit hit for $domain: wait an hour (Caddy retries by itself)."
+  elif printf '%s' "$log" | grep -qiE "NXDOMAIN|DNS problem"; then
+    warn "Let's Encrypt can't resolve $domain yet: check the A record, Caddy retries by itself."
+  else
+    warn "No certificate yet. Caddy keeps retrying; follow it with: xplogent-docker logs -f caddy"
+  fi
+  warn "Until then the dashboard is not reachable over HTTPS (to go back: xplogent-docker local --lan)."
+  return 1
 }
 
 cmd_backup() {
@@ -246,13 +325,16 @@ case "$cmd" in
   stop) dc stop ;;
   start) apply ;;
   https)
-    domain="${1:-}"
-    [ -n "$domain" ] || die "usage: xplogent-docker https your.domain.com"
+    domain="" force=0
+    for a in "$@"; do case "$a" in --force) force=1 ;; *) domain="$a" ;; esac; done
+    [ -n "$domain" ] || die "usage: xplogent-docker https your.domain.com [--force]"
     case "$domain" in *[!A-Za-z0-9.-]*|.*|*.) die "not a valid hostname: $domain" ;; esac
+    [ "$force" = 1 ] || https_precheck "$domain"
     set_env "$ENV_FILE" DOMAIN "$domain"
     set_env "$ENV_FILE" COMPOSE_FILE "$(compose_files compose.https.yml)"
     apply
-    ok "HTTPS mode: https://$domain (the certificate is issued once DNS points here and ports 80/443 are open)" ;;
+    set_public_url "$domain"
+    wait_certificate "$domain" ;;
   local)
     bind=127.0.0.1; [ "${1:-}" = "--lan" ] && bind=0.0.0.0
     set_env "$ENV_FILE" XPLOGENT_BIND "$bind"
