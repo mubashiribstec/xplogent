@@ -303,12 +303,12 @@ def setup() -> None:
     """Interactive first-run wizard: pick a provider/model and save settings."""
     console.print(Panel("Let's set up Xplogent.", title="⚙ setup", border_style="cyan"))
     provider = console.input(
-        "Provider [bold]\\[ollama][/] / openai / anthropic / gemini / openrouter: "
+        "Provider [bold]\\[ollama][/] / openai / anthropic / gemini / openrouter / vercel: "
     ).strip().lower() or "ollama"
     defaults = {
         "ollama": "llama3.1", "openai": "gpt-4o",
         "anthropic": "claude-sonnet-4-6", "gemini": "gemini-3.6-flash",
-        "openrouter": "google/gemma-4-31b-it:free",
+        "openrouter": "google/gemma-4-31b-it:free", "vercel": "google/gemini-3.6-flash",
     }
     if provider not in defaults:
         console.print(f"[yellow]Unknown provider '{provider}'[/] — "
@@ -320,7 +320,7 @@ def setup() -> None:
     if provider != "ollama":
         key_env = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
                    "gemini": "GOOGLE_API_KEY",
-                   "openrouter": "OPENROUTER_API_KEY"}.get(provider)
+                   "openrouter": "OPENROUTER_API_KEY", "vercel": "AI_GATEWAY_API_KEY"}.get(provider)
         if key_env:
             key = console.input(f"{key_env} (leave blank to skip): ").strip()
             if key:

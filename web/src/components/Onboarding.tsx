@@ -8,6 +8,7 @@ const PROVIDERS = [
   { id: "openai", label: "OpenAI", note: "GPT-4o and o-series", model: "openai:gpt-4o", keyEnv: "OPENAI_API_KEY" },
   { id: "anthropic", label: "Anthropic", note: "Claude via API key", model: "anthropic:claude-sonnet-4-6", keyEnv: "ANTHROPIC_API_KEY" },
   { id: "gemini", label: "Google Gemini", note: "Gemini 3.6 Flash and newer", model: "gemini:gemini-3.6-flash", keyEnv: "GEMINI_API_KEY" },
+  { id: "vercel", label: "Vercel AI Gateway", note: "many providers' models, one key", model: "vercel:google/gemini-3.6-flash", keyEnv: "AI_GATEWAY_API_KEY" },
   { id: "openrouter", label: "OpenRouter", note: "200+ models, one key (free ones too)", model: "openrouter:google/gemma-4-31b-it:free", keyEnv: "OPENROUTER_API_KEY" },
 ];
 

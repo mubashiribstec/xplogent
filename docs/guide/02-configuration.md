@@ -15,7 +15,11 @@ editing files under `~/.xplogent/`.
 ## Common settings
 
 - **Model** — `provider:model`, e.g. `ollama:llama3.1`, `openai:gpt-4o`,
-  `anthropic:claude-sonnet-4-6`, `openrouter:meta-llama/llama-3.1-70b-instruct`.
+  `anthropic:claude-sonnet-4-6`, `gemini:gemini-3.6-flash`,
+  `openrouter:google/gemma-4-31b-it:free`, or through the **Vercel AI Gateway**
+  `vercel:<creator>/<model>` (e.g. `vercel:anthropic/claude-opus-5`; key
+  `AI_GATEWAY_API_KEY`). Settings → Browse provider models → *vercel* lists every model the
+  gateway offers (about 500), and **Test key** tries a cheap one.
 - **Reflection / embedding models** — usually a small/local model; embeddings
   default to `ollama:nomic-embed-text` so memory works offline.
 - **Memory** — enable/disable, short-term token budget, retrieval depth.

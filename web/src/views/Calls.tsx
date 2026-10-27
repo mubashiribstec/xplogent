@@ -226,7 +226,7 @@ export function Calls() {
               onBlur={(e) => save({ greeting: e.target.value })} /></label>
           <div className="row wrap" style={{ gap: 10 }}>
             {loaded && <CallModelPicker value={cfg.model ?? ""} mainModel={mainModel} presets={presets}
-              keySet={!!secrets.OPENROUTER_API_KEY} onPick={(m) => save({ model: m })} />}
+              secrets={secrets} onPick={(m) => save({ model: m })} />}
             <label className="bud"><span className="lbl-sm">Est. cost per minute ($)</span>
               <input type="number" step="0.001" defaultValue={cfg.cost_per_minute ?? 0}
                 onBlur={(e) => save({ cost_per_minute: Number(e.target.value) || 0 })} style={{ width: 90 }} /></label>
@@ -498,8 +498,13 @@ function SpeechCard({ cfg, secrets, save, toast, onKey }: {
 
 // "Model for calls": the free OpenRouter models, your presets and the models on your
 // named Ollama servers (listed live), or any provider:model typed by hand.
-function CallModelPicker({ value, mainModel, presets, keySet, onPick }: {
-  value: string; mainModel: string; presets: { label: string; model: string }[]; keySet: boolean;
+const KEY_FOR_PROVIDER: Record<string, string> = {
+  openrouter: "OPENROUTER_API_KEY", vercel: "AI_GATEWAY_API_KEY", openai: "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY", gemini: "GEMINI_API_KEY",
+};
+
+function CallModelPicker({ value, mainModel, presets, secrets, onPick }: {
+  value: string; mainModel: string; presets: { label: string; model: string }[]; secrets: Record<string, boolean>;
   onPick: (m: string) => void;
 }) {
   const [remote, setRemote] = useState<{ server: string; models: string[] }[]>([]);
@@ -547,8 +552,11 @@ function CallModelPicker({ value, mainModel, presets, keySet, onPick }: {
         </select>
       )}
       <ModelTestButton spec={value || mainModel} label="Test this model" />
-      {value.startsWith("openrouter:") && !keySet &&
-        <span className="err" style={{ fontSize: 12 }}>Add your OpenRouter key under Settings → API keys.</span>}
+      {(() => {
+        const need = KEY_FOR_PROVIDER[(value || mainModel).split(":")[0]];
+        const has = need && (secrets[need] || (need === "GEMINI_API_KEY" && secrets.GOOGLE_API_KEY));
+        return need && !has ? <span className="err" style={{ fontSize: 12 }}>Add {need} under Settings → API keys.</span> : null;
+      })()}
       {isFree && <span className="dim" style={{ fontSize: 12 }}>Free models are rate-limited by OpenRouter;
         set a backup model (Settings → Backup model) so a busy minute never leaves a caller waiting.</span>}
     </div>

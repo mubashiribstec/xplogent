@@ -12,7 +12,7 @@ import {
 
 const RISK_TIERS = ["low", "medium", "high", "critical"];
 const ACTIONS = ["auto", "confirm", "deny"];
-const SECRET_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY"];
+const SECRET_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "AI_GATEWAY_API_KEY"];
 // Which model "Test key" tries: the one you use with that provider, else a cheap default.
 const usedWith = (cfg: Record<string, any>, p: string) =>
   [cfg.voip?.model, cfg.model].find((m) => typeof m === "string" && m.startsWith(`${p}:`)) as string | undefined;
@@ -21,6 +21,7 @@ const KEY_TEST_MODEL: Record<string, (cfg: Record<string, any>) => string> = {
   ANTHROPIC_API_KEY: (c) => usedWith(c, "anthropic") ?? "",
   GEMINI_API_KEY: (c) => usedWith(c, "gemini") ?? "gemini:gemini-3.6-flash",
   OPENROUTER_API_KEY: (c) => usedWith(c, "openrouter") ?? FREE_MODELS[1].model,
+  AI_GATEWAY_API_KEY: (c) => usedWith(c, "vercel") ?? "vercel:auto",        // the server picks a quick model
 };
 // Tool groups that drive a real screen/mouse: unusable on a server without a display.
 const DISPLAY_GROUPS = ["gui"];
@@ -428,7 +429,7 @@ function HealthCard() {
             {st.providers.map((p) => {
               const keyMap: Record<string, string> = {
                 openai: "OPENAI_API_KEY", anthropic: "ANTHROPIC_API_KEY",
-                openrouter: "OPENROUTER_API_KEY", gemini: "GEMINI_API_KEY",
+                openrouter: "OPENROUTER_API_KEY", gemini: "GEMINI_API_KEY", vercel: "AI_GATEWAY_API_KEY",
               };
               const env = keyMap[p];
               const ok = !env || st.secrets[env];

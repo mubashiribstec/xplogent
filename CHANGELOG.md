@@ -71,6 +71,9 @@ All notable changes to Xplogent. Format follows
 - Windows ignored the contact's time zone for calling hours: added `tzdata`.
 - The Calls page crashed with newer Kokoro images (their voice list has objects).
 - API keys pasted with a stray space or newline were refused by the provider; they are trimmed.
+- **Vercel AI Gateway** provider (`vercel:<creator>/<model>`, key `AI_GATEWAY_API_KEY`):
+  one key for the gateway's ~500 models. Browse lists them; **Test key** picks the
+  cheapest paid model with tool support and makes one call-style request.
 - **PBX extension only** phone-line mode, for testing on FreePBX without Telnyx, a public
   address or a webhook. The checklist asks only for the extension, and Call now dials
   extensions (e.g. `201`). **Test extensions** are still answered (as test calls) while

@@ -11,6 +11,7 @@ export interface GenChoice {
 const PROVIDER_LABEL: Record<string, string> = {
   ollama: "Ollama", openai: "OpenAI", anthropic: "Anthropic", gemini: "Gemini",
   openrouter: "OpenRouter",
+  vercel: "Vercel AI Gateway",
 };
 
 const RECENT_KEY = "xplogent_recent_models";

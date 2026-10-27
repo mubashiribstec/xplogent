@@ -33,6 +33,7 @@ _PROVIDER_KEYS = {
     "anthropic": ("ANTHROPIC_API_KEY",),
     "gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
     "openrouter": ("OPENROUTER_API_KEY",),
+    "vercel": ("AI_GATEWAY_API_KEY",),
 }
 
 

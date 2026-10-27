@@ -10,6 +10,7 @@ from xplogent.providers.gemini import GeminiProvider
 from xplogent.providers.ollama import LocalOllamaProvider, OllamaProvider
 from xplogent.providers.openai import OpenAIProvider
 from xplogent.providers.openrouter import OpenRouterProvider
+from xplogent.providers.vercel import VercelGatewayProvider
 
 _PROVIDERS: dict[str, type[Provider]] = {
     "ollama": OllamaProvider,
@@ -18,6 +19,7 @@ _PROVIDERS: dict[str, type[Provider]] = {
     "anthropic": AnthropicProvider,
     "openrouter": OpenRouterProvider,
     "gemini": GeminiProvider,
+    "vercel": VercelGatewayProvider,
 }
 
 

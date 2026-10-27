@@ -13,7 +13,8 @@ from urllib.parse import urlparse
 
 LOCAL_TTS_HINTS = ("kokoro", "localhost", "127.0.0.1")
 _PROVIDER_KEYS = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
-                  "gemini": "GEMINI_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
+                  "gemini": "GEMINI_API_KEY", "openrouter": "OPENROUTER_API_KEY",
+                  "vercel": "AI_GATEWAY_API_KEY"}
 
 
 def public_url_problem(url: str) -> str:

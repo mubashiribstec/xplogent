@@ -323,6 +323,19 @@ async def test_model(body: dict) -> dict:
     except Exception as exc:  # noqa: BLE001 - e.g. unknown Ollama server
         return {**out, **diagnose(exc, spec)}
     try:
+        if kind == "vercel" and provider.model == "auto":
+            # "Test key" with no model chosen yet: try a quick one the key can use.
+            from xplogent.providers.vercel import pick_quick_model
+
+            try:
+                picked = pick_quick_model(await asyncio.wait_for(provider.model_entries(), timeout=15))
+            except Exception as exc:  # noqa: BLE001 - a refused key shows up here first
+                return {**out, **diagnose(exc, spec)}
+            if not picked:
+                return {**out, "code": "no_models", "reason": "The gateway lists no chat models for this key.",
+                        "fix": "Check the key's team and its AI Gateway settings on vercel.com."}
+            provider.model = picked
+            spec = out["spec"] = f"vercel:{picked}"
         if kind == "openrouter" and hasattr(provider, "key_info"):
             try:
                 quota = await asyncio.wait_for(provider.key_info(), timeout=10)

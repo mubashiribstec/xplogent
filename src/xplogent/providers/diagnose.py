@@ -13,6 +13,7 @@ import asyncio
 from typing import Any
 
 _KEY_PLACE = {"openrouter": "Settings → API keys → OPENROUTER_API_KEY",
+              "vercel": "Settings → API keys → AI_GATEWAY_API_KEY",
               "openai": "Settings → API keys → OPENAI_API_KEY",
               "anthropic": "Settings → API keys → ANTHROPIC_API_KEY",
               "gemini": "Settings → API keys → GEMINI_API_KEY"}
