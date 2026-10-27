@@ -240,6 +240,21 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
   (`ssh -L 8765:localhost:8765 you@server`, then `http://localhost:8765`). If the voice fails
   (for example OpenAI voice with no OpenAI key), the panel says so once and the call carries on
   as text; "the agent is thinking" shows while a reply is on its way.
+- **Run checks** (in the test-call card): tests every link of a call one by one, with the time
+  and, when something fails, the reason and the fix:
+  - the call model, sent the way a call sends it (with a tool); for OpenRouter it also shows
+    your free requests used today;
+  - the backup model;
+  - the voice;
+  - hearing: the voice's audio transcribed back, with the share of words recognised;
+  - your microphone (HTTPS and permission);
+  - the live connection (WebSockets through any reverse proxy).
+- **Test this model** (Calls → Model for calls) and **Test key** (Settings → API keys) run the
+  same model test. Typical answers:
+  - "busy at Google AI Studio (shared free pool), not a problem with your key";
+  - "the API key was refused";
+  - "all 50 free-model requests for today are used". OpenRouter allows 20 requests a minute
+    and 50 a day on free models; buying $10 of credits raises that to 1,000 a day.
 - **Call me**: rings your phone. Test calls are marked "test", not counted, and never change
   a contact or the do-not-call list.
 

@@ -23,6 +23,8 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
       <div style={{ fontFamily: "system-ui, sans-serif", maxWidth: 640, margin: "15vh auto", padding: "0 16px" }}>
         <h2>Something went wrong</h2>
         <pre style={{ whiteSpace: "pre-wrap", color: "#b00020" }}>{String(this.state.error?.message || this.state.error)}</pre>
+        <p>If this keeps happening: update the server (<code>sudo xplogent-docker update</code>), then reload
+          with Ctrl+Shift+R (Cmd+Shift+R on a Mac) so the browser fetches the new dashboard.</p>
         <button onClick={() => location.reload()}>Reload</button>
       </div>
     );

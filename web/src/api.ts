@@ -342,6 +342,8 @@ export interface StatusInfo {
   secrets: Record<string, boolean>;
   ollama: { host: string; reachable: boolean; auth?: boolean; error?: string };
   capabilities?: { display: boolean; docker: boolean; git: boolean };
+  version?: string;
+  revision?: string;
 }
 
 async function postJSON<T>(url: string, body: unknown = {}): Promise<T> {
@@ -623,3 +625,11 @@ export async function deleteRecording(callId: number): Promise<void> {
 }
 export const trainOnRecording = (callId: number) =>
   postJSON<{ ok: boolean; error?: string }>(`/voip/calls/${callId}/recording/train`);
+
+// ── model test (the way a call uses the model: system prompt + a tool) ─────────
+export interface ModelTest {
+  spec: string; ok: boolean; reply?: string; tool_call?: { name: string; arguments: Record<string, any> } | null;
+  ms_first?: number; ms_total?: number; code?: string; reason?: string; fix?: string;
+  quota?: { free_used?: number; free_limit?: number; free_remaining?: number; is_free_tier?: boolean; limit_remaining?: number | null };
+}
+export const testModel = (spec = "") => postJSON<ModelTest>("/providers/test-model", { spec });

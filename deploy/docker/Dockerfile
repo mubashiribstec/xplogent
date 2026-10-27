@@ -56,6 +56,7 @@ ENV XPLOGENT_HOME=/data \
     XPLOGENT_IN_DOCKER=1 \
     HF_HOME=/data/.cache/huggingface \
     XPLOGENT_VERSION=${VERSION} \
+    XPLOGENT_REVISION=${REVISION} \
     PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring
 
 VOLUME ["/data"]

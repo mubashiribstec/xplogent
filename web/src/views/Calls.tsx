@@ -13,6 +13,8 @@ import { CallDebug } from "./CallDebug";
 import { GoLive } from "./GoLive";
 import { BrandingCard } from "./BrandingCard";
 import { FREE_MODELS } from "../lib/models";
+import { CardBoundary } from "../components/CardBoundary";
+import { ModelTestButton } from "../components/ModelTest";
 
 const CRM_BADGE: Record<string, string> = { sent: "ok", failed: "bad", skipped: "bad", retrying: "warn", sending: "warn" };
 const fmtTime = (t?: number | null) => (t ? new Date(t * 1000).toLocaleString() : "—");
@@ -82,7 +84,7 @@ export function Calls() {
         <p className="dim">Answers inbound calls using your scripts and knowledge base. Calls are transcribed live (and recorded, unless you switch recording off);
           the agent only answers from your knowledge and hands off to a person when it can't.</p>
 
-        {ready && loaded && <GoLive ready={ready.ready} items={ready.items} calls={calls} cfg={cfg} />}
+        {ready && loaded && <CardBoundary name="Go live"><GoLive ready={ready.ready} items={ready.items} calls={calls} cfg={cfg} /></CardBoundary>}
         {ready && <details className="card" open={ready.items.some((i) => !i.ok && i.required)}>
           <summary><b>All checks</b> <span className="dim">({ready.items.filter((i) => i.ok).length} of {ready.items.length} fine)</span></summary>
           <Readiness ready={ready.ready} items={ready.items} onClearBusy={async (line) => {
@@ -90,12 +92,12 @@ export function Calls() {
           }} />
         </details>}
 
-        <LiveCalls active={status?.active ?? []} toast={toast} onChange={reload} />
+        <CardBoundary name="Live calls"><LiveCalls active={status?.active ?? []} toast={toast} onChange={reload} /></CardBoundary>
 
-        {loaded && <CallNow toast={toast} onCalled={reload}
+        {loaded && <CardBoundary name="Call now"><CallNow toast={toast} onCalled={reload}
           via={[...(cfg.telephony === "sip" ? ["sip"] : cfg.telephony === "both" ? ["telnyx", "sip"] : ["telnyx"]),
-                ...(cfg.sip_extension?.enabled && cfg.sip_extension?.server ? ["extension"] : [])]} />}
-        <div data-tour="test-call"><TestCall contacts={contacts} /></div>
+                ...(cfg.sip_extension?.enabled && cfg.sip_extension?.server ? ["extension"] : [])]} /></CardBoundary>}
+        <div data-tour="test-call"><CardBoundary name="Test call in the browser"><TestCall contacts={contacts} /></CardBoundary></div>
 
         <div className="card" data-tour="calls-list">
           <h3 style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
@@ -207,13 +209,13 @@ export function Calls() {
           </div>}
         </div>
 
-        {cfg.telephony !== "sip" && <TelnyxCard cfg={cfg} keySet={telnyxKeySet} save={save} toast={toast}
-          onKeySaved={() => { setTelnyxKeySet(true); loadReady(); }} />}
-        {(cfg.telephony === "sip" || cfg.telephony === "both") && <SipCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} />}
-        <div data-tour="pbx-extension"><SipExtensionCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} /></div>
-        <SpeechCard cfg={cfg} secrets={secrets} save={save} toast={toast} onKey={loadCfg} />
+        {cfg.telephony !== "sip" && <CardBoundary name="Telnyx"><TelnyxCard cfg={cfg} keySet={telnyxKeySet} save={save} toast={toast}
+          onKeySaved={() => { setTelnyxKeySet(true); loadReady(); }} /></CardBoundary>}
+        {(cfg.telephony === "sip" || cfg.telephony === "both") && <CardBoundary name="SIP trunk"><SipCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} /></CardBoundary>}
+        <div data-tour="pbx-extension"><CardBoundary name="PBX extension"><SipExtensionCard cfg={cfg} toast={toast} onChange={() => { loadCfg(); loadReady(); }} /></CardBoundary></div>
+        <CardBoundary name="Speech"><SpeechCard cfg={cfg} secrets={secrets} save={save} toast={toast} onKey={loadCfg} /></CardBoundary>
 
-        <div className="card">
+        <CardBoundary name="Conversation"><div className="card">
           <h3>Conversation</h3>
           <label>Greeting <span className="dim">({"{company}"} is replaced by the company name)</span>
             <textarea defaultValue={cfg.greeting ?? ""} rows={2} style={{ width: "100%" }}
@@ -238,9 +240,9 @@ export function Calls() {
           </div>
           <p className="dim" style={{ fontSize: 12 }}>Add your scripts and FAQs under Knowledge and your customers under
             Contacts: the agent answers only from those.</p>
-        </div>
-        <div data-tour="crm"><CallAgentCard toast={toast} onChange={loadReady} /></div>
-        <BrandingCard toast={toast} />
+        </div></CardBoundary>
+        <div data-tour="crm"><CardBoundary name="Call agent"><CallAgentCard toast={toast} onChange={loadReady} /></CardBoundary></div>
+        <CardBoundary name="Branding"><BrandingCard toast={toast} /></CardBoundary>
         </>)}
 
       </div>
@@ -534,6 +536,7 @@ function CallModelPicker({ value, mainModel, presets, keySet, onPick }: {
           <option value="__custom">Other (type provider:model)…</option>
         </select>
       )}
+      <ModelTestButton spec={value || mainModel} label="Test this model" />
       {value.startsWith("openrouter:") && !keySet &&
         <span className="err" style={{ fontSize: 12 }}>Add your OpenRouter key under Settings → API keys.</span>}
       {isFree && <span className="dim" style={{ fontSize: 12 }}>Free models are rate-limited by OpenRouter;

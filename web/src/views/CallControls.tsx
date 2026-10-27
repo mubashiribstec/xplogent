@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Mic, MicOff, Pause, Phone, PhoneForwarded, PhoneOff, Play, Send } from "lucide-react";
 import {
   CallResult, CallTurn, LiveCallInfo, dialCall, getCall, hangupCall, instructCall, pauseAI, sayOnCall,
-  transferCall, wsTokenParam, wsUrl,
+  transferCall, wsTokenParam, wsUrl, testModel, testSpeech, getBackupModel, testBackupModel,
 } from "../api";
 
 type Toaster = (m: string, kind?: any) => void;
@@ -145,6 +145,118 @@ function muEncode(x: number): number {
 }
 
 interface Line { who: "agent" | "caller" | "note"; text: string }
+
+// ── "Run checks": every link of a call, tested one by one before you talk ────────
+type CheckState = "wait" | "run" | "ok" | "bad" | "skip";
+interface Check { id: string; label: string; state: CheckState; detail?: string; fix?: string }
+const CHECKS: Check[] = [
+  { id: "model", label: "Call model (with a tool, as on a call)", state: "wait" },
+  { id: "backup", label: "Backup model", state: "wait" },
+  { id: "voice", label: "Agent's voice", state: "wait" },
+  { id: "hearing", label: "Hearing (speech-to-text)", state: "wait" },
+  { id: "mic", label: "Your microphone", state: "wait" },
+  { id: "live", label: "Live connection to the server", state: "wait" },
+];
+const words = (t: string) => t.toLowerCase().replace(/[^a-z ]/g, " ").split(/\s+/).filter(Boolean);
+
+function RunChecks() {
+  const [checks, setChecks] = useState<Check[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const set = (id: string, u: Partial<Check>) => setChecks((cs) => (cs ?? []).map((c) => c.id === id ? { ...c, ...u } : c));
+  const secs = (ms?: number) => `${((ms ?? 0) / 1000).toFixed(1)} s`;
+
+  const run = async () => {
+    setBusy(true); setChecks(CHECKS.map((c) => ({ ...c })));
+    // 1. the call model, exactly as a call uses it
+    set("model", { state: "run" });
+    try {
+      const m = await testModel();
+      const q = m.quota?.free_limit ? ` · free requests today ${m.quota.free_used ?? 0}/${m.quota.free_limit}` : "";
+      set("model", m.ok
+        ? { state: "ok", detail: `${m.spec} · ${secs(m.ms_total)}${m.tool_call ? ` · used ${m.tool_call.name}` : " · no tool call"}${q}` }
+        : { state: "bad", detail: `${m.spec}: ${m.reason}${q}`, fix: m.fix });
+    } catch (e: any) { set("model", { state: "bad", detail: String(e?.message || e) }); }
+    // 2. the backup model (answers when the call model can't)
+    set("backup", { state: "run" });
+    try {
+      const b = await getBackupModel();
+      if (!b.enabled) set("backup", { state: "skip", detail: "off", fix: "Recommended with free models: Settings → Backup model." });
+      else {
+        const t = await testBackupModel();
+        set("backup", t.ok ? { state: "ok", detail: `${t.model} · ${t.seconds} s` }
+          : { state: "bad", detail: t.error, fix: "Settings → Backup model: check the server and that the model is downloaded." });
+      }
+    } catch (e: any) { set("backup", { state: "bad", detail: String(e?.message || e) }); }
+    // 3 + 4. voice, then hear that voice back with speech-to-text
+    set("voice", { state: "run" }); set("hearing", { state: "run" });
+    try {
+      const sp = await testSpeech(true);
+      if (!sp.tts_ms) {
+        set("voice", { state: "bad", detail: sp.error, fix: "Calls → Speech: choose \"Local on this server\" (needs xplogent-docker speech on) or add the voice provider's key." });
+        set("hearing", { state: "skip", detail: "needs a working voice first" });
+      } else {
+        set("voice", { state: "ok", detail: `${sp.tts_ms} ms for ${sp.audio_seconds} s of speech` });
+        const said = new Set(words(sp.sentence || "")), heard = words(sp.transcript || "");
+        const share = said.size ? Math.round(100 * heard.filter((w) => said.has(w)).length / said.size) : 0;
+        set("hearing", sp.error
+          ? { state: "bad", detail: sp.error, fix: "Calls → Speech: built-in Whisper needs the voip extra; Deepgram needs its key." }
+          : { state: share >= 60 ? "ok" : "bad", detail: `"${sp.transcript}" · ${share}% of the words · ${sp.stt_ms} ms`,
+              fix: share >= 60 ? undefined : "The voice or speech-to-text model may be poor; try another voice or a larger Whisper model." });
+      }
+    } catch (e: any) { set("voice", { state: "bad", detail: String(e?.message || e) }); set("hearing", { state: "skip" }); }
+    // 5. microphone (browser side)
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      set("mic", { state: "bad", detail: "this page is plain http://, and browsers only allow the microphone on HTTPS or localhost",
+        fix: "sudo xplogent-docker https your.domain (or an SSH tunnel to http://localhost:8765). Typing works meanwhile." });
+    } else {
+      let perm = "prompt";
+      try { perm = (await navigator.permissions.query({ name: "microphone" as PermissionName })).state; } catch { /* not supported */ }
+      set("mic", perm === "denied"
+        ? { state: "bad", detail: "blocked for this site", fix: "Allow the microphone with the icon in the address bar, then reload." }
+        : { state: "ok", detail: perm === "granted" ? "allowed" : "the browser will ask when you start the test call" });
+    }
+    // 6. the live connection a test call uses (a 1-second test call, not counted)
+    set("live", { state: "run" });
+    await new Promise<void>((done) => {
+      let ok = false, told = false;
+      const sock = new WebSocket(wsUrl(`/ws/voip/test?${wsTokenParam().slice(1)}`));
+      const timer = setTimeout(() => { sock.close(); }, 8000);
+      sock.onopen = () => sock.send(JSON.stringify({ type: "start", voice: false }));
+      sock.onmessage = (ev) => {
+        if (typeof ev.data !== "string") return;
+        const m = JSON.parse(ev.data);
+        if (m.type === "started") { ok = true; set("live", { state: "ok", detail: "connected" }); sock.send(JSON.stringify({ type: "hangup" })); }
+        if (m.type === "error") { told = true; set("live", { state: "bad", detail: m.error }); }
+      };
+      sock.onclose = () => {
+        clearTimeout(timer);
+        if (!ok && !told) set("live", { state: "bad", detail: "could not open the live connection",
+          fix: "If a reverse proxy (nginx…) is in front of Xplogent it must pass WebSocket upgrades for /ws." });
+        done();
+      };
+    });
+    setBusy(false);
+  };
+
+  const icon: Record<CheckState, string> = { wait: "○", run: "…", ok: "✓", bad: "✗", skip: "–" };
+  const cls: Record<CheckState, string> = { wait: "dim", run: "dim", ok: "ok", bad: "err", skip: "dim" };
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button className="btn" onClick={run} disabled={busy}>{busy ? "Checking…" : "Run checks"}</button>
+      <span className="dim" style={{ fontSize: 12, marginLeft: 8 }}>tests the model, backup, voice, hearing, microphone and connection</span>
+      {checks && (
+        <ul className="list checks" style={{ marginTop: 8 }}>
+          {checks.map((c) => (
+            <li key={c.id} style={{ display: "block" }}>
+              <span className={cls[c.state]} style={{ display: "inline-block", width: 18 }}>{icon[c.state]}</span>
+              <b>{c.label}</b>{c.detail && <span className="dim" style={{ fontSize: 12 }}> · {c.detail}</span>}
+              {c.fix && c.state !== "ok" && <div style={{ fontSize: 12, marginLeft: 18 }}>→ {c.fix}</div>}
+            </li>))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 export function TestCall({ contacts }: { contacts?: { id: number; name: string }[] }) {
   const [state, setState] = useState<"idle" | "live" | "ended">("idle");
@@ -305,6 +417,7 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
           {mic && <span className="dim" style={{ fontSize: 12 }}>🎙 listening: just talk</span>}
         </div>
       )}
+      {state !== "live" && <RunChecks />}
       {lines.length > 0 && (
         <div ref={box} className="live-transcript" style={{ marginTop: 10 }}>
           {lines.map((l, i) => l.who === "note"

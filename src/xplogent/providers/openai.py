@@ -108,7 +108,9 @@ class OpenAIProvider(Provider):
                     # these): raise like the Anthropic provider does, so retry /
                     # backup applies instead of an empty "successful" answer.
                     msg = err.get("message", "") if isinstance(err, dict) else str(err)
-                    raise RuntimeError(f"openai stream error: {msg}")
+                    exc = RuntimeError(f"openai stream error: {msg}")
+                    exc.details = {"mid_stream": True, **(error_details(err) if isinstance(err, dict) else {})}
+                    raise exc
                 if u := chunk.get("usage"):
                     usage = {"input_tokens": int(u.get("prompt_tokens", 0)),
                              "output_tokens": int(u.get("completion_tokens", 0))}
@@ -168,14 +170,29 @@ async def _raise_with_reason(resp: httpx.Response) -> None:
     part, e.g. "temporarily rate-limited upstream", in ``error.metadata.raw``), so
     retries / backup still see an ``HTTPStatusError`` and logs say what happened."""
     reason = ""
+    details: dict[str, Any] = {"status": resp.status_code}
     try:
         err = json.loads(await resp.aread()).get("error") or {}
         if isinstance(err, dict):
-            raw = (err.get("metadata") or {}).get("raw") if isinstance(err.get("metadata"), dict) else ""
-            reason = str(raw or err.get("message") or "")
+            details.update(error_details(err))
+            reason = str(details.get("raw") or details.get("message") or "")
         else:
             reason = str(err)
     except Exception:  # noqa: BLE001 - no readable body: the status line is enough
         pass
     msg = f"{resp.status_code} {resp.reason_phrase}" + (f": {reason[:300]}" if reason else "")
-    raise httpx.HTTPStatusError(msg, request=resp.request, response=resp)
+    exc = httpx.HTTPStatusError(msg, request=resp.request, response=resp)
+    exc.details = details             # read by providers.diagnose for the reason + fix
+    raise exc
+
+
+def error_details(err: dict[str, Any]) -> dict[str, Any]:
+    """The useful parts of an OpenAI-style / OpenRouter ``error`` object."""
+    meta = err.get("metadata") if isinstance(err.get("metadata"), dict) else {}
+    raw = meta.get("raw")
+    if isinstance(raw, (dict, list)):
+        raw = json.dumps(raw)[:400]
+    return {k: v for k, v in {
+        "code": err.get("code"), "message": str(err.get("message") or ""), "raw": str(raw or ""),
+        "provider": str(meta.get("provider_name") or ""), "limit_source": str(meta.get("limit_source") or ""),
+    }.items() if v not in ("", None)}

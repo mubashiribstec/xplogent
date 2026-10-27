@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 
@@ -26,7 +27,7 @@ router = APIRouter()
 async def health() -> dict:
     cfg = load_config()
     return {"status": "ok", "model": cfg.model, "providers": available_providers(),
-            "auth": bool(deps.auth_token())}
+            "auth": bool(deps.auth_token()), **repo_info.build_info()}
 
 
 @router.get("/auth/check")
@@ -51,6 +52,7 @@ async def status() -> dict:
     probe = await _probe_ollama(ollama_host, token, timeout=3.0)
     return {
         "status": "ok",
+        **repo_info.build_info(),
         "model": cfg.model,
         "providers": available_providers(),
         "secrets": secret_status(),
@@ -289,6 +291,75 @@ async def backup_model_test() -> dict:
         await provider.aclose()
     return {"ok": bool(reply.content.strip()), "reply": reply.content.strip()[:300],
             "seconds": round(time.monotonic() - started, 1), "model": spec}
+
+
+_TEST_TOOL = {"name": "book_callback", "description": "Book a callback for the caller at the time they ask for.",
+              "parameters": {"type": "object", "properties": {"when": {"type": "string"}}, "required": ["when"]}}
+
+
+@router.post("/providers/test-model")
+async def test_model(body: dict) -> dict:
+    """One request the way a call sends it (system prompt + a tool), timed, with the
+    real reason and the fix when it fails. ``spec`` defaults to the call model.
+    For OpenRouter it also reports the key's free-model requests left today."""
+    import time
+
+    from xplogent.providers.base import Message, Role, StreamKind, ToolSpec
+    from xplogent.providers.diagnose import diagnose
+    from xplogent.providers.registry import build_provider
+    from xplogent.voip.readiness import _PROVIDER_KEYS
+
+    cfg = load_config()
+    spec = str(body.get("spec") or "").strip() or str((cfg.voip or {}).get("model") or cfg.model)
+    kind = spec.split(":", 1)[0]
+    out: dict = {"spec": spec, "ok": False}
+    env = _PROVIDER_KEYS.get(kind)
+    if env and not os.environ.get(env, "").strip():
+        return {**out, "code": "no_key", "reason": f"No {env} is saved on this server.",
+                "fix": f"Paste your key in Settings → API keys → {env}."}
+    quota = None
+    try:
+        provider = build_provider(spec, fallback=False)
+    except Exception as exc:  # noqa: BLE001 - e.g. unknown Ollama server
+        return {**out, **diagnose(exc, spec)}
+    try:
+        if kind == "openrouter" and hasattr(provider, "key_info"):
+            try:
+                quota = await asyncio.wait_for(provider.key_info(), timeout=10)
+                out["quota"] = quota
+            except Exception as exc:  # noqa: BLE001 - the chat test below says more
+                if getattr(getattr(exc, "response", None), "status_code", 0) == 401:
+                    return {**out, **diagnose(exc, spec)}
+        messages = [Message(role=Role.SYSTEM, content="You are a phone agent for a small company. Keep replies "
+                            "short. Use book_callback when the caller asks to be called back."),
+                    Message(role=Role.USER, content="Can someone call me back tomorrow at 10am?")]
+        started = time.monotonic()
+        first = 0.0
+        text: list[str] = []
+        final = None
+
+        async def run() -> None:
+            nonlocal first, final
+            async for ev in provider.stream(messages, [ToolSpec(**_TEST_TOOL)], temperature=0.2):
+                if ev.kind == StreamKind.TOKEN and ev.text:
+                    first = first or time.monotonic()
+                    text.append(ev.text)
+                elif ev.kind == StreamKind.DONE:
+                    final = ev.message
+
+        await asyncio.wait_for(run(), timeout=float(body.get("timeout") or 60))
+        done = time.monotonic()
+        calls = [{"name": c.name, "arguments": c.arguments} for c in (getattr(final, "tool_calls", None) or [])]
+        reply = ("".join(text) or getattr(final, "content", "") or "").strip()
+        return {**out, "ok": bool(reply or calls), "reply": reply[:300], "tool_call": calls[0] if calls else None,
+                "ms_first": round(((first or done) - started) * 1000), "ms_total": round((done - started) * 1000),
+                **({} if reply or calls else {"code": "empty", "reason": "The model answered with nothing.",
+                                               "fix": "Retry, or pick another model."})}
+    except Exception as exc:  # noqa: BLE001 - explained to the user
+        return {**out, **diagnose(exc, spec, quota)}
+    finally:
+        with contextlib.suppress(Exception):
+            await provider.aclose()
 
 
 @router.post("/providers/ollama/pull")

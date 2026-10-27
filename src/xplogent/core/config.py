@@ -279,6 +279,9 @@ def save_env(updates: dict[str, str]) -> None:
     everything else is merged into ``~/.xplogent/.env``."""
     from xplogent.core import secrets as _sec
 
+    # A key pasted with a trailing space/newline is refused by the provider ("invalid
+    # key") although it looks right; API keys never contain whitespace.
+    updates = {k: v.strip() if isinstance(v, str) and "API_KEY" in k else v for k, v in updates.items()}
     bad = [k for k, v in updates.items() if not allowed_env_key(k) or not valid_env_value(v)]
     if bad:
         raise ValueError(f"refusing to save unknown key or invalid value: {', '.join(bad)}")

@@ -53,6 +53,13 @@ All notable changes to Xplogent. Format follows
 - **`xplogent-docker https`** checks DNS and ports 80/443 first, waits for the Let's
   Encrypt certificate and explains a failure (e.g. port 80 not forwarded), and sets the
   phone agent's public address. Docs: HTTPS on a home or office connection.
+- **Run checks** in the test-call card. **Test this model** and **Test key** buttons send one
+  request the way a call does and explain any failure with a fix: bad key, credits, the
+  upstream rate limit vs. the free daily cap (with today's free requests left), unknown model,
+  provider down.
+- The running build is shown in Settings → Status, in `/health` and in
+  `xplogent-docker status`. The dashboard page is never served from a stale cache. A card
+  that fails to draw shows its error alone, instead of blanking the whole page.
 - Go-live checklist: "Call model speed" warns when calls run on a CPU-only local model.
 - **Realtime speech-to-speech mode** (optional, `voip.mode: realtime`, OpenAI). The
   greeting, field guard, Pause AI, transfers and recording are kept, and the call falls
@@ -63,6 +70,7 @@ All notable changes to Xplogent. Format follows
   faster-whisper 1.2): pinned `av<19`.
 - Windows ignored the contact's time zone for calling hours: added `tzdata`.
 - The Calls page crashed with newer Kokoro images (their voice list has objects).
+- API keys pasted with a stray space or newline were refused by the provider; they are trimmed.
 - A provider error now includes the provider's reason (e.g. "temporarily rate-limited
   upstream"), and a turn whose voice failed still records what the agent said.
 - A caller speaking over the greeting cut off the AI/recording disclosure; the

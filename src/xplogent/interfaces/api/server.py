@@ -119,7 +119,18 @@ def _mount_dashboard(app) -> None:
         return
     from fastapi.staticfiles import StaticFiles
 
-    app.mount("/", StaticFiles(directory=str(dist), html=True), name="dashboard")
+    class Dashboard(StaticFiles):
+        """The page itself is always revalidated (a new build shows up on the next load,
+        instead of a cached old page running against the new API); the hashed files
+        under assets/ never change, so they may be cached for good."""
+
+        async def get_response(self, path, scope):
+            resp = await super().get_response(path, scope)
+            resp.headers["Cache-Control"] = ("public, max-age=31536000, immutable"
+                                             if path.startswith("assets/") else "no-cache")
+            return resp
+
+    app.mount("/", Dashboard(directory=str(dist), html=True), name="dashboard")
 
 
 def run_server(host: str | None = None, port: int | None = None,

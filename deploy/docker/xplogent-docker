@@ -300,6 +300,8 @@ case "$cmd" in
     if dc exec -T xplogent python -c \
         "import urllib.request as u; u.urlopen('http://127.0.0.1:8765/health', timeout=3)" >/dev/null 2>&1; then
       ok "healthy: $(url)"
+      rev="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$cid" 2>/dev/null || true)"
+      [ -n "$rev" ] && [ "$rev" != "unknown" ] && say "build: ${rev:0:7} (xplogent-docker update gets the newest)"
     else
       warn "not healthy (state: ${health:-unknown}); see: xplogent-docker logs"
     fi ;;

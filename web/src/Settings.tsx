@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { FREE_MODELS } from "./lib/models";
+import { CardBoundary } from "./components/CardBoundary";
+import { ModelTestButton } from "./components/ModelTest";
 import {
   addFact, deleteFact, deleteSkill, exportKnowledge, getFacts, getFullConfig,
   getProviderModels, getRoles, getSkills, getStatus, getTools, importKnowledge, patchConfig, putRole,
@@ -11,6 +13,15 @@ import {
 const RISK_TIERS = ["low", "medium", "high", "critical"];
 const ACTIONS = ["auto", "confirm", "deny"];
 const SECRET_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY"];
+// Which model "Test key" tries: the one you use with that provider, else a cheap default.
+const usedWith = (cfg: Record<string, any>, p: string) =>
+  [cfg.voip?.model, cfg.model].find((m) => typeof m === "string" && m.startsWith(`${p}:`)) as string | undefined;
+const KEY_TEST_MODEL: Record<string, (cfg: Record<string, any>) => string> = {
+  OPENAI_API_KEY: (c) => usedWith(c, "openai") ?? "openai:gpt-4o-mini",
+  ANTHROPIC_API_KEY: (c) => usedWith(c, "anthropic") ?? "",
+  GEMINI_API_KEY: (c) => usedWith(c, "gemini") ?? "gemini:gemini-2.0-flash",
+  OPENROUTER_API_KEY: (c) => usedWith(c, "openrouter") ?? FREE_MODELS[1].model,
+};
 // Tool groups that drive a real screen/mouse: unusable on a server without a display.
 const DISPLAY_GROUPS = ["gui"];
 
@@ -46,11 +57,11 @@ export function Settings() {
         {caps?.docker ? " (rotate it on the server with: xplogent-docker token --rotate)." : " and the server bound to 127.0.0.1."}</div>
       {saved && <div className="toast">{saved}</div>}
 
-      <HealthCard />
-      <OllamaCard host={cfg.ollama?.host ?? ""} hasToken={!!cfg.secrets?.OLLAMA_API_KEY}
-        onUse={async (u) => { await save(u); reload(); }} onSaved={reload} flash={flash} />
-      <OllamaServersCard onUse={async (u) => { await save(u); reload(); }} flash={flash} />
-      <BackupModelCard flash={flash} />
+      <CardBoundary name="Status & health"><HealthCard /></CardBoundary>
+<CardBoundary name="Ollama server">      <OllamaCard host={cfg.ollama?.host ?? ""} hasToken={!!cfg.secrets?.OLLAMA_API_KEY}
+        onUse={async (u) => { await save(u); reload(); }} onSaved={reload} flash={flash} /></CardBoundary>
+      <CardBoundary name="Ollama servers"><OllamaServersCard onUse={async (u) => { await save(u); reload(); }} flash={flash} /></CardBoundary>
+      <CardBoundary name="Backup model"><BackupModelCard flash={flash} /></CardBoundary>
 
       <div className="card">
         <h3>Model</h3>
@@ -73,24 +84,27 @@ export function Settings() {
         <p className="dim">Providers: {(cfg.providers ?? []).join(", ")}</p>
       </div>
 
-      <ModelBrowser providers={cfg.providers ?? []} models={cfg.models ?? []}
+<CardBoundary name="Browse provider models">      <ModelBrowser providers={cfg.providers ?? []} models={cfg.models ?? []}
         onAddPresets={async (m) => { await save({ models: m }); reload(); }}
-        onSave={save} flash={flash} />
-      <ModelsManager models={cfg.models ?? []} onSave={async (m) => { await save({ models: m }); reload(); }} />
+        onSave={save} flash={flash} /></CardBoundary>
+      <CardBoundary name="Models"><ModelsManager models={cfg.models ?? []} onSave={async (m) => { await save({ models: m }); reload(); }} /></CardBoundary>
 
       <Appearance />
-      <BackupCard flash={flash} reload={reload} />
+      <CardBoundary name="Backup"><BackupCard flash={flash} reload={reload} /></CardBoundary>
       <ExecutionBackend execution={cfg.execution ?? {}} onSave={save} />
 
       <div className="card">
         <h3>API keys</h3>
         {SECRET_KEYS.map((k) => (
-          <label key={k}>{k} {cfg.secrets?.[k] ? "✓ set" : "✗ unset"}
-            <input type="password" placeholder={cfg.secrets?.[k] ? "•••••• (set)" : "paste key"}
-                   onBlur={async (e) => {
-                     if (e.target.value) { await putSecrets({ [k]: e.target.value }); e.target.value = ""; reload(); }
-                   }} />
-          </label>
+          <div key={k}>
+            <label>{k} {cfg.secrets?.[k] ? "✓ set" : "✗ unset"}
+              <input type="password" placeholder={cfg.secrets?.[k] ? "•••••• (set)" : "paste key"}
+                     onBlur={async (e) => {
+                       if (e.target.value) { await putSecrets({ [k]: e.target.value.trim() }); e.target.value = ""; reload(); }
+                     }} />
+            </label>
+            {cfg.secrets?.[k] && KEY_TEST_MODEL[k](cfg) && <ModelTestButton spec={KEY_TEST_MODEL[k](cfg)} label="Test key" />}
+          </div>
         ))}
       </div>
 
@@ -397,6 +411,8 @@ function HealthCard() {
                   title={st.ollama.error || st.ollama.host}>
               Ollama {st.ollama.reachable ? "reachable" : "down"}</span>
             <span className="badge">active model: {st.model}</span>
+            <span className="badge" title="the running build: compare with the newest on GitHub; update with xplogent-docker update">
+              build {st.version}{st.revision ? ` · ${st.revision}` : ""}</span>
           </div>
           <h4 style={{ margin: "14px 0 6px", fontSize: 13 }} className="dim">Providers</h4>
           <div className="row wrap" style={{ gap: 8 }}>
