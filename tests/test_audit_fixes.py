@@ -36,9 +36,9 @@ def test_docker_image_ships_the_guide():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    docker = (root / "deploy/docker/Dockerfile").read_text()
+    docker = (root / "deploy/docker/Dockerfile").read_text(encoding="utf-8")
     assert "COPY docs/guide /app/guide" in docker and "XPLOGENT_GUIDE_DIR=/app/guide" in docker
-    assert "!docs/guide" in (root / ".dockerignore").read_text()
+    assert "!docs/guide" in (root / ".dockerignore").read_text(encoding="utf-8")
 
 
 def _agent(tmp_path, monkeypatch, replies):

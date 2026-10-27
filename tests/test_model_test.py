@@ -188,7 +188,7 @@ def test_shipped_gemini_defaults_are_current():
     root = Path(__file__).resolve().parents[1]
     for f in ("src/xplogent/config/default.yaml", "src/xplogent/interfaces/cli/app.py",
               "web/src/components/Onboarding.tsx", "web/src/Settings.tsx"):
-        text = (root / f).read_text()
+        text = (root / f).read_text(encoding="utf-8")
         assert "gemini-2.0" not in text and "gemini-1.5" not in text, f
 
 
