@@ -14,6 +14,7 @@ import { GoLive } from "./GoLive";
 import { BrandingCard } from "./BrandingCard";
 import { FREE_MODELS } from "../lib/models";
 import { CardBoundary } from "../components/CardBoundary";
+import { CallingHoursCard } from "./CallingHoursCard";
 import { ModelTestButton } from "../components/ModelTest";
 
 const CRM_BADGE: Record<string, string> = { sent: "ok", failed: "bad", skipped: "bad", retrying: "warn", sending: "warn" };
@@ -245,6 +246,7 @@ export function Calls() {
           <p className="dim" style={{ fontSize: 12 }}>Add your scripts and FAQs under Knowledge and your customers under
             Contacts: the agent answers only from those.</p>
         </div></CardBoundary>
+        <CardBoundary name="Calling hours"><CallingHoursCard cfg={cfg} toast={toast} /></CardBoundary>
         <div data-tour="crm"><CardBoundary name="Call agent"><CallAgentCard toast={toast} onChange={loadReady} /></CardBoundary></div>
         <CardBoundary name="Branding"><BrandingCard toast={toast} /></CardBoundary>
         </>)}

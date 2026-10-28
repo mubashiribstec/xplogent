@@ -84,28 +84,12 @@ def calling_hours_problem(v: dict[str, Any], contact: dict[str, Any] | None = No
     """Why an outbound call may not be placed right now ("" = fine).
 
     Uses the contact's time zone when known, else ``voip.calling_hours.timezone``,
-    else the server's. Disabled when ``voip.calling_hours.enabled`` is false.
+    else the server's; weekday windows and UK bank holidays are in :mod:`voip.hours`.
+    Disabled when ``voip.calling_hours.enabled`` is false.
     """
-    ch = v.get("calling_hours") or {}
-    if not ch.get("enabled", True):
-        return ""
-    start, end = str(ch.get("start", "09:00")), str(ch.get("end", "20:00"))
-    tz_name = str((contact or {}).get("timezone") or ch.get("timezone") or "").strip()
-    tz = None
-    if tz_name:
-        try:
-            from zoneinfo import ZoneInfo
+    from xplogent.voip.hours import problem
 
-            tz = ZoneInfo(tz_name)
-        except Exception:  # noqa: BLE001 - unknown zone: fall back to server time
-            tz = None
-    current = (now.astimezone(tz) if now and tz else now) or datetime.now(tz)
-    hhmm = current.strftime("%H:%M")
-    inside = start <= hhmm < end if start <= end else (hhmm >= start or hhmm < end)
-    if inside:
-        return ""
-    where = f" in {tz_name}" if tz else ""
-    return f"outside calling hours ({start}–{end}{where}; it's {hhmm} there)"
+    return problem(v, contact, now)
 
 
 def resolve_transfer_number(v: dict[str, Any], requested: str = "", *, transport: str = "") -> str:

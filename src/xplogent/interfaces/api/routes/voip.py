@@ -104,6 +104,57 @@ async def voip_readiness() -> dict:
     return {"ready": all(i["ok"] for i in items if i["required"]), "items": items}
 
 
+@router.get("/voip/hours")
+async def voip_hours() -> dict:
+    """The calling-hours profile: each weekday's window, open now or not, the next allowed time."""
+    from xplogent.voip.hours import describe
+
+    return describe(load_config().voip or {})
+
+
+@router.post("/voip/hours")
+async def voip_hours_save(body: dict | None = None) -> dict:
+    """Save weekday windows / bank-holiday rule (validated, so a typo can't open Sunday)."""
+    from xplogent.core.config import save_user_config
+    from xplogent.voip.hours import DAYS, describe, profile_problems
+
+    body = body or {}
+    patch: dict = {}
+    if "enabled" in body:
+        patch["enabled"] = bool(body["enabled"])
+    for key in ("start", "end", "timezone"):
+        if key in body:
+            patch[key] = str(body[key] or "").strip()
+    if isinstance(body.get("days"), dict):
+        patch["days"] = {d: str(body["days"][d] or "").strip() for d in DAYS if d in body["days"]}
+    if "bank_holidays" in body:
+        patch["bank_holidays"] = "closed" if body["bank_holidays"] in (True, "closed") else "open"
+    if "bank_holiday_region" in body:
+        patch["bank_holiday_region"] = str(body["bank_holiday_region"])
+    problems = profile_problems(patch)
+    if patch.get("timezone"):
+        try:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(patch["timezone"])
+        except Exception:  # noqa: BLE001
+            problems.append(f"unknown time zone {patch['timezone']!r} (e.g. Europe/London)")
+    if problems:
+        return {"ok": False, "error": "; ".join(problems)}
+    save_user_config({"voip": {"calling_hours": patch}})
+    deps.audit_event("voip_hours_saved", target=json.dumps(patch)[:300], risk="low")
+    return {"ok": True, **describe(load_config().voip or {})}
+
+
+@router.post("/voip/hours/refresh")
+async def voip_hours_refresh() -> dict:
+    """Download gov.uk's bank holidays now (normally weekly)."""
+    from xplogent.voip.hours import describe, refresh_bank_holidays
+
+    res = await refresh_bank_holidays(force=True)
+    return {**res, **describe(load_config().voip or {})}
+
+
 @router.post("/voip/telnyx/test")
 async def voip_telnyx_test() -> dict:
     """Validate the saved Telnyx key (and application ID, and its webhook URL)."""

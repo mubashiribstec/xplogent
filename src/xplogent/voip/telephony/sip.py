@@ -38,7 +38,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from xplogent.core.logging import get_logger
-from xplogent.voip.telephony.rtp import FRAME, SILENCE, PortPool, RtpStream  # noqa: F401 - re-exported
+from xplogent.voip.telephony.rtp import (  # noqa: F401 - re-exported
+    FRAME,
+    SILENCE,
+    PortPool,
+    RtpStream,
+)
 from xplogent.voip.telephony.sip_proto import (  # noqa: F401 - re-exported
     ALLOW,
     CODEC_NAMES,

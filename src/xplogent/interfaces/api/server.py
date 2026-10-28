@@ -43,9 +43,12 @@ def create_app():
         ext_task = None
         if sip_mod.wants_extension(cfg.voip or {}):
             ext_task = asyncio.create_task(sip_mod.apply_settings(cfg, line="extension"))
+        from xplogent.voip.hours import refresh_loop
+        holidays_task = asyncio.create_task(refresh_loop())   # UK bank holidays, weekly
         try:
             yield
         finally:
+            holidays_task.cancel()
             if sip_task is not None:
                 sip_task.cancel()
             if ext_task is not None:

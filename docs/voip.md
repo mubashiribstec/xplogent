@@ -246,8 +246,15 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
   the agent says), **Say** (the agent says your sentence now), **Instruct** (a private note the
   agent follows from its next reply), **Transfer**, **Hang up**.
 - **Call now**: the AI calls a number, or a customer from Contacts (📞). The do-not-call list
-  is enforced; outside `voip.calling_hours` (09:00–20:00 in the contact's time zone by
-  default) you are asked first.
+  is enforced; outside the calling hours you are asked first.
+- **Calling hours** (Setup → Calling hours, `voip.calling_hours`):
+  - a window for each weekday. The default is Mon–Fri 09:00–20:00, Sat 10:00–16:00 and
+    Sunday closed, in Europe/London (the contact's own time zone wins when it's known);
+  - UK bank holidays are closed (England and Wales, Scotland or Northern Ireland).
+    The dates come from gov.uk, refreshed weekly, with a built-in list as the fallback, so a
+    dial never waits on the internet;
+  - the card shows whether calls are allowed now and the next allowed time. Test calls ignore
+    the hours.
 - **Test call in the browser**: talk to the agent exactly as a caller would, typing or with
   the microphone, hearing its real voice and seeing the tools it uses. **Start test call** asks
   for the microphone straight away. Browsers only allow the microphone on HTTPS or `localhost`:

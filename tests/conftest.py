@@ -38,6 +38,8 @@ def _isolate_data(tmp_path_factory, monkeypatch):
     # FastAPI's TestClient sends `Host: testserver`; the API's DNS-rebinding guard only
     # accepts localhost names unless told otherwise.
     monkeypatch.setenv("XPLOGENT_ALLOWED_HOSTS", "testserver")
+    # No gov.uk download from tests: the bundled bank holidays are used.
+    monkeypatch.setenv("XPLOGENT_BANK_HOLIDAYS_URL", "")
 
 
 class ScriptedProvider(Provider):

@@ -74,4 +74,8 @@ def check_voip(v: dict[str, Any] | None, schema: dict[str, Any] | None = None, p
             problems.append(f"{name} should be {_kind(default)}, not {_kind(value)}")
         elif isinstance(default, dict) and isinstance(value, dict) and name.removeprefix("voip.") not in _FREE_FORM:
             problems += check_voip(value, default, name) if default else []
+    if path == "voip" and isinstance((v or {}).get("calling_hours"), dict):
+        from xplogent.voip.hours import profile_problems
+
+        problems += profile_problems(v["calling_hours"])
     return problems

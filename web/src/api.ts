@@ -380,6 +380,23 @@ export const pullBackupModel = (model: string) => postJSON<Record<string, any>>(
 export const testBackupModel = () => postJSON<Record<string, any>>("/providers/backup/test");
 
 // ── Phone agent setup ─────────────────────────────────────────────────────────
+export interface CallingHours {
+  ok?: boolean; error?: string; status?: string;
+  enabled: boolean; timezone: string; now: string; open_now: boolean; reason: string;
+  next_allowed: string | null; week: { day: string; name: string; window: string }[];
+  bank_holidays: "closed" | "open"; bank_holiday_region: string;
+  upcoming_bank_holidays: { date: string; name: string }[]; bank_holidays_fetched_at: number | null;
+}
+export async function getCallingHours(): Promise<CallingHours> {
+  return (await fetch("/voip/hours")).json();
+}
+export async function saveCallingHours(body: Record<string, any>): Promise<CallingHours> {
+  return (await fetch("/voip/hours", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) })).json();
+}
+export async function refreshBankHolidays(): Promise<CallingHours> {
+  return (await fetch("/voip/hours/refresh", { method: "POST" })).json();
+}
 export interface ReadinessItem { id: string; label: string; ok: boolean; detail: string; required: boolean }
 export async function getVoipReadiness(): Promise<{ ready: boolean; items: ReadinessItem[] }> {
   return (await fetch("/voip/readiness")).json();

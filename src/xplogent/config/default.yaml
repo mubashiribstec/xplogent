@@ -212,7 +212,14 @@ voip:
   telnyx_public_key: ""            # Telnyx portal public key: webhooks must carry a valid Ed25519 signature
   from_number: ""                  # your Telnyx number (E.164), caller ID for outbound calls
   max_call_seconds: 900
-  calling_hours: { enabled: true, start: "09:00", end: "20:00", timezone: "" }   # outbound calls; the contact's time zone wins
+  calling_hours:                   # outbound calls (manual and automatic); the contact's time zone wins
+    enabled: true
+    start: "09:00"                 # the default window, used by days left empty
+    end: "20:00"
+    timezone: Europe/London
+    days: { mon: "", tue: "", wed: "", thu: "", fri: "", sat: "10:00-16:00", sun: closed }   # "" = start-end · closed · or like 10:00-16:00
+    bank_holidays: closed          # closed | open (UK bank holidays from gov.uk, refreshed weekly)
+    bank_holiday_region: england-and-wales   # or scotland, northern-ireland
   cost_per_minute: 0.012           # your estimate: carrier + LLM (shown in the Calls view)
   knowledge_top_k: 3
   vad: { threshold: 500, silence_ms: 700, min_speech_ms: 200, max_utterance_ms: 15000 }
