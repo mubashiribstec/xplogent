@@ -15,6 +15,7 @@ import { BrandingCard } from "./BrandingCard";
 import { FREE_MODELS } from "../lib/models";
 import { CardBoundary } from "../components/CardBoundary";
 import { AlertsCard } from "./AlertsCard";
+import { CallbacksCard } from "./CallbacksCard";
 import { CallingHoursCard } from "./CallingHoursCard";
 import { ModelTestButton } from "../components/ModelTest";
 
@@ -98,6 +99,7 @@ export function Calls() {
         </details>}
 
         <CardBoundary name="Live calls"><LiveCalls active={status?.active ?? []} toast={toast} onChange={reload} /></CardBoundary>
+        <CardBoundary name="Callbacks"><CallbacksCard toast={toast} /></CardBoundary>
 
         {loaded && <CardBoundary name="Call now"><CallNow toast={toast} onCalled={reload}
           via={cfg.telephony === "extension" ? ["extension"] : [...(cfg.telephony === "sip" ? ["sip"] : cfg.telephony === "both" ? ["telnyx", "sip"] : ["telnyx"]),

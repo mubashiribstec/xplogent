@@ -268,6 +268,22 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
     beep (an 800–1,200 Hz tone). On a machine it hangs up silently: outcome `voicemail`, which
     the CRM counts as an attempt. On Telnyx calls the carrier's detection is used as well
     (`voicemail.telnyx_amd: premium`).
+- **Exact-time callbacks** (Calls → Callbacks; `voip.callbacks`, `voip.recruiter_hours`): the
+  agent knows today's date and time and books "tomorrow at half five" as an exact time.
+  - The time is checked: it must be in the future, within 30 days, and inside the calling hours
+    (or, for a callback a recruiter must make, the recruiter hours: Mon–Fri 09:00–17:30 by
+    default).
+  - A refused time comes back with the nearest allowed slots for the agent to offer. The agent
+    reads the booked time back; if it ends the call without doing so, the system says it.
+  - The AI places its own callbacks at the agreed time on the same line (Calls → Callbacks
+    shows them, with Cancel). A newer agreement with the same person replaces the older one,
+    and a callback missed by more than 6 hours (e.g. the server was off) raises an alert
+    instead of calling late.
+  - Recruiter callbacks go to the CRM as `recruiter_callback` with `callback_at`; the AI never
+    makes those.
+- **Fast replies on Gemini Flash:** calls ask the model for no "thinking"
+  (`thinkingBudget: 0`). With Gemini's default, one reply with a tool call took 17–30 s instead
+  of about 1.5 s.
 - **No invented figures** (`voip.guard`): before each sentence is spoken, any pay ("£15 an hour",
   "£25k a year"), working hours ("37.5 hours a week", "12-hour shifts") or date ("the 1st of
   March") in it must appear in what the agent knows on this call:

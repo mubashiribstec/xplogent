@@ -24,8 +24,9 @@ from xplogent.tools.registry import ToolRegistry
 
 def test_extract_gen_params():
     g = extract_gen_params({"effort": "high", "thinking": True, "max_tokens": 500, "x": 1})
-    assert g == {"effort": "high", "thinking": True, "max_tokens": 500}
-    assert extract_gen_params({"effort": "off"})["effort"] is None
+    assert g == {"effort": "high", "thinking": True, "max_tokens": 500, "off": False}
+    off = extract_gen_params({"effort": "off"})
+    assert off["effort"] is None and off["off"] is True
     assert is_reasoning_effort("high") and not is_reasoning_effort("off")
 
 
@@ -59,3 +60,25 @@ async def test_agent_threads_gen_params_to_provider():
     assert provider.last["effort"] == "high"
     assert provider.last["thinking"] is True
     assert provider.last["max_tokens"] == 256
+
+
+async def test_gemini_flash_thinks_not_on_calls():
+    import json
+
+    import httpx
+
+    from xplogent.providers.gemini import GeminiProvider
+
+    sent = []
+
+    def handler(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, text='data: {"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}\n\n')
+
+    for model in ("gemini-3.6-flash", "gemini-3.6-pro"):
+        p = GeminiProvider(model=model, api_key="k")
+        p._client = httpx.AsyncClient(base_url="https://x", transport=httpx.MockTransport(handler))
+        async for _ in p.stream([Message(role=Role.USER, content="hi")], effort="off"):
+            pass
+    assert sent[0]["generationConfig"]["thinkingConfig"] == {"thinkingBudget": 0}
+    assert "thinkingConfig" not in sent[1]["generationConfig"]        # Pro can't switch it off

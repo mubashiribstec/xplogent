@@ -49,6 +49,21 @@ TRANSFER_FAILED_LINE = ("I'm sorry, I couldn't connect you to a colleague just n
 # Silence recovery (vs-Retell brief C5): at most ``idle_max_prompts`` short prompts,
 # spaced between the first-prompt delay and the hangup delay, then a polite goodbye.
 SILENCE_PROMPTS = ("Are you still there?", "I still can't hear you — are you there?")
+def closing_line(st: Any) -> str:
+    """A goodbye for a call the agent ended without saying one (reads a booked time back)."""
+    if getattr(st, "callback", "") and getattr(st, "callback_at", ""):
+        from datetime import datetime
+
+        from xplogent.voip.callbacks import spoken
+
+        who = "a recruiter will" if getattr(st, "callback_who", "") == "recruiter" else "we'll"
+        when = spoken(datetime.fromisoformat(st.callback_at))
+        return f"Lovely, so {who} call you back on {when}. Thanks for your time, goodbye."
+    if getattr(st, "outcome", "") == "wrong_person":
+        return "Sorry to have bothered you. Goodbye."
+    return "Thanks for your time. Goodbye."
+
+
 NO_TRANSFER_LINE = ("I'm sorry, I can't transfer this call right now, but I can arrange "
                     "for someone to call you back.")
 Hook = Callable[..., Awaitable[None]]
@@ -375,6 +390,7 @@ class CallSession:
                                           "stt": info["stt"], "fallbacks": info["fallbacks"],
                                           "error": f"stt: {type(exc).__name__}: {exc}"[:300]})
                 await self._after_greeting()
+                self._record("agent", "Sorry, I had a problem. Could you say that again?")
                 await self._say("Sorry, I had a problem. Could you say that again?")
                 return
             last = getattr(self.stt, "last", None) or {}
@@ -480,6 +496,11 @@ class CallSession:
                 with contextlib.suppress(Exception):
                     await self.on_events(self.brain.state.events[self._events_seen:])
             self._events_seen = len(self.brain.state.events)
+            if st.end and not reply_parts and not st.transfer:
+                # The model ended the call without a word: never hang up on someone silently.
+                line = closing_line(st)
+                self._record("agent", line)
+                await self._say(line)
             await self._after_turn()
         except asyncio.CancelledError:
             raise
@@ -492,8 +513,18 @@ class CallSession:
                                       "tts": label_of(self.tts),
                                       "error": f"{type(exc).__name__}: {exc}"[:300]})
             self._last_stt_ms = 0.0
+            line = "Sorry, I had a problem. Could you say that again?"
+            st = self.brain.state
+            if getattr(st, "callback_at", "") and not reply_parts and "booked" not in self._last_agent_line:
+                # The booking went through before the failure: confirm it rather than ask again.
+                from datetime import datetime
+
+                from xplogent.voip.callbacks import spoken
+
+                line = f"I've booked your callback for {spoken(datetime.fromisoformat(st.callback_at))}."
+            self._record("agent", line)
             with contextlib.suppress(Exception):
-                await self._say("Sorry, I had a problem. Could you say that again?")
+                await self._say(line)
 
     # -- keypad (DTMF) ------------------------------------------------------------------
     async def on_dtmf(self, digit: str) -> None:

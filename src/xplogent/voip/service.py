@@ -304,6 +304,10 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
                       fields=build_collector(field_configs),
                       contact=contact, retrieve=retrieve, store=store, can_transfer=can_transfer,
                       can_send_dtmf=send_dtmf is not None and dtmf_on, brief=brief)
+    from xplogent.voip import callbacks as cb
+
+    brain.now_line = lambda: cb.now_line(v, contact)
+    brain.callback_check = lambda at, who: cb.check(v, contact, at, who)
     guard_cfg = v.get("guard") or {}
     if guard_cfg.get("enabled", True):
         from xplogent.voip.guard import KINDS
@@ -477,6 +481,18 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
         return result
     if not call.get("test"):
         alerts.session_result(session.turn_timings)
+    if st.callback_at and st.callback_who == "ai" and not call.get("test") and contact_phone \
+            and outcome in ("callback",):
+        # We promised to call back at an exact time: the callback runner places that call.
+        from datetime import datetime
+
+        via = "extension" if call.get("line") == "extension" else (
+            "sip" if call.get("transport") == "sip" else "telnyx")
+        brief = dict(call.get("brief") or {})
+        note = st.callback_note or st.summary
+        brief["callback_note"] = f"They asked us to call back {st.callback}." + (f" ({note[:200]})" if note else "")
+        store.add_scheduled_callback(call_id, contact_phone, datetime.fromisoformat(st.callback_at).timestamp(),
+                                     via=via, spoken=st.callback, note=note[:300], brief=brief)
     if call.get("test"):        # a test call never changes customer records
         return _deliver({"call_id": call_id, "outcome": outcome, "cost": cost, "test": True,
                          "fields": fields_report, "latency_ms": session.latencies_ms})
@@ -588,6 +604,52 @@ class VoipService:
         if not test:
             alerts.dial_result(res)          # 5 carrier/line failures in a row → alert
         return res
+
+    # -- callbacks we promised ---------------------------------------------------------
+    async def run_due_callbacks(self, cfg: Config | None = None, now: float | None = None) -> list[dict[str, Any]]:
+        """Place the AI callbacks that are due (exact times agreed on earlier calls)."""
+        import time
+
+        from xplogent.voip import hours
+
+        cfg = cfg or load_config()
+        v = cfg.voip or {}
+        if not v.get("enabled") or not (v.get("callbacks") or {}).get("auto_dial", True):
+            return []
+        now = time.time() if now is None else now
+        with Store(cfg.db_path) as store:
+            due = store.due_callbacks(now)
+        done = []
+        for cb in due:
+            with Store(cfg.db_path) as store:
+                if now - float(cb["at"]) > 6 * 3600:      # e.g. the server was off: too late now
+                    store.set_callback_status(cb["id"], "missed", "more than 6 hours late")
+                    alerts.alert("callback_missed", f"A promised callback to {cb['phone']} "
+                                 f"({cb['spoken']}) was missed: call them yourself.")
+                    continue
+                res = await self.dial(cb["phone"], cfg, via=cb["via"] or "telnyx", brief=cb["brief"] or None)
+                if not res.get("ok") and res.get("hours"):
+                    # Hours changed since it was agreed: the next allowed time instead.
+                    from datetime import datetime
+
+                    nxt = hours.next_allowed(v, None, datetime.fromtimestamp(now).astimezone())
+                    if nxt is not None:
+                        store.reschedule_callback(cb["id"], nxt.timestamp())
+                        continue
+                store.set_callback_status(cb["id"], "dialled" if res.get("ok") else "failed",
+                                          str(res.get("error") or res.get("state") or ""))
+            done.append({**cb, "result": res})
+        return done
+
+    async def callback_loop(self, every_s: float = 30.0) -> None:
+        import asyncio
+
+        while True:
+            await asyncio.sleep(every_s)
+            try:
+                await self.run_due_callbacks()
+            except Exception:  # noqa: BLE001 - keep the loop alive
+                _log.exception("callback runner failed")
 
     # -- live calls -----------------------------------------------------------------------
     def live_by_ref(self, ref: str) -> LiveCall | None:

@@ -220,8 +220,13 @@ def test_browser_test_call(monkeypatch):
     save_user_config({"voip": {"greeting": "Hi from {company}", "company": "Acme"}})
     with Store(load_config().db_path) as s:
         cid = s.add_contact("Ana", "+15550101111")
+    from datetime import datetime, timedelta
+
+    from xplogent.voip import hours
+    at = hours.next_allowed(load_config().voip or {}, None, datetime.now().astimezone() + timedelta(days=1))
     replies = [Message(role=Role.ASSISTANT, content="", tool_calls=[
-                   ToolCall(id="1", name="book_callback", arguments={"when": "Tuesday"})]),
+                   ToolCall(id="1", name="book_callback", arguments={"at": at.isoformat(timespec="minutes"),
+                                                                     "spoken": "Tuesday"})]),
                Message(role=Role.ASSISTANT, content="Great, I'll call you Tuesday.")]
     monkeypatch.setattr(deps, "build_provider", lambda spec, **kw: ScriptedProvider(list(replies)))
 
@@ -253,7 +258,7 @@ def test_browser_test_call(monkeypatch):
     assert {"type": "turn", "speaker": "caller", "text": "call me back on Tuesday"} in got
     assert {"type": "turn", "speaker": "agent", "text": "Great, I'll call you Tuesday."} in got
     assert any("book_callback" in e for e in got[-1]["items"])
-    assert msg["outcome"] == "callback" and msg["callback"].startswith("Tuesday")
+    assert msg["outcome"] == "callback" and msg["callback"].startswith(at.strftime("%A"))
     with Store(load_config().db_path) as s:
         call = s.get_call(started["call_id"])
         assert call["test"] == 1 and call["direction"] == "test" and len(call["turns"]) == 3

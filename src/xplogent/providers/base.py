@@ -134,15 +134,17 @@ _REASONING_EFFORTS = {"low", "medium", "high"}
 def extract_gen_params(kwargs: dict[str, Any]) -> dict[str, Any]:
     """Pull the normalized generation controls out of provider kwargs.
 
-    Returns ``{effort, thinking, max_tokens}``; ``effort`` is one of
-    off/low/medium/high (or None), ``thinking`` a bool, ``max_tokens`` an int.
+    Returns ``{effort, thinking, max_tokens, off}``; ``effort`` is one of
+    low/medium/high (or None), ``thinking`` a bool, ``max_tokens`` an int, and ``off``
+    True when the caller explicitly asked for no reasoning (``effort="off"``).
     """
     effort = kwargs.pop("effort", None)
+    off = effort == "off"                  # asked for no reasoning at all (live phone calls)
     if effort in (None, "off", ""):
         effort = None
     thinking = bool(kwargs.pop("thinking", False))
     max_tokens = kwargs.pop("max_tokens", None)
-    return {"effort": effort, "thinking": thinking, "max_tokens": max_tokens}
+    return {"effort": effort, "thinking": thinking, "max_tokens": max_tokens, "off": off}
 
 
 def is_reasoning_effort(effort: Any) -> bool:

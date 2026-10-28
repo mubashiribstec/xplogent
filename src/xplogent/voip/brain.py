@@ -47,7 +47,7 @@ Rules:
 - Keys the caller presses on their phone keypad arrive as [keypad: digits] (for example an
   account number or a menu choice). Repeat important numbers back to confirm them."""
 
-OUTCOMES = {"resolved", "callback", "transferred", "interested", "not_interested",
+OUTCOMES = {"resolved", "callback", "recruiter_callback", "transferred", "interested", "not_interested",
             "do_not_call", "no_job", "wrong_person", "other"}
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|(?<=[.!?])$")
@@ -62,10 +62,19 @@ TOOLS = [
                                        "wrong_person | do_not_call | other"},
             "summary": {"type": "string", "description": "One or two sentence summary."},
         }, "required": ["outcome"]}),
-    ToolSpec("book_callback", "Schedule a call back to the customer.", {
+    ToolSpec("book_callback", "Book a call back at an exact time the caller agreed. Work the date "
+             "out from NOW. The system checks the time: if it is refused, offer the times it "
+             "suggests. Once booked, read the day and time back to the caller.", {
         "type": "object",
-        "properties": {"when": {"type": "string", "description": "When the customer prefers."},
-                       "note": {"type": "string"}}, "required": ["when"]}),
+        "properties": {"at": {"type": "string",
+                              "description": "Exact local date and time, ISO 8601, e.g. 2026-10-29T17:30."},
+                       "spoken": {"type": "string",
+                                  "description": "The time as you said it, e.g. 'tomorrow, Thursday, at 5:30 pm'."},
+                       "who": {"type": "string",
+                               "description": "ai (we call back) | recruiter (a person must call: a question only "
+                                              "a recruiter can answer, or the caller asked for a person)."},
+                       "note": {"type": "string"},
+                       "when": {"type": "string", "description": "Only if no exact time could be agreed."}}}),
     ToolSpec("transfer_to_human", "Hand the call to a human agent.", {
         "type": "object", "properties": {"reason": {"type": "string"}}}),
     ToolSpec("lookup_customer", "Re-read the record of the customer on this call (if known).", {
@@ -101,6 +110,8 @@ class CallState:
     summary: str = ""
     callback: str = ""
     callback_at: str = ""               # ISO time of an agreed callback (exact-time callbacks)
+    callback_who: str = ""              # ai | recruiter
+    callback_note: str = ""
     transfer: bool = False
     transfer_reason: str = ""
     end: bool = False
@@ -220,6 +231,10 @@ class CallBrain:
         self.guard_kinds: tuple[str, ...] = ()
         self.guard_blocked: list[dict[str, Any]] = []
         self.sources = None
+        # Exact-time callbacks (voip/callbacks.py): checks a proposed time; NOW in the prompt.
+        self.callback_check: Any = None     # (at, who) -> callbacks.check() result
+        self._vague_callback_refused = False
+        self.now_line: Any = None           # () -> "NOW: Wednesday 28 October 2026, 10:15 (...)"
         self.identity_check = ""        # outbound: whose identity the opening line asked about
         self.opening_words = ""         # what the callee said before the agent's first line
         self.persona = persona or "You are a friendly, professional customer-service agent."
@@ -287,6 +302,8 @@ class CallBrain:
     # -- prompt -----------------------------------------------------------------
     def _system(self, knowledge: list[str]) -> str:
         parts = [self.persona, GUARDRAILS]
+        if self.now_line is not None:
+            parts.append(self.now_line())
         if not self.can_transfer:
             parts.append("No colleague can take calls right now: never offer a transfer. When a "
                          "person is needed, offer a callback and use book_callback.")
@@ -327,15 +344,42 @@ class CallBrain:
         st = self.state
         if name == "log_outcome":
             outcome = str(args.get("outcome", "other")).strip().lower()
-            st.outcome = outcome if outcome in OUTCOMES else "other"
+            outcome = outcome if outcome in OUTCOMES else "other"
+            if st.callback_at and outcome in ("interested", "resolved", "other", "callback"):
+                outcome = st.outcome                   # a booked callback stays the result
+            st.outcome = outcome
             st.summary = str(args.get("summary", ""))
             if st.outcome == "do_not_call":
                 st.do_not_call = True
             return "outcome recorded"
         if name == "book_callback":
-            st.callback = f"{args.get('when', '')} {args.get('note', '')}".strip()
-            st.outcome = st.outcome or "callback"
-            return "callback booked"
+            who = "recruiter" if str(args.get("who", "")).strip().lower() == "recruiter" else "ai"
+            note = str(args.get("note", "")).strip()
+            if self.callback_check is None:           # no calendar rules on this call
+                st.callback = f"{args.get('at') or args.get('when', '')} {note}".strip()
+                st.outcome = st.outcome or "callback"
+                return "callback booked"
+            if not args.get("at"):
+                if not self._vague_callback_refused:  # once: then take what the caller said
+                    self._vague_callback_refused = True
+                    return ("REFUSED: no exact time. Ask the caller for a day and a time (for example "
+                            "'Thursday at 5 pm'), then call book_callback with at.")
+                st.callback = f"{args.get('when', '')} {note}".strip() or "a callback (no time agreed)"
+                st.callback_who = who
+                if st.outcome not in ("do_not_call", "not_interested", "no_job"):
+                    st.outcome = "recruiter_callback" if who == "recruiter" else "callback"
+                return "callback noted without an exact time: a recruiter will arrange it"
+            res = self.callback_check(str(args["at"]), who)
+            if not res["ok"]:
+                offer = "; ".join(res["slots_spoken"]) or "another day"
+                return f"REFUSED: {res['reason']}. Offer one of these instead: {offer}."
+            st.callback_at, st.callback_who, st.callback_note = res["at"].isoformat(), who, note
+            st.callback = f"{res['spoken']}{' (a recruiter will call)' if who == 'recruiter' else ''}"
+            if st.outcome not in ("do_not_call", "not_interested", "no_job"):
+                st.outcome = "recruiter_callback" if who == "recruiter" else "callback"
+            return (f"callback booked for {res['spoken']}"
+                    + (" by a recruiter" if who == "recruiter" else "")
+                    + ". Read that day and time back to the caller exactly.")
         if name == "transfer_to_human" and not self.can_transfer:
             return "no colleague can take calls now: offer a callback with book_callback"
         if name == "transfer_to_human":
@@ -366,8 +410,8 @@ class CallBrain:
             if self.fields is not None:
                 missing = self.fields.missing()
                 if missing:
-                    if st.outcome in ("do_not_call", "not_interested"):
-                        st.exit_path = st.outcome
+                    if st.outcome in ("do_not_call", "not_interested", "no_job", "wrong_person") or st.callback:
+                        st.exit_path = st.outcome if not st.callback else "callback"
                         st.end = True
                         return "call will end after your goodbye"
                     names = ", ".join(s.name for s in missing)
@@ -411,7 +455,7 @@ class CallBrain:
             said: list[str] = []
             blocked_before = len(self.guard_blocked)
             async for ev in self.provider.stream([system, *self.history], self.tools,
-                                                 temperature=self.temperature):
+                                                 temperature=self.temperature, effort="off"):
                 if ev.kind == StreamKind.TOKEN and ev.text:
                     buffer += ev.text
                     sentences, buffer = split_sentences(buffer)

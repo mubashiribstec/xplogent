@@ -111,6 +111,23 @@ async def voip_readiness() -> dict:
     return {"ready": all(i["ok"] for i in items if i["required"]), "items": items}
 
 
+@router.get("/voip/callbacks")
+async def voip_callbacks(limit: int = 50) -> dict:
+    """Callbacks the agent promised (the AI places them at the agreed time)."""
+    with Store(load_config().db_path) as store:
+        rows = store.list_callbacks(max(1, min(limit, 200)))
+    return {"callbacks": [{k: r[k] for k in ("id", "call_id", "phone", "via", "at", "spoken", "status",
+                                             "detail", "next_call_id")} for r in rows]}
+
+
+@router.post("/voip/callbacks/{callback_id}/cancel")
+async def voip_callback_cancel(callback_id: int) -> dict:
+    with Store(load_config().db_path) as store:
+        store.set_callback_status(callback_id, "cancelled", "cancelled from the dashboard")
+    deps.audit_event("voip_callback_cancel", target=str(callback_id), risk="low")
+    return {"ok": True}
+
+
 @router.get("/voip/alerts")
 async def voip_alerts(limit: int = 20) -> dict:
     """Recent alerts and whether a webhook address is saved (never the address itself)."""

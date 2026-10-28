@@ -244,6 +244,14 @@ voip:
     long_speech_s: 4               # speech this long without a pause = a recorded greeting
     beep: true                     # a voicemail beep (800-1200 Hz tone) = machine
     telnyx_amd: premium            # Telnyx calls also use the carrier's detection: premium | detect | "" (off)
+  callbacks:                       # exact-time callbacks the agent books ("tomorrow at 5:30")
+    auto_dial: true                # the AI calls back itself at the agreed time (inside calling hours)
+  recruiter_hours:                 # when a person can call back (recruiter callbacks); same format as calling_hours
+    start: "09:00"
+    end: "17:30"
+    timezone: Europe/London
+    days: { mon: "", tue: "", wed: "", thu: "", fri: "", sat: closed, sun: closed }
+    bank_holidays: closed
   guard:                           # the agent may only state figures it was given (ROLE FACTS, knowledge, the caller, tools)
     enabled: true
     check: [money, hours, dates]   # a sentence with an unconfirmed figure is replaced by "the recruiter will confirm it"

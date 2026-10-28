@@ -100,6 +100,10 @@ class GeminiProvider(Provider):
         if gen["thinking"] or gen["effort"] in ("medium", "high"):
             budget = EFFORT_BUDGET.get(gen["effort"] or "medium", 4096)
             gen_cfg["thinkingConfig"] = {"thinkingBudget": budget}
+        elif gen["off"] and "flash" in self.model:
+            # Flash models think by default: ~17 s before a tool call instead of ~1.5 s.
+            # A phone call can't wait for that (Pro models can't switch it off).
+            gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
         payload: dict[str, Any] = {"contents": contents, "generationConfig": gen_cfg}
         if system:
             payload["systemInstruction"] = system

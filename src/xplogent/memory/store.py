@@ -213,6 +213,22 @@ CREATE TABLE IF NOT EXISTS meta (
     value INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(created_at);
+CREATE TABLE IF NOT EXISTS scheduled_callbacks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    call_id INTEGER,
+    phone TEXT,
+    via TEXT DEFAULT '',
+    at REAL,
+    spoken TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    brief TEXT DEFAULT '',
+    status TEXT DEFAULT 'pending',
+    detail TEXT DEFAULT '',
+    next_call_id INTEGER,
+    created_at REAL,
+    updated_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_callbacks_due ON scheduled_callbacks(status, at);
 """
 
 
@@ -940,6 +956,46 @@ class Store:
              int(test), transport, line, original_called_number, int(via_queue),
              diversion_reason, queue_wait_s))
         return int(cur.lastrowid)
+
+    # -- exact-time callbacks the AI itself will make (voip/callbacks.py) --------------
+    def add_scheduled_callback(self, call_id: int, phone: str, at: float, *, via: str = "",
+                               spoken: str = "", note: str = "", brief: dict[str, Any] | None = None) -> int:
+        now = time.time()
+        # One pending callback per number: a newer agreement replaces the older one.
+        self._write("UPDATE scheduled_callbacks SET status='replaced', updated_at=? "
+                    "WHERE phone=? AND status='pending'", (now, phone))
+        cur = self._write(
+            "INSERT INTO scheduled_callbacks (call_id, phone, via, at, spoken, note, brief, status, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,'pending',?,?)",
+            (call_id, phone, via, at, spoken, note, json.dumps(brief or {}, default=str), now, now))
+        return int(cur.lastrowid)
+
+    def due_callbacks(self, now: float, limit: int = 10) -> list[dict[str, Any]]:
+        rows = self._query("SELECT * FROM scheduled_callbacks WHERE status='pending' AND at<=? "
+                           "ORDER BY at LIMIT ?", (now, limit))
+        return [self._callback_row(r) for r in rows]
+
+    def list_callbacks(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self._query("SELECT * FROM scheduled_callbacks ORDER BY CASE status WHEN 'pending' THEN 0 "
+                           "ELSE 1 END, at DESC LIMIT ?", (limit,))
+        return [self._callback_row(r) for r in rows]
+
+    def set_callback_status(self, callback_id: int, status: str, detail: str = "",
+                            next_call_id: int | None = None) -> None:
+        self._write("UPDATE scheduled_callbacks SET status=?, detail=?, next_call_id=COALESCE(?, next_call_id), "
+                    "updated_at=? WHERE id=?", (status, detail[:300], next_call_id, time.time(), callback_id))
+
+    def reschedule_callback(self, callback_id: int, at: float) -> None:
+        self._write("UPDATE scheduled_callbacks SET at=?, updated_at=? WHERE id=?", (at, time.time(), callback_id))
+
+    @staticmethod
+    def _callback_row(row: Any) -> dict[str, Any]:
+        d = dict(row)
+        try:
+            d["brief"] = json.loads(d.get("brief") or "{}")
+        except ValueError:
+            d["brief"] = {}
+        return d
 
     def set_call_brief(self, call_id: int, brief: dict[str, Any]) -> None:
         self._write("UPDATE calls SET brief=? WHERE id=?", (json.dumps(brief, default=str), call_id))

@@ -404,6 +404,14 @@ export async function getAlerts(): Promise<{ alerts: AlertRow[]; webhook_set: bo
 export async function testAlert(): Promise<{ ok: boolean; status?: string; error?: string }> {
   return (await fetch("/voip/alerts/test", { method: "POST" })).json();
 }
+export interface CallbackRow { id: number; call_id: number; phone: string; via: string; at: number; spoken: string;
+  status: string; detail: string; next_call_id: number | null }
+export async function getCallbacks(): Promise<{ callbacks: CallbackRow[] }> {
+  return (await fetch("/voip/callbacks")).json();
+}
+export async function cancelCallback(id: number): Promise<{ ok: boolean }> {
+  return (await fetch(`/voip/callbacks/${id}/cancel`, { method: "POST" })).json();
+}
 export interface ReadinessItem { id: string; label: string; ok: boolean; detail: string; required: boolean }
 export async function getVoipReadiness(): Promise<{ ready: boolean; items: ReadinessItem[] }> {
   return (await fetch("/voip/readiness")).json();
