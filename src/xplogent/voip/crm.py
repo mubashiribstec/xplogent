@@ -34,7 +34,7 @@ from typing import Any
 
 from xplogent.core.config import Config, data_dir
 from xplogent.core.logging import get_logger
-from xplogent.voip import jsonl
+from xplogent.voip import alerts, jsonl
 
 _log = get_logger("voip.crm")
 
@@ -81,11 +81,16 @@ def sign_v2(body: bytes, token: str, timestamp: str) -> str:
 
 
 def build_payload(cfg: Config, store, call_id: int, result: dict[str, Any],
-                  brain, session) -> dict[str, Any]:
-    """The call.completed payload (brief Part 3a) + Part D field completeness."""
+                  brain=None, session=None) -> dict[str, Any]:
+    """The call.completed payload (brief Part 3a) + Part D field completeness.
+
+    Without ``brain``/``session`` (a call cut off by a restart) it is built from the
+    stored call alone."""
     call = store.get_call(call_id) or {}
-    st = brain.state
+    st = brain.state if brain is not None else None
     started = call.get("started_at") or time.time()
+    duration = (session.duration_s if session is not None
+                else max(0.0, float(call.get("ended_at") or started) - float(started)))
     return {
         "event": "call.completed",
         "call_id": call_id,
@@ -99,15 +104,15 @@ def build_payload(cfg: Config, store, call_id: int, result: dict[str, Any],
         "diversion_reason": call.get("diversion_reason", ""),
         "queue_wait_s": call.get("queue_wait_s"),
         "started_at": datetime.fromtimestamp(started, tz=UTC).isoformat(),
-        "duration_s": round(session.duration_s, 1),
+        "duration_s": round(duration, 1),
         "outcome": result.get("outcome", ""),
         "summary": call.get("summary", ""),
-        "callback": st.callback,
-        "do_not_call": bool(st.do_not_call),
-        "exit_path": st.exit_path,
+        "callback": st.callback if st else "",
+        "do_not_call": bool(st.do_not_call) if st else False,
+        "exit_path": st.exit_path if st else "",
         "fields": result.get("fields"),
         "cost": result.get("cost", 0.0),
-        "turn_timings": session.turn_timings,
+        "turn_timings": session.turn_timings if session is not None else [],
         "transcript": [{"speaker": t["speaker"], "text": t["text"]}
                        for t in call.get("turns", [])],
         "test": bool(call.get("test")),
@@ -158,6 +163,7 @@ async def deliver(cfg: Config, payload: dict[str, Any], *, attempts: int = 3,
             if resp.status_code < 300:
                 last.update(status="sent", detail=f"HTTP {resp.status_code}")
                 _log_attempt(call_id, attempt, "sent", last["detail"])
+                alerts.crm_result(True)
                 status("sent", last["detail"])
                 return last
             last["detail"] = f"HTTP {resp.status_code}"
@@ -169,6 +175,7 @@ async def deliver(cfg: Config, payload: dict[str, Any], *, attempts: int = 3,
             await asyncio.sleep(backoff_s * (3 ** (attempt - 1)))
     _log.warning("CRM delivery for call %s failed after %s attempts: %s",
                  call_id, attempts, last["detail"])
+    alerts.crm_result(False, f"call summary: {last['detail']}")
     status("failed", last["detail"])
     return last
 
@@ -257,6 +264,7 @@ async def lookup(cfg: Config, phone: str, *, direction: str = "inbound", line: s
     except Exception as exc:  # noqa: BLE001 - fail open
         out["error"] = f"{type(exc).__name__}: {exc}"[:200]
     out["ms"] = round((time.monotonic() - started) * 1000, 1)
+    alerts.crm_result(out["ok"], f"lookup: {out['error']}")
     if out["ok"]:
         _LOOKUP_CACHE[phone] = (time.monotonic(), dict(out))
         while len(_LOOKUP_CACHE) > 1000:

@@ -43,6 +43,11 @@ def create_app():
         ext_task = None
         if sip_mod.wants_extension(cfg.voip or {}):
             ext_task = asyncio.create_task(sip_mod.apply_settings(cfg, line="extension"))
+        from xplogent.voip.service import get_service, recover_interrupted_calls
+        try:                                # calls cut off by a stop mid-call
+            recover_interrupted_calls(cfg, set(get_service().active))
+        except Exception:  # noqa: BLE001 - never block start-up
+            _startup_log.exception("could not recover interrupted calls")
         from xplogent.voip.hours import refresh_loop
         holidays_task = asyncio.create_task(refresh_loop())   # UK bank holidays, weekly
         try:

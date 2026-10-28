@@ -14,6 +14,7 @@ import { GoLive } from "./GoLive";
 import { BrandingCard } from "./BrandingCard";
 import { FREE_MODELS } from "../lib/models";
 import { CardBoundary } from "../components/CardBoundary";
+import { AlertsCard } from "./AlertsCard";
 import { CallingHoursCard } from "./CallingHoursCard";
 import { ModelTestButton } from "../components/ModelTest";
 
@@ -247,6 +248,7 @@ export function Calls() {
             Contacts: the agent answers only from those.</p>
         </div></CardBoundary>
         <CardBoundary name="Calling hours"><CallingHoursCard cfg={cfg} toast={toast} /></CardBoundary>
+        <CardBoundary name="Alerts"><AlertsCard toast={toast} /></CardBoundary>
         <div data-tour="crm"><CardBoundary name="Call agent"><CallAgentCard toast={toast} onChange={loadReady} /></CardBoundary></div>
         <CardBoundary name="Branding"><BrandingCard toast={toast} /></CardBoundary>
         </>)}

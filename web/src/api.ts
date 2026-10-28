@@ -397,6 +397,13 @@ export async function saveCallingHours(body: Record<string, any>): Promise<Calli
 export async function refreshBankHolidays(): Promise<CallingHours> {
   return (await fetch("/voip/hours/refresh", { method: "POST" })).json();
 }
+export interface AlertRow { at: number; kind: string; text: string; detail: string }
+export async function getAlerts(): Promise<{ alerts: AlertRow[]; webhook_set: boolean; min_gap_minutes: number }> {
+  return (await fetch("/voip/alerts")).json();
+}
+export async function testAlert(): Promise<{ ok: boolean; status?: string; error?: string }> {
+  return (await fetch("/voip/alerts/test", { method: "POST" })).json();
+}
 export interface ReadinessItem { id: string; label: string; ok: boolean; detail: string; required: boolean }
 export async function getVoipReadiness(): Promise<{ ready: boolean; items: ReadinessItem[] }> {
   return (await fetch("/voip/readiness")).json();

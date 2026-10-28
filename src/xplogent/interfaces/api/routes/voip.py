@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Request, WebSocket
@@ -101,7 +102,31 @@ async def voip_readiness() -> dict:
     ext = current_line("extension")
     items = checklist(cfg.voip or {}, cfg.model, sip_status=trunk.status() if trunk else None,
                       sip_extension_status=ext.status() if ext else None)
+    from xplogent.voip import alerts
+
+    day = alerts.recent(50, since=time.time() - 86400)
+    items.append({"id": "alerts", "label": "No alerts in the last 24 hours", "ok": not day,
+                  "required": False,
+                  "detail": "" if not day else f"{len(day)} alert(s); latest: {day[0]['text'][:160]}"})
     return {"ready": all(i["ok"] for i in items if i["required"]), "items": items}
+
+
+@router.get("/voip/alerts")
+async def voip_alerts(limit: int = 20) -> dict:
+    """Recent alerts and whether a webhook address is saved (never the address itself)."""
+    from xplogent.voip import alerts
+
+    return {"alerts": alerts.recent(max(1, min(limit, 200))),
+            "webhook_set": bool(os.environ.get(alerts.WEBHOOK_ENV, "").strip()),
+            "min_gap_minutes": ((load_config().voip or {}).get("alerts") or {}).get("min_gap_minutes", 15)}
+
+
+@router.post("/voip/alerts/test")
+async def voip_alerts_test() -> dict:
+    """Send a test message to the alert webhook."""
+    from xplogent.voip import alerts
+
+    return await alerts.send_test()
 
 
 @router.get("/voip/hours")

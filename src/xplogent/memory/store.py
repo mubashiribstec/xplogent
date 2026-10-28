@@ -944,6 +944,20 @@ class Store:
         self._write("UPDATE calls SET status=?, outcome=?, summary=?, cost=?, ended_at=? WHERE id=?",
                     (status, outcome, summary, cost, time.time(), call_id))
 
+    def recover_interrupted_calls(self, live_ids: set[int] | frozenset[int] = frozenset()) -> list[int]:
+        """Calls still marked active with no live session (the server stopped mid-call):
+        close them as ``interrupted`` and return their ids."""
+        ids = [int(r[0]) for r in self._query("SELECT id FROM calls WHERE status='active'")
+               if int(r[0]) not in live_ids]
+        for call_id in ids:
+            row = self._query("SELECT started_at FROM calls WHERE id=?", (call_id,))[0]
+            last = self._query("SELECT MAX(created_at) FROM call_turns WHERE call_id=?", (call_id,))[0][0]
+            ended = float(last or row[0] or time.time())
+            self._write("UPDATE calls SET status='ended', outcome='interrupted', ended_at=?, "
+                        "summary=CASE WHEN COALESCE(summary,'')='' THEN ? ELSE summary END WHERE id=?",
+                        (ended, "The call was cut off: the server stopped during the call.", call_id))
+        return ids
+
     def save_call_debug(self, call_id: int, data: dict[str, Any]) -> None:
         self._write("INSERT OR REPLACE INTO call_debug (call_id, data, created_at) VALUES (?,?,?)",
                     (call_id, json.dumps(data, default=str), time.time()))

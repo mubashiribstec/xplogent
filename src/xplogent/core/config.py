@@ -174,7 +174,7 @@ _SECRET_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GO
                 "GEMINI_API_KEY", "TELNYX_API_KEY", "OLLAMA_API_KEY", "SIP_PASSWORD",
                 "SIP_EXTENSION_PASSWORD", "XPLOGENT_CRM_API_TOKEN", "DEEPGRAM_API_KEY",
                 "ELEVENLABS_API_KEY", "CARTESIA_API_KEY",
-                "AI_GATEWAY_API_KEY"]
+                "AI_GATEWAY_API_KEY", "XPLOGENT_ALERT_WEBHOOK_URL"]
 # Non-secret settings the dashboard may also write to .env. Anything else is refused so
 # an API call can't plant e.g. LD_PRELOAD / PYTHONPATH into the process environment.
 _ENV_SETTINGS = ["XPLOGENT_MODEL", "XPLOGENT_REFLECTION_MODEL", "XPLOGENT_EMBEDDING_MODEL",

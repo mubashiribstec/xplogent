@@ -255,6 +255,15 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
     dial never waits on the internet;
   - the card shows whether calls are allowed now and the next allowed time. Test calls ignore
     the hours.
+- **Alerts** (Setup → Alerts): paste a Slack or Teams incoming-webhook address (it's stored
+  as the secret `XPLOGENT_ALERT_WEBHOOK_URL`). You're told when:
+  - 5 calls in a row fail (a busy line or no answer doesn't count);
+  - the CRM hasn't answered for 5 minutes;
+  - calls were cut off because the server stopped.
+
+  At most one alert of each kind every 15 minutes (`voip.alerts.min_gap_minutes`). After a
+  restart, calls that were cut off are marked `interrupted`, and their transcript so far goes to
+  the CRM.
 - **Test call in the browser**: talk to the agent exactly as a caller would, typing or with
   the microphone, hearing its real voice and seeing the tools it uses. **Start test call** asks
   for the microphone straight away. Browsers only allow the microphone on HTTPS or `localhost`:

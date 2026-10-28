@@ -233,6 +233,8 @@ voip:
   fields: []                       # mandatory fields: the call CANNOT close successfully while a required field is missing (Part D enforcement). Example — uncomment to require a read-back-confirmed callback number:
     # - { name: callback_number, label: "best callback number", validator: phone, required: true, require_confirmed: true, default_country: "+44" }
     # - { name: caller_name, label: "caller's name", validator: nonempty, required: true }
+  alerts:                          # a person is told when calls keep failing, the CRM is down, or calls were cut off
+    min_gap_minutes: 15            # at most one alert of each kind this often (webhook address: secret XPLOGENT_ALERT_WEBHOOK_URL)
   recording:                       # stereo WAV per call (caller left, agent right), playable in Calls
     enabled: true                  # off: the greeting must not say calls are recorded
     retention_days: 90             # older recordings are deleted (0 = keep)

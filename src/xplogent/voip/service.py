@@ -16,6 +16,7 @@ from xplogent.core.config import Config, data_dir, load_config
 from xplogent.core.logging import get_logger
 from xplogent.core.smalltalk import is_small_talk
 from xplogent.memory.store import Store
+from xplogent.voip import alerts
 from xplogent.voip.audio import VAD
 from xplogent.voip.brain import CallBrain
 from xplogent.voip.control import (
@@ -408,6 +409,8 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
             store.set_crm_status(call_id, "sending")
             enqueue_delivery(cfg, payload, on_status=status_writer(cfg.db_path, call_id))
         return result
+    if not call.get("test"):
+        alerts.session_result(session.turn_timings)
     if call.get("test"):        # a test call never changes customer records
         return _deliver({"call_id": call_id, "outcome": outcome, "cost": cost, "test": True,
                          "fields": fields_report, "latency_ms": session.latencies_ms})
@@ -420,6 +423,28 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
             store.update_contact_status(call["contact_id"], status or "callback", st.callback)
     return _deliver({"call_id": call_id, "outcome": outcome, "cost": cost,
                      "fields": fields_report, "latency_ms": session.latencies_ms})
+
+
+def recover_interrupted_calls(cfg: Config | None = None, live_ids: set[int] | None = None) -> list[int]:
+    """At start-up: calls left 'active' by a stop mid-call become 'interrupted', their
+    transcript so far goes to the CRM, and an alert says how many were cut off."""
+    cfg = cfg or load_config()
+    with Store(cfg.db_path) as store:
+        ids = store.recover_interrupted_calls(live_ids or set())
+        for call_id in ids:
+            call = store.get_call(call_id) or {}
+            if crm_enabled(cfg) and not call.get("test"):
+                from xplogent.voip.crm import status_writer
+
+                payload = build_payload(cfg, store, call_id, {"outcome": "interrupted"})
+                store.set_crm_payload(call_id, payload)
+                store.set_crm_status(call_id, "sending")
+                enqueue_delivery(cfg, payload, on_status=status_writer(cfg.db_path, call_id))
+    if ids:
+        alerts.alert("calls_interrupted",
+                     f"{len(ids)} call(s) were cut off because the server stopped during the call "
+                     f"(call {', '.join(map(str, ids[:10]))}). They are marked 'interrupted'.")
+    return ids
 
 
 class VoipService:
@@ -488,8 +513,12 @@ class VoipService:
                 return {"ok": False, "error": "the SIP trunk is not set up (Calls → Telephony)"
                         if via == "sip" else
                         "the PBX extension line is not set up or not switched on (Calls → Telephony)"}
-            return await dialer(number, meta)
-        return await self.telnyx.dial(number, meta, v)
+            res = await dialer(number, meta)
+        else:
+            res = await self.telnyx.dial(number, meta, v)
+        if not test:
+            alerts.dial_result(res)          # 5 carrier/line failures in a row → alert
+        return res
 
     # -- live calls -----------------------------------------------------------------------
     def live_by_ref(self, ref: str) -> LiveCall | None:
