@@ -437,6 +437,13 @@ Test calls are never counted or sent to the CRM.
 
 ## Your CRM (`mubashiribstec/CRM`): how Xplogent connects
 
+> **Source of truth:**
+> - **`docs/crm-integration-prompt.md`**: the exact CRM API contract. It has six endpoints,
+>   including `sales/open` for the campaign picker.
+> - **`docs/xplogent-implementation-plan.md`**: the Xplogent work packages.
+>
+> The summary below is the overview.
+
 What's there:
 - **Laravel, with MariaDB/MySQL.**
 - **`applicants`** (candidates): name, phones (UK national format, 11 digits), emails,
