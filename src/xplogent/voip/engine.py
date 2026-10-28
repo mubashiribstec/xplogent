@@ -69,8 +69,15 @@ class CallSession:
                  transfer_timeout_s: float = 60.0,
                  send_dtmf: Callable[[str], Awaitable[None]] | None = None,
                  dtmf_keys: dict[str, str] | None = None, dtmf_gap_s: float = 2.0,
-                 recorder: Any = None, stream_stt: Any = None) -> None:
+                 recorder: Any = None, stream_stt: Any = None,
+                 listen_first: bool = False, hello_wait_s: float = 2.5, amd: Any = None) -> None:
         self.brain, self.stt, self.tts = brain, stt, tts
+        # Outbound: wait for the callee's "Hello?" (or ``hello_wait_s``) before the greeting,
+        # so the agent doesn't talk over them and voicemail can be spotted first.
+        self.listen_first, self.hello_wait_s = listen_first, hello_wait_s
+        self._awaiting_hello = False
+        self._hello_task: asyncio.Task | None = None
+        self.amd = amd                      # amd.MachineDetector (outbound) or None
         self.send_audio, self.clear_audio = send_audio, clear_audio
         self.hangup_cb, self.transfer_cb = hangup, transfer
         self.on_turn = on_turn
@@ -133,18 +140,87 @@ class CallSession:
     async def start(self) -> None:
         self._watchdog = asyncio.create_task(self._watch())
         self.event("answered")
-        if self.greeting:
-            self.event("greeting")
-            self._record("agent", self.greeting)
-            self._greeting_task = self._turn_task = asyncio.create_task(self._say(self.greeting))
-            self._greeting_task.add_done_callback(
-                lambda t: self.event("greeting_end", "stopped" if t.cancelled() else ""))
+        if self.amd is not None:
+            self.amd.start(time.time())
+        if self.listen_first and self.greeting:
+            self._awaiting_hello = True
+            self.event("listening", "waiting for the callee to speak first")
+            self._hello_task = asyncio.create_task(self._hello_timeout())
+            return
+        self._play_greeting()
+
+    def _play_greeting(self) -> None:
+        self._awaiting_hello = False
+        if not self.greeting or self.finished.is_set():
+            return
+        self.event("greeting")
+        self._record("agent", self.greeting)
+        self._greeting_task = self._turn_task = asyncio.create_task(self._say(self.greeting))
+        self._greeting_task.add_done_callback(
+            lambda t: self.event("greeting_end", "stopped" if t.cancelled() else ""))
+
+    async def _hello_timeout(self) -> None:
+        """Nobody spoke: greet after ``hello_wait_s`` (or once they stop talking)."""
+        await asyncio.sleep(self.hello_wait_s)
+        limit = time.time() + 6.0
+        while self.vad.in_speech and time.time() < limit and not self.finished.is_set():
+            await asyncio.sleep(0.05)          # they're talking: let them finish first
+        if self._awaiting_hello and not self.finished.is_set():
+            self._play_greeting()
+
+    async def _hello_heard(self, pcm8k: bytes, stream: Any = None) -> None:
+        """The callee's first words ("Hello?"): greet straight away, then transcribe them
+        for the record and for the voicemail check."""
+        self._play_greeting()
+        text = ""
+        try:
+            text = await stream.finish() if stream is not None else ""
+        except Exception:  # noqa: BLE001 - the batch path below
+            text = ""
+        finally:
+            if stream is not None:
+                with contextlib.suppress(Exception):
+                    await stream.aclose()
+        if not text:
+            with contextlib.suppress(Exception):
+                text = await self.stt.transcribe(resample(pcm8k, 8000, 16000))
+        text = (text or "").strip()
+        if text:
+            self._record("caller", text)
+            if hasattr(self.brain, "heard"):
+                self.brain.heard(text)
+        if self.amd is not None and text and self.amd.text(text, time.time()):
+            await self._machine(self.amd.reason)
+
+    async def _machine(self, reason: str) -> None:
+        """An answering machine: hang up without leaving a message (outcome voicemail)."""
+        if self.finished.is_set():
+            return
+        self.event("voicemail", reason)
+        _log.info("answering machine detected (%s): hanging up", reason)
+        st = self.brain.state
+        st.outcome = "voicemail"
+        st.summary = st.summary or f"Answering machine ({reason}); no message left."
+        self._awaiting_hello = False
+        for task in (self._hello_task, self._greeting_task, self._turn_task):
+            if task is not None and not task.done() and task is not asyncio.current_task():
+                task.cancel()
+        self._speaking = False
+        if self.clear_audio:
+            with contextlib.suppress(Exception):
+                await self.clear_audio()
+        await self._hangup("answering machine")
+
+    async def machine_detected(self, reason: str) -> None:
+        """The carrier's own detection (Telnyx) said machine."""
+        await self._machine(reason)
 
     async def stop(self) -> None:
         if not self.finished.is_set() or not any(e["kind"] == "ended" for e in self.timeline):
             self.event("ended")
         self.finished.set()
-        for task in (self._turn_task, self._watchdog, self._transfer_timer, self._dtmf_timer):
+        for task in (self._turn_task, self._watchdog, self._transfer_timer, self._dtmf_timer,
+                     self._hello_task):
             if task and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -188,6 +264,10 @@ class CallSession:
             frame = bytes(self._pending[:FRAME_BYTES])
             del self._pending[:FRAME_BYTES]
             event = self.vad.feed(frame)
+            if self.amd is not None and not self.amd.done and \
+                    self.amd.frame(frame, self.vad.in_speech):
+                await self._machine(self.amd.reason)
+                return
             if self._stream is not None and event != "speech_start":
                 if self.vad.in_speech:
                     self._stream.feed(frame)
@@ -202,6 +282,12 @@ class CallSession:
             elif event == "speech_end":
                 self._speech_end_at = time.time()
                 stream, self._stream = self._stream, None
+                if self._awaiting_hello:          # "Hello?": our cue to greet, not a question
+                    self._awaiting_hello = False
+                    if self._hello_task is not None and not self._hello_task.done():
+                        self._hello_task.cancel()
+                    self._hello_task = asyncio.create_task(self._hello_heard(self.vad.take(), stream))
+                    continue
                 await self._begin_turn(self.vad.take(), stream)
 
     def _open_stream(self) -> None:
@@ -300,6 +386,9 @@ class CallSession:
                     info["error"] = f"stt: {last['error']}"
         self._last_stt_ms = (time.time() - _t0) * 1000
         self._turn_info = info
+        if self.amd is not None and not self.amd.done and self.amd.text(text or "", time.time()):
+            await self._machine(self.amd.reason)
+            return
         await self._after_greeting()
         await self._reply((text or "").strip())
 
@@ -308,6 +397,10 @@ class CallSession:
         if self.finished.is_set() or not text.strip():
             return
         self._speech_end_at = time.time()
+        if self._awaiting_hello:                 # typed before the opening line: say it first
+            if self._hello_task is not None and not self._hello_task.done():
+                self._hello_task.cancel()
+            self._play_greeting()
         if self._speaking:
             await self._barge_in()
         self._run_turn(self._reply(text.strip()))
@@ -320,6 +413,8 @@ class CallSession:
                 return
             self._last_activity = time.time()
             self._record("caller", record_as or text)
+            if self.amd is not None:
+                self.amd.conversation()          # a person is talking with the agent
             if getattr(self.brain, "paused", False):
                 return              # a person is handling the call
             first = True

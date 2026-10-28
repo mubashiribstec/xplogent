@@ -118,7 +118,7 @@ class _FakeTelnyx:
     async def hangup(self, cc):
         self.actions.append(("hangup", cc))
 
-    async def dial(self, to, frm, conn, webhook_url=""):
+    async def dial(self, to, frm, conn, webhook_url="", **kw):
         self.actions.append(("dial", to))
         return {"data": {"call_control_id": "new"}}
 

@@ -112,7 +112,7 @@ class _Telnyx:
     def __init__(self, *a, **k):
         pass
 
-    async def dial(self, to, frm, conn, webhook_url=""):
+    async def dial(self, to, frm, conn, webhook_url="", **kw):
         return {"data": {"call_control_id": "cc-dialed"}}
 
     async def start_stream(self, cc, url):

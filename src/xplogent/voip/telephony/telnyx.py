@@ -63,11 +63,14 @@ class TelnyxClient:
         return await self._action(call_control_id, "send_dtmf", {"digits": digits, "duration_millis": 250})
 
     async def dial(self, to_number: str, from_number: str, connection_id: str,
-                   webhook_url: str = "") -> dict:
-        """Place an outbound call (used by the V3 dialer)."""
+                   webhook_url: str = "", answering_machine_detection: str = "") -> dict:
+        """Place an outbound call (used by the V3 dialer). ``answering_machine_detection``:
+        ``premium`` / ``detect`` asks Telnyx to report a machine (call.machine.* events)."""
         body = {"to": to_number, "from": from_number, "connection_id": connection_id}
         if webhook_url:
             body["webhook_url"] = webhook_url
+        if answering_machine_detection:
+            body["answering_machine_detection"] = answering_machine_detection
         resp = await self._client.post("/calls", json=body)
         resp.raise_for_status()
         return resp.json()
@@ -106,6 +109,7 @@ def parse_webhook(payload: dict[str, Any]) -> dict[str, str]:
         "direction": str(p.get("direction", "incoming")),
         "client_state": state,
         "digit": str(p.get("digit", "")),
+        "result": str(p.get("result", "")),          # call.machine.*.detection.ended
     }
 
 

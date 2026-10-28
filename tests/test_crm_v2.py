@@ -157,13 +157,19 @@ def test_brief_fills_the_prompt_and_the_template(mock):
     info = {"direction": "outgoing", "from": "+441130000000", "to": "+447700900123",
             "transport": "sip", "brief": BRIEF}
     cfg, store, session, call_id, brain = _session(info, "kingsbury_outbound_screener")
-    assert "Sarah" in session.greeting and "Care Assistant" in session.greeting and "LS6" in session.greeting
+    # The opening line only asks for Sarah (identity first); the job comes after her yes.
+    assert "Sarah" in session.greeting and "Care Assistant" not in session.greeting
+    assert "Care Assistant" in brain.playbook and "LS6" in brain.playbook
     system = brain._system([])
     assert "ROLE FACTS" in system and "£12.60 per hour" in system and "Days, 3 x 12h shifts" in system
     assert "CANDIDATE: first name Sarah" in system and "about 2.6 miles" in system
     assert "call attempt 2" in system and "asked to call after 5" in system
     assert "{{" not in brain.playbook
     assert store.get_call(call_id)["brief"]["applicant_id"] == 123
+    store.close()
+    save_user_config({"voip": {"outbound": {"identity_check": False}}})
+    _, store, session, _, _ = _session(info)
+    assert "Sarah" in session.greeting and "Care Assistant" in session.greeting and "LS6" in session.greeting
     store.close()
 
 

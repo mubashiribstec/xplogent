@@ -244,6 +244,23 @@ export function Calls() {
               <input type="number" min={0} defaultValue={cfg.recording?.retention_days ?? 90}
                 onBlur={(e) => save({ recording: { retention_days: Math.max(0, Number(e.target.value) || 0) } })} style={{ width: 90 }} /></label>
           </div>
+          <div className="row wrap" style={{ gap: 10 }}>
+            <label className="bud"><span className="lbl-sm">Outbound: listen first</span>
+              <select value={cfg.outbound?.listen_first === false ? "off" : "on"}
+                onChange={(e) => save({ outbound: { ...(cfg.outbound ?? {}), listen_first: e.target.value === "on" } })}>
+                <option value="on">on: wait for "Hello?" (2.5 s at most)</option>
+                <option value="off">off: speak as soon as they answer</option></select></label>
+            <label className="bud"><span className="lbl-sm">Outbound: identity check</span>
+              <select value={cfg.outbound?.identity_check === false ? "off" : "on"}
+                onChange={(e) => save({ outbound: { ...(cfg.outbound ?? {}), identity_check: e.target.value === "on" } })}>
+                <option value="on">on: "Am I speaking with Sarah?" first, the job only after a yes</option>
+                <option value="off">off: the greeting says why we're calling</option></select></label>
+            <label className="bud"><span className="lbl-sm">Answering machines</span>
+              <select value={cfg.voicemail?.detect === false ? "off" : "on"}
+                onChange={(e) => save({ voicemail: { ...(cfg.voicemail ?? {}), detect: e.target.value === "on" } })}>
+                <option value="on">detect and hang up (no message left)</option>
+                <option value="off">don't detect</option></select></label>
+          </div>
           <p className="dim" style={{ fontSize: 12 }}>Add your scripts and FAQs under Knowledge and your customers under
             Contacts: the agent answers only from those.</p>
         </div></CardBoundary>

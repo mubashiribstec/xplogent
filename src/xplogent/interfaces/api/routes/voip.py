@@ -715,9 +715,12 @@ async def voip_dial(body: dict):
         with Store(load_config().db_path) as store:
             contact = store.get_contact(int(contact_id))
         number = (contact or {}).get("phone", "")
+    brief = body.get("brief")              # a CRM call brief (campaign queue preview → "Call")
+    if brief is not None and (not isinstance(brief, dict) or len(json.dumps(brief, default=str)) > 16_000):
+        return JSONResponse({"ok": False, "error": "brief must be an object under 16 KB"}, status_code=400)
     res = await get_service().dial(
         number, contact_id=int(contact_id) if contact_id else None, test=bool(body.get("test")),
-        via=via, ignore_hours=bool(body.get("ignore_hours")))
+        via=via, ignore_hours=bool(body.get("ignore_hours")), brief=brief or None)
     deps.audit_event("voip_dial", target=f"{number} via {via}{' (test)' if body.get('test') else ''}",
                      risk="medium", allowed=bool(res.get("ok")), detail=str(res.get("error", ""))[:200])
     return res

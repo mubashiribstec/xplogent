@@ -73,6 +73,12 @@ def effective_greeting(v: dict[str, Any]) -> str:
     return greeting
 
 
+def identity_line(v: dict[str, Any]) -> str:
+    """The outbound opening: who we are (AI, recorded) and who we want, nothing else."""
+    recorded = ", on a recorded line" if recording_enabled(v) else ""
+    return f"Hi, this is {{company}}'s AI assistant{recorded}. Am I speaking with {{first_name}}?"
+
+
 def render_template(text: str, variables: dict[str, Any]) -> str:
     """Fill ``{{name}}`` / ``{name}`` placeholders from ``variables`` (C9 dynamic
     variables). Unknown placeholders are left untouched so a typo is visible in
@@ -302,6 +308,26 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
     if info.get("via_queue") and str(v.get("queue_greeting") or "").strip():
         greeting_v = {**greeting_v, "greeting": v["queue_greeting"]}   # disclosure rules still apply
     greeting = render_template(effective_greeting(greeting_v), variables)
+    outbound = is_outbound(info)
+    realtime_mode = str(v.get("mode") or "cascaded") == "realtime"
+    out_cfg = v.get("outbound") or {}
+    first_name = variables.get("first_name") or (str((contact or {}).get("name") or "").split() or [""])[0]
+    if outbound and out_cfg.get("identity_check", True) and first_name and not realtime_mode:
+        # Privacy: who are we speaking to, before any word about a job or an application.
+        line = str(out_cfg.get("identity_line") or "").strip() or identity_line(v)
+        greeting = render_template(effective_greeting({**v, "greeting": line}),
+                                   {**variables, "first_name": first_name})
+        brain.identity_check = first_name
+    if outbound and not realtime_mode:
+        session_kw.setdefault("listen_first", bool(out_cfg.get("listen_first", True)))
+        session_kw.setdefault("hello_wait_s", float(out_cfg.get("hello_wait_s", 2.5)))
+        vm = v.get("voicemail") or {}
+        if vm.get("detect", True) and "amd" not in session_kw:
+            from xplogent.voip.amd import MachineDetector
+
+            session_kw["amd"] = MachineDetector(window_s=float(vm.get("window_s", 6)),
+                                                long_speech_s=float(vm.get("long_speech_s", 4)),
+                                                beep=bool(vm.get("beep", True)))
     vad_cfg = v.get("vad", {}) or {}
     # Live speech-to-text only with the configured provider (an injected stt is a test's).
     stream_stt = session_kw.pop("stream_stt") if "stream_stt" in session_kw else (
@@ -403,7 +429,7 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
                              "transfer_failed" if st.transfer_failed else "abandoned")
     summary = st.summary or (f"Callback requested: {st.callback}" if st.callback else "")
     fields_report = brain.fields.report() if getattr(brain, "fields", None) is not None else None
-    if fields_report is not None:
+    if fields_report is not None and outcome != "voicemail":     # nobody to ask on a machine
         bits = [f"{k}={v}" for k, v in fields_report["values"].items()]
         if fields_report["missing_required"]:
             bits.append("missing: " + ", ".join(fields_report["missing_required"]))

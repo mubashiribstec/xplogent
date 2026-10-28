@@ -147,6 +147,15 @@ def trim_history(history: list[Message], limit: int) -> list[Message]:
     return out or history[-1:]
 
 
+IDENTITY_RULES = """IDENTITY CHECK: your opening line only asked whether you are speaking with {name}.
+- Until the person clearly confirms they are {name}, do not mention the job, the vacancy, an
+  application, the employer or why you are calling, not even to a partner, parent or colleague.
+- They confirm: briefly say why you are calling, then follow the script.
+- It's someone else, or {name} isn't available: apologise, say you'll try another time, give no
+  details, call log_outcome with outcome "wrong_person", then end_call with exit "wrong_party".
+- They ask who you are or what it's about before confirming: say you are the AI assistant
+  calling from the company for {name}, and that it's something you can only discuss with them."""
+
 _ROLE_FACTS = (("job_title", "Role"), ("position_type", "Contract"), ("job_type", "Type"),
                ("timing", "Hours / shifts"), ("salary", "Pay"), ("experience", "Experience needed"),
                ("qualification", "Qualifications"), ("benefits", "Benefits"),
@@ -207,6 +216,8 @@ class CallBrain:
                  fields: FieldCollector | None = None, brief: dict[str, Any] | None = None) -> None:
         self.provider = provider
         self.brief = brief or {}        # CRM call brief: the vacancy and the candidate
+        self.identity_check = ""        # outbound: whose identity the opening line asked about
+        self.opening_words = ""         # what the callee said before the agent's first line
         self.persona = persona or "You are a friendly, professional customer-service agent."
         self.playbook = playbook
         self.contact = contact
@@ -228,6 +239,10 @@ class CallBrain:
     def instruct(self, note: str) -> None:
         if note.strip():
             self.notes.append(note.strip()[:500])
+
+    def heard(self, text: str) -> None:
+        """The callee's first words, spoken before the opening line (listen-first calls)."""
+        self.opening_words = text.strip()[:200]
 
     def said(self, text: str) -> None:
         """Something a supervisor made the agent say: keep the conversation coherent."""
@@ -259,6 +274,10 @@ class CallBrain:
         else:
             parts.append("CUSTOMER: unknown caller (ask politely for their name if needed).")
         parts += brief_sections(self.brief)
+        if self.identity_check:
+            parts.append(IDENTITY_RULES.format(name=self.identity_check))
+        if self.opening_words:
+            parts.append(f"Before your opening line the callee said: «{self.opening_words}»")
         if self.fields is not None and self.fields.specs:
             parts.append(self.fields.checklist())
         if self.notes:

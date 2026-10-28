@@ -76,7 +76,7 @@ class _Telnyx:
     def __init__(self, *a, **k):
         pass
 
-    async def dial(self, to, frm, conn, webhook_url=""):
+    async def dial(self, to, frm, conn, webhook_url="", **kw):
         self.dialed.append(to)
         return {"data": {"call_control_id": "cc-1"}}
 
@@ -208,7 +208,8 @@ def test_dial_route_uses_the_contact_number(monkeypatch):
     c = _client()
     assert c.post("/voip/dial", json={"contact_id": cid}).json()["ok"]
     assert c.post("/voip/dial", json={"number": "+15550109999", "test": True}).json()["ok"]
-    assert calls[0] == ("+15550101111", {"contact_id": cid, "test": False, "via": "telnyx", "ignore_hours": False})
+    assert calls[0] == ("+15550101111", {"contact_id": cid, "test": False, "via": "telnyx", "ignore_hours": False,
+                                         "brief": None})
     assert calls[1][1]["test"] is True
     assert c.post("/voip/dial", json={"number": "1", "via": "pigeon"}).json()["ok"] is False
 

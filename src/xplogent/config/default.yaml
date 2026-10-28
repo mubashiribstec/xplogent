@@ -233,6 +233,17 @@ voip:
   fields: []                       # mandatory fields: the call CANNOT close successfully while a required field is missing (Part D enforcement). Example — uncomment to require a read-back-confirmed callback number:
     # - { name: callback_number, label: "best callback number", validator: phone, required: true, require_confirmed: true, default_country: "+44" }
     # - { name: caller_name, label: "caller's name", validator: nonempty, required: true }
+  outbound:                        # how outbound calls open
+    listen_first: true             # wait for the callee's "Hello?" (up to hello_wait_s) before speaking
+    hello_wait_s: 2.5
+    identity_check: true           # open with "Am I speaking with <first name>?"; why we're calling only after a yes
+    identity_line: ""              # "" = "Hi, this is {company}'s AI assistant, on a recorded line. Am I speaking with {first_name}?"
+  voicemail:                       # answering machines on outbound calls: hang up, leave no message (outcome voicemail)
+    detect: true
+    window_s: 6                    # watch the first seconds after answer
+    long_speech_s: 4               # speech this long without a pause = a recorded greeting
+    beep: true                     # a voicemail beep (800-1200 Hz tone) = machine
+    telnyx_amd: premium            # Telnyx calls also use the carrier's detection: premium | detect | "" (off)
   alerts:                          # a person is told when calls keep failing, the CRM is down, or calls were cut off
     min_gap_minutes: 15            # at most one alert of each kind this often (webhook address: secret XPLOGENT_ALERT_WEBHOOK_URL)
   recording:                       # stereo WAV per call (caller left, agent right), playable in Calls

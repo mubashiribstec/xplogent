@@ -255,6 +255,19 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
     dial never waits on the internet;
   - the card shows whether calls are allowed now and the next allowed time. Test calls ignore
     the hours.
+- **Outbound calls open safely** (Setup → Conversation; `voip.outbound`, `voip.voicemail`):
+  - **Listen first:** after the callee answers, the agent waits for their "Hello?" (at most
+    2.5 s) instead of talking over them.
+  - **Identity check:** when the callee's first name is known (a campaign brief or a contact),
+    the opening line is only "Hi, this is {company}'s AI assistant, on a recorded line. Am I
+    speaking with Sarah?". The job and the application are mentioned only after a clear yes.
+    If someone else answers, the agent apologises, gives no details and ends the call
+    (outcome `wrong_person`).
+  - **Answering machines:** in the first seconds the agent checks for speech that runs on
+    without a pause (> 4 s), voicemail phrases ("leave a message", "you've reached…") and the
+    beep (an 800–1,200 Hz tone). On a machine it hangs up silently: outcome `voicemail`, which
+    the CRM counts as an attempt. On Telnyx calls the carrier's detection is used as well
+    (`voicemail.telnyx_amd: premium`).
 - **Alerts** (Setup → Alerts): paste a Slack or Teams incoming-webhook address (it's stored
   as the secret `XPLOGENT_ALERT_WEBHOOK_URL`). You're told when:
   - 5 calls in a row fail (a busy line or no answer doesn't count);

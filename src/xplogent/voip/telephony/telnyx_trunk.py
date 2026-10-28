@@ -101,8 +101,11 @@ class TelnyxTrunk:
         if not (from_number and connection):
             return {"ok": False, "error": "set your Telnyx number and Voice API application ID first"}
         client = self._client(v)
+        vm = v.get("voicemail") or {}
+        amd = str(vm.get("telnyx_amd") or "") if vm.get("detect", True) else ""
         try:
-            res = await client.dial(number, from_number, connection)
+            res = await client.dial(number, from_number, connection,
+                                    answering_machine_detection=amd if amd in ("premium", "detect") else "")
         except Exception as exc:  # noqa: BLE001 - shown in the dashboard
             return {"ok": False, "error": f"Telnyx refused the call: {exc}"[:300]}
         finally:
@@ -141,6 +144,11 @@ class TelnyxTrunk:
             live = self.service.live_by_ref(ccid)
             if live is not None and ev["digit"]:
                 self._spawn(live.session.on_dtmf(ev["digit"]))
+            return {"ok": True}
+        if ev["event"] in ("call.machine.detection.ended", "call.machine.premium.detection.ended"):
+            live = self.service.live_by_ref(ccid)
+            if live is not None and "machine" in ev["result"]:
+                self._spawn(live.session.machine_detected(f"Telnyx: {ev['result']}"))
             return {"ok": True}
         if ev["event"] == "call.bridged":
             live = self.service.live_by_ref(ccid)
