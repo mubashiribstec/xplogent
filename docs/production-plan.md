@@ -1,6 +1,7 @@
 # Xplogent in production: recruitment calling — answers and plan
 
-Status checked against the code at build `7575bc9` (27 Oct 2026). Every answer says what
+Status checked against the code at build `7575bc9` (27 Oct 2026), and against your CRM
+(`mubashiribstec/CRM`, Laravel, read on 28 Oct 2026; see **Your CRM** below). Every answer says what
 the product does **today**, what is **missing**, and the **plan item** that closes the gap.
 Prices are live list prices where a source is given; time and capacity figures marked
 *estimate* still have to be measured (plan item **P2-I**).
@@ -9,11 +10,11 @@ Prices are live list prices where a source is given; time and capacity figures m
 
 | # | Question | Today | Plan |
 |---|---|---|---|
-| 1 | Which candidate, role, questions, history | Partly: name, notes, last outcome from CRM; role only from a CSV contact | **P1-A** |
+| 1 | Which candidate, role, questions, history | Partly: today only name/notes from the CRM. Your CRM has all of it (vacancies, radius matching, history, notes): 5 endpoints needed | **P1-A** |
 | 2 | Calls at the same time | 4 per SIP line (setting); CPU-bound with local speech | **P2-I** |
 | 3 | Automatic reschedule | No: callback time is stored as text, nothing redials | **P1-C** |
 | 4 | Not interested | Outcome recorded, contact marked; no campaign rule | **P1-B** |
-| 5 | Email for job details | Email captured and validated, sent to CRM; nothing emails | **P2-K** |
+| 5 | Email for job details | Email captured; your CRM's `send_job_vacancy_details` template can send it | **P2-K** |
 | 6 | Self-improvement, control | Calls never learn on their own; training + playbook are human-curated | **P2-N** |
 | 7 | Best model | Measured shortlist below; benchmark to decide | **P2-H** |
 | 8 | Best STT / TTS | Comparison below | **P2-H** |
@@ -26,7 +27,7 @@ Prices are live list prices where a source is given; time and capacity figures m
 | 15 | Voicemail vs human, leave a message? | Not detected; recommend hang up, no message | **P1-D** |
 | 16 | Caller ID, call-backs | Configurable per line; call-back routing is PBX/Telnyx config | **P1-B**, **P3-Q** |
 | 17 | TPS and DNC screening | DNC (local + CRM flag) checked before dialling; no TPS | **P1-E** |
-| 18 | Job distance | Not implemented | **P2-J** |
+| 18 | Job distance | Your CRM: straight-line km (15 km radius). Xplogent: none | **P2-J** |
 | 19 | Salary/role never guessed | Prompt rules only: no hard guarantee | **P1-F** |
 | 20 | Hours, retries, mid-call failure | Hours (time of day only); no retries; crash leaves calls stuck | **P1-B**, **P1-G** |
 | 21 | Live monitoring, cost caps | Live transcript + controls; no listen-in; no caps | **P1-H**, **P2-M** |
@@ -48,18 +49,30 @@ Prices are live list prices where a source is given; time and capacity figures m
   fields (CSV import), **not from the CRM**.
 - Nothing tells Xplogent *which* candidates to call, and history is only "last outcome".
 
-**Plan P1-A: CRM as the source of truth.** Xplogent reads through a small, signed Laravel API.
-It never gets direct MariaDB access: the API keeps the schema private and lets Laravel apply
-its own rules.
-- `GET /api/xplogent/call-queue?campaign=…` returns the candidates due to be called, each with
-  a **call brief**:
-  - candidate: id, name, mobile, postcode, consent basis;
-  - the application: role id, title, client (if shareable), location/postcode, pay, hours,
-    must-haves, start date;
-  - **history**: previous calls with date, outcome and summary, notes, last contact, and
-    whether there's an open callback.
-- `contact-lookup` is extended with the same `history[]` and open `applications[]`, so
-  inbound calls get the same picture.
+**Plan P1-A: your CRM as the source of truth.** Xplogent reads through a few signed endpoints
+added to your Laravel app, never directly from MariaDB. The endpoints reuse the CRM's own
+models and rules: Applicant, Sale, Unit, History, ApplicantNote, CallLog and the radius
+search. See **Your CRM** below for the exact mapping.
+- **Who to call:** a campaign is one **vacancy** (`sales` row). The queue uses the CRM's own
+  matching rule (as in `SaleController::getApplicantsBySaleRadius`):
+  - active applicants;
+  - with the vacancy's job title or a related title;
+  - within the radius (15 km default);
+  - not blocked, not "temporarily not interested", not already sent for this vacancy, not
+    called by the AI for it recently.
+- **What role:** the vacancy brief comes straight from `sales`:
+  - title and category, `position_type`, `timing`, `salary`, `experience`, `qualification`,
+    `benefits`, a trimmed `job_description`;
+  - the site's town or postcode district (the client is named only if you allow it);
+  - the candidate's straight-line distance in km/miles.
+- **What questions:** the screener template, plus the vacancy's `experience` and
+  `qualification` as must-haves.
+- **History:** the candidate's last notes (`module_notes` / `applicant_notes`), stage history
+  (`history`: stage and sub-stage per vacancy, e.g. `quality_cvs`, `crm_interview_attended`),
+  interviews, flags (callback, no response, not interested, no job) and previous calls
+  (`call_logs`).
+- `contact-lookup` returns the same history and open applications, so inbound calls get the
+  same picture.
 - The brief is stored with the call (a snapshot), rendered into the prompt as **ROLE FACTS**
   and **HISTORY**, and pushed back with the summary. That gives the CRM one history, and the
   agent knows "we spoke on 12 Oct, you asked us to call after 5 pm".
@@ -97,12 +110,16 @@ server with hosted speech. The dialler (P1-B) never exceeds the measured number.
 it. "Stop calling me" is different: outcome `do_not_call` puts the number on the DNC list,
 permanently.
 
-**Recommended rule (P1-B).**
+**Recommended rule (P1-B)**, written back with the CRM's own reasons (the same flags a
+recruiter sets with "short notes"):
 - **Not interested in this role**: thank them, ask *one* optional question ("Would you like
-  to hear about other roles in future?"), then end.
+  to hear about other roles in future?"), then end. The CRM gets `not_interested` →
+  `is_temp_not_interested`, plus a note "--- By: Xplogent AI".
+- **Not looking for work at all**: `no_job` → `is_no_job`.
 - No more calls for that role. Other roles are allowed only if they said yes, and not before a
   cool-off (default **90 days**).
-- **Stop calling**: DNC, every campaign, permanently, and pushed to the CRM.
+- **Stop calling**: DNC, every campaign, permanently, and pushed to the CRM as `blocked` →
+  `is_blocked`, which the CRM's own searches already exclude.
 - Either way the call should end within about **45 seconds** of the "no" (P1-H).
 
 ### 5. Candidate gives an email for job details
@@ -112,7 +129,9 @@ sends an email.
 **Plan P2-K.**
 - The agent spells the address back ("j-o-h-n dot smith at gmail dot com — is that right?")
   and records it as **confirmed**.
-- A `send_job_details` tool asks the **CRM** to send its own job-details email template.
+- A `send_job_details` tool asks the **CRM** to send its existing **`send_job_vacancy_details`**
+  email template (the same one recruiters use from the vacancy page, with salary, timing,
+  qualification and experience filled in) to that one applicant, logged in `sent_emails`.
   That keeps one sender, unsubscribe handling and an audit trail in the CRM, and lets the
   candidate's record update.
 - Xplogent never writes the email itself.
@@ -273,9 +292,11 @@ always plays to the end. The sensitivity is tunable (`voip.vad`).
   recruiters' ring group as fail-over.
 
 ### 17. TPS and do-not-call screening
-**Today.** Before every dial the **local DNC list** and the **CRM's do-not-call flag** are
-checked; any "stop calling me" adds the number automatically. There is **no TPS/CTPS
-check**.
+**Today.**
+- Before every dial, the **local DNC list** and the **CRM's do-not-call flag** are checked; any
+  "stop calling me" adds the number automatically.
+- In your CRM, the do-not-call flag will be `applicants.is_blocked`.
+- There is **no TPS/CTPS check**.
 
 **Plan P1-E.**
 - **Screening:** a TPS/CTPS check through a licensed screening provider's API before every
@@ -290,10 +311,17 @@ check**.
   controls, but this needs a lawyer's answer, not mine.
 
 ### 18. Job distance: straight line or travel time?
-**Today: not implemented.**
+**Today.**
+- **Your CRM already computes straight-line distance** in km from applicant and vacancy
+  lat/lng. It uses the spherical formula in `getApplicantsBySaleRadius`, and
+  `ST_Distance_Sphere` in `HasDistanceCalculation`, with a 15 km default radius.
+- Xplogent has no distance of its own.
 
 **Plan P2-J.**
-- **Travel time, not straight line**: 10 miles across a city can be 15 minutes or an hour.
+- **Keep the CRM's straight-line radius for choosing who to call:** it's free and already in
+  use. The agent can say "the job is about 6 miles from your postcode", passed in the brief.
+- **Add travel time for the people actually being called:** 10 miles across a city can be
+  15 minutes or an hour.
 - Postcodes come from the CRM brief. Postcode → coordinates comes from **postcodes.io**
   (free, UK).
 - Travel time by car and by public transport comes from a routing API (e.g. TravelTime or
@@ -407,6 +435,70 @@ Test calls are never counted or sent to the CRM.
 - **Inbound:** 10 minutes.
 - **Plan P1-H:** caps set per campaign or template, with the warning built in.
 
+## Your CRM (`mubashiribstec/CRM`): how Xplogent connects
+
+What's there:
+- **Laravel, with MariaDB/MySQL.**
+- **`applicants`** (candidates): name, phones (UK national format, 11 digits), emails,
+  postcode with lat/lng, job title and category, CV, experience, notes, and status flags:
+  `is_blocked`, `is_temp_not_interested`, `is_callback_enable`, `is_no_response`,
+  `is_no_job`, `is_circuit_busy`, plus the quality/CRM stage flags.
+- **`sales`** (vacancies): office (client) and unit (site), title and category,
+  `position_type`, `timing`, `salary`, `experience`, `qualification`, `benefits`,
+  `job_description`, postcode with lat/lng, `cv_limit`, on-hold.
+- **`applicants_pivot_sales`**: applicant ↔ vacancy, with `is_interested`.
+- **`history`**: stage and sub-stage per applicant and vacancy.
+- **`applicant_notes` / `module_notes`**: timestamped notes with `moved_tab_to`.
+- **`interviews`**, **`call_logs`**, **`dial_locks`** (stops two people dialling the same
+  number).
+- **`email_templates`** (incl. `send_job_vacancy_details`), **`sms_templates`**.
+- **An API** today: Sanctum `GET /api/contacts/lookup` and `POST /api/calls/log`, plus the
+  desktop softphone's `/api/sip/{token}/…` (returns name only).
+
+**New endpoints to add to the CRM** (all under `/api/xplogent/`, signed with the HMAC scheme
+in `docs/crm-laravel.md`, and acting as a dedicated CRM user "Xplogent AI" so the audit trail
+shows the AI):
+
+| Endpoint | Does | Built from |
+|---|---|---|
+| `GET campaigns/{sale_id}/queue?radius=15&limit=50` | applicants to call for this vacancy, each with the vacancy brief and distance | the `getApplicantsBySaleRadius` rule, plus exclusions: blocked, temporarily not interested, no job, already sent for this vacancy, AI-called recently, `dial_locks` |
+| `POST contact-lookup` | candidate + last notes + stage history + interviews + flags + previous calls (inbound and pre-dial) | `Applicant::phoneMatches` (primary, secondary, landline; last-10-digit match) |
+| `POST call-summary` (exists in the docs, adapted) | writes the outcome the way a recruiter does: flags, a note and a `call_logs` row; sets `is_interested` on the vacancy pivot | the `storeShortNotes` reasons |
+| `POST send-job-details` | emails the `send_job_vacancy_details` template to one applicant | `CommunicationController::sendEmailsToApplicants` |
+| `POST dial-lock` / `DELETE dial-lock` | the AI takes the same lock a recruiter does, so nobody else calls the candidate at the same time | `dial_locks` |
+
+**Outcome mapping** (Xplogent → CRM):
+
+| Xplogent | CRM write |
+|---|---|
+| interested | pivot `is_interested = 1` for the vacancy + note. **A recruiter then sends the CV to quality**: the AI never moves a stage |
+| callback at a time | reason `callback` → `is_callback_enable`, with the time in the note |
+| not interested | reason `not_interested` → `is_temp_not_interested` |
+| not looking for work | reason `no_job` → `is_no_job` |
+| stop calling | reason `blocked` → `is_blocked` |
+| no answer / voicemail (after the last retry) | reason `no_response` → `is_no_response` |
+| number unobtainable | reason `circuit_busy` → `is_circuit_busy` |
+| every call | `call_logs` row (outbound, duration, SIP call id, vacancy) + summary note |
+
+Phone numbers: the CRM stores `07…`, and Xplogent dials `+447…`. The endpoints convert,
+and `phoneMatches` already compares the last 10 digits.
+
+**Security findings in the CRM repository** (it is **public**). Values aren't repeated here:
+- `docker-compose.yml`, `.env.docker` and `docker/entrypoint.sh` have default database
+  passwords. `.env.docker` and `DemoSeeder.php` have a demo admin password.
+- `config/database.php` has fallback credentials for the FreePBX database.
+- The latest commit is titled "Change FreePBX database host and password". If real values were
+  ever committed, they're in the history: **rotate the FreePBX DB, MariaDB and admin
+  passwords**, and consider making the repo private, since it describes your candidate data
+  model.
+- `users.sip_password` stores SIP passwords. Check that they're encrypted, not plain text.
+
+**A bug to fix in the CRM:** `CommunicationController::distance()` (the "email nearby
+applicants" query) chains `->where("job_category_id", …)->orWhere("job_title_id", …)`
+without grouping. In SQL that OR cancels the earlier filters, so **blocked, no-job and
+callback applicants with that job title can be emailed**. Wrap the two in one
+`->where(function ($q) { … })`.
+
 ## The plan
 
 **Phase 1 — must have before production outbound calling**
@@ -448,8 +540,10 @@ Test calls are never counted or sent to the CRM.
 - Then widen.
 
 ## Decisions needed from you
-1. **CRM access:** a small signed Laravel API (recommended) or read-only database access?
-   This also covers who builds the Laravel side: your team, or I write the code to drop in.
+1. **CRM endpoints:** I can write the five endpoints above as a pull request to
+   `mubashiribstec/CRM` (Laravel, reusing your models and the radius rule). Do you want that,
+   or will your team add them from the spec? The repository needs to be attached with write
+   access for a PR.
 2. **Speech and model:** OK to use paid hosted speech (Deepgram + ElevenLabs) and the Vercel
    gateway for the model in production?
 3. **Voicemail:** hang up without a message (recommended), or a short neutral message after
