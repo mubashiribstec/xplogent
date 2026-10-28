@@ -7,7 +7,7 @@ const KIND: Record<string, string> = {
   answered: "answered", greeting: "greeting started", greeting_end: "greeting finished", caller: "caller",
   agent: "agent", barge_in: "caller interrupted", dtmf_in: "key pressed", dtmf_out: "agent pressed keys",
   transfer: "transfer started", transfer_done: "transferred", transfer_failed: "transfer failed",
-  hangup: "hang-up", ended: "ended",
+  hangup: "hang-up", ended: "ended", listening: "listening first", voicemail: "answering machine",
 };
 
 /** Per-call diagnostics: timeline, stage timings, provider health, SIP ladder / Telnyx events, RTP. */
@@ -49,6 +49,15 @@ export function CallDebug({ callId, toast }: { callId: number; toast: Toaster })
                 {t.error && <span className="warn" style={{ fontSize: 12 }}>{t.error}</span>}</td>
             </tr>))}</tbody>
         </table></div>
+      </>)}
+
+      {(dbg.guard_blocked ?? []).length > 0 && (<>
+        <h4>Not said: figures the agent couldn't confirm</h4>
+        <p className="dim" style={{ fontSize: 12 }}>Each sentence below named pay, hours or a date that isn't in the
+          vacancy's details, the knowledge base or what the caller said. The caller heard "the recruiter will confirm it"
+          instead. If the figure is right, add it to the vacancy in the CRM or to Knowledge.</p>
+        <ul className="list">{(dbg.guard_blocked ?? []).map((g, i) => (
+          <li key={i}><span className="warn">✗</span> “{g.text}” <span className="dim">· {g.claims.join(", ")}</span></li>))}</ul>
       </>)}
 
       {(dbg.timeline ?? []).length > 0 && (<>

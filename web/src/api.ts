@@ -436,6 +436,7 @@ export interface CallDebugData {
     rtp?: Record<string, any>;
     telnyx_events?: { t: number; event: string; leg: string; digit?: string }[];
     media?: Record<string, any>;
+    guard_blocked?: { text: string; claims: string[] }[];
     errors?: string[];
   };
 }

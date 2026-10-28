@@ -61,6 +61,9 @@ def collect(session: Any) -> dict[str, Any]:
                            "providers": {
                                "stt_fallbacks": getattr(session.stt, "used_fallback", 0),
                                "tts_fallbacks": getattr(session.tts, "used_fallback", 0)}}
+    blocked = getattr(getattr(session, "brain", None), "guard_blocked", None)
+    if blocked:
+        out["guard_blocked"] = list(blocked)        # what the agent wanted to say, and why not
     for source in getattr(session, "debug_sources", []):
         try:
             out.update(source() or {})

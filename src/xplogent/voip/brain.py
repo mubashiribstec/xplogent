@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from xplogent.providers.base import Message, Provider, Role, StreamKind, ToolSpec
@@ -216,6 +216,10 @@ class CallBrain:
                  fields: FieldCollector | None = None, brief: dict[str, Any] | None = None) -> None:
         self.provider = provider
         self.brief = brief or {}        # CRM call brief: the vacancy and the candidate
+        # Role facts guard (voip/guard.py): figures may only come from what this call knows.
+        self.guard_kinds: tuple[str, ...] = ()
+        self.guard_blocked: list[dict[str, Any]] = []
+        self.sources = None
         self.identity_check = ""        # outbound: whose identity the opening line asked about
         self.opening_words = ""         # what the callee said before the agent's first line
         self.persona = persona or "You are a friendly, professional customer-service agent."
@@ -239,6 +243,37 @@ class CallBrain:
     def instruct(self, note: str) -> None:
         if note.strip():
             self.notes.append(note.strip()[:500])
+
+    def enable_guard(self, kinds: tuple[str, ...], today: Any = None) -> None:
+        """Check money / hours / dates in every sentence before it is spoken."""
+        from datetime import date, timedelta
+
+        from xplogent.voip.guard import Sources
+
+        self.guard_kinds = tuple(kinds)
+        self.sources = Sources()
+        for text in (self.persona, self.playbook, *brief_sections(self.brief),
+                     " ".join(str(v) for v in (self.contact or {}).get("fields", {}).values())):
+            self.sources.add(text)
+        start = today or date.today()          # the calendar is a fact: the next two weeks
+        for i in range(15):
+            self.sources.add((start + timedelta(days=i)).isoformat())
+
+    def _check(self, sentence: str, blocked_turn: list[bool]) -> str | None:
+        """The sentence, the safe line instead (once per turn), or None to drop it."""
+        if not self.guard_kinds or self.sources is None:
+            return sentence
+        from xplogent.voip.guard import SAFE_LINE, unsupported
+
+        bad = unsupported(sentence, self.sources, self.guard_kinds)
+        if not bad:
+            return sentence
+        self.guard_blocked.append({"text": sentence[:300], "claims": [c.text.strip() for c in bad]})
+        self.state.events.append("guard_blocked: " + ", ".join(c.text.strip() for c in bad))
+        if blocked_turn[0]:
+            return None
+        blocked_turn[0] = True
+        return SAFE_LINE
 
     def heard(self, text: str) -> None:
         """The callee's first words, spoken before the opening line (listen-first calls)."""
@@ -363,23 +398,37 @@ class CallBrain:
                 knowledge = await self.retrieve(caller_text)
             except Exception:  # noqa: BLE001 - retrieval must never break a live call
                 knowledge = []
+        if self.sources is not None:           # what the agent may quote from now on
+            self.sources.add(caller_text)
+            for chunk in knowledge:
+                self.sources.add(chunk)
         system = Message(role=Role.SYSTEM, content=self._system(knowledge))
+        blocked_turn = [False]
 
         for _round in range(3):  # tool round-trips within one turn
             buffer = ""
             final_msg: Message | None = None
+            said: list[str] = []
+            blocked_before = len(self.guard_blocked)
             async for ev in self.provider.stream([system, *self.history], self.tools,
                                                  temperature=self.temperature):
                 if ev.kind == StreamKind.TOKEN and ev.text:
                     buffer += ev.text
                     sentences, buffer = split_sentences(buffer)
                     for s in sentences:
-                        yield s
+                        if (s := self._check(s, blocked_turn)) is not None:
+                            said.append(s)
+                            yield s
                 elif ev.kind == StreamKind.DONE:
                     final_msg = ev.message
             tail, _ = split_sentences(buffer, final=True)
             for s in tail:
-                yield s
+                if (s := self._check(s, blocked_turn)) is not None:
+                    said.append(s)
+                    yield s
+            if final_msg is not None and len(self.guard_blocked) > blocked_before:
+                # Remember what was actually said, not the invented figure.
+                final_msg = replace(final_msg, content=" ".join(said))
 
             if final_msg is None or not final_msg.tool_calls:
                 spoken = (final_msg.content if final_msg else "") or ""
@@ -390,5 +439,7 @@ class CallBrain:
             for call in final_msg.tool_calls:
                 result = self._run_tool(call.name, call.arguments or {})
                 self.state.events.append(f"{call.name}: {result}")
+                if self.sources is not None:
+                    self.sources.add(result)
                 self.history.append(Message(role=Role.TOOL, content=result,
                                             tool_call_id=call.id, name=call.name))

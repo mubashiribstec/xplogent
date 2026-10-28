@@ -304,6 +304,13 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
                       fields=build_collector(field_configs),
                       contact=contact, retrieve=retrieve, store=store, can_transfer=can_transfer,
                       can_send_dtmf=send_dtmf is not None and dtmf_on, brief=brief)
+    guard_cfg = v.get("guard") or {}
+    if guard_cfg.get("enabled", True):
+        from xplogent.voip.guard import KINDS
+
+        kinds = tuple(k for k in (guard_cfg.get("check") or KINDS) if k in KINDS)
+        if kinds:
+            brain.enable_guard(kinds)
     greeting_v = {**v, "greeting": template["greeting"]} if template else v
     if info.get("via_queue") and str(v.get("queue_greeting") or "").strip():
         greeting_v = {**greeting_v, "greeting": v["queue_greeting"]}   # disclosure rules still apply
@@ -437,6 +444,9 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
             bits.append(f"exit: {st.exit_path}")
         if bits:
             summary = (summary + " | Fields: " + "; ".join(bits)).strip(" |")
+    blocked = len(getattr(brain, "guard_blocked", []) or [])
+    if blocked:
+        summary = (summary + f" | Guard: {blocked} sentence(s) with an unconfirmed figure replaced").strip(" |")
     store.end_call(call_id, outcome=outcome, summary=summary, cost=cost)
     try:                                # the debug view's record of the call (voip/debug.py)
         from xplogent.voip import debug

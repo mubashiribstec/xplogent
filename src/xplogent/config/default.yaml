@@ -244,6 +244,9 @@ voip:
     long_speech_s: 4               # speech this long without a pause = a recorded greeting
     beep: true                     # a voicemail beep (800-1200 Hz tone) = machine
     telnyx_amd: premium            # Telnyx calls also use the carrier's detection: premium | detect | "" (off)
+  guard:                           # the agent may only state figures it was given (ROLE FACTS, knowledge, the caller, tools)
+    enabled: true
+    check: [money, hours, dates]   # a sentence with an unconfirmed figure is replaced by "the recruiter will confirm it"
   alerts:                          # a person is told when calls keep failing, the CRM is down, or calls were cut off
     min_gap_minutes: 15            # at most one alert of each kind this often (webhook address: secret XPLOGENT_ALERT_WEBHOOK_URL)
   recording:                       # stereo WAV per call (caller left, agent right), playable in Calls

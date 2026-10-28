@@ -131,6 +131,7 @@ def build_payload(cfg: Config, store, call_id: int, result: dict[str, Any],
         "transcript": [{"speaker": t["speaker"], "text": t["text"]}
                        for t in call.get("turns", [])],
         "test": bool(call.get("test")),
+        "guard_blocked": len(getattr(brain, "guard_blocked", []) or []) if brain is not None else 0,
         "recording_available": bool(call.get("recording")),   # audio stays on this server
     }
 

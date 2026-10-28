@@ -268,6 +268,19 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
     beep (an 800–1,200 Hz tone). On a machine it hangs up silently: outcome `voicemail`, which
     the CRM counts as an attempt. On Telnyx calls the carrier's detection is used as well
     (`voicemail.telnyx_amd: premium`).
+- **No invented figures** (`voip.guard`): before each sentence is spoken, any pay ("£15 an hour",
+  "£25k a year"), working hours ("37.5 hours a week", "12-hour shifts") or date ("the 1st of
+  March") in it must appear in what the agent knows on this call:
+  - the vacancy's ROLE FACTS from the CRM;
+  - the knowledge it looked up;
+  - the caller's own words;
+  - a tool's result;
+  - the next two weeks of the calendar.
+
+  If it doesn't, the caller hears "I don't have that exact figure in front of me, but the
+  recruiter will confirm it". The original sentence is shown under **Not said** in the call's
+  debug view, and the call summary counts it. If a blocked figure is right, add it to the
+  vacancy in the CRM or to Knowledge.
 - **Alerts** (Setup → Alerts): paste a Slack or Teams incoming-webhook address (it's stored
   as the secret `XPLOGENT_ALERT_WEBHOOK_URL`). You're told when:
   - 5 calls in a row fail (a busy line or no answer doesn't count);
