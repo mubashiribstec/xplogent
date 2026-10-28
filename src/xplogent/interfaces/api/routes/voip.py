@@ -556,8 +556,41 @@ async def voip_crm_test() -> dict:
     out = await crm.deliver(cfg, {"event": "call.test", "call_id": 0, "test": True,
                                   "summary": "Xplogent test delivery", "transcript": []},
                             attempts=1)
-    deps.audit_event("voip_crm_test", target=out["status"], risk="low")
-    return {"ok": out["status"] == "sent", "status": out["status"], "detail": out["detail"]}
+    # API v2 (vacancies, queues, dial locks): one harmless read tells us whether the CRM
+    # has the new endpoints and accepts our token, signature and clock.
+    v2 = await crm.sales_open(cfg, limit=1)
+    v2_out = {"ok": v2["ok"], "status": v2["status"], "ms": v2["ms"], "error": v2["error"],
+              "api_version": v2["data"].get("api_version"), "open_vacancies_seen": len(v2["sales"]),
+              **crm.explain_failure(v2)}
+    deps.audit_event("voip_crm_test", target=f"{out['status']}; v2 {'ok' if v2['ok'] else v2['error']}",
+                     risk="low")
+    return {"ok": out["status"] == "sent", "status": out["status"], "detail": out["detail"], "v2": v2_out}
+
+
+@router.post("/voip/crm/sales")
+async def voip_crm_sales(body: dict | None = None) -> dict:
+    """Open vacancies from the CRM (campaign picker)."""
+    from xplogent.voip import crm
+
+    body = body or {}
+    res = await crm.sales_open(load_config(), str(body.get("search") or ""), int(body.get("limit") or 50))
+    return {"ok": res["ok"], "sales": res["sales"], "error": res["error"], "message": res["message"],
+            **({} if res["ok"] else crm.explain_failure(res))}
+
+
+@router.post("/voip/crm/queue")
+async def voip_crm_queue(body: dict) -> dict:
+    """Preview who the CRM would have the agent call for a vacancy (and who it skips, why)."""
+    from xplogent.voip import crm
+
+    try:
+        sale_id = int(body.get("sale_id"))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "sale_id is required"}
+    res = await crm.campaign_queue(load_config(), sale_id, radius_km=float(body.get("radius_km") or 15),
+                                   limit=int(body.get("limit") or 50))
+    return {"ok": res["ok"], "sale": res["sale"], "candidates": res["candidates"], "skipped": res["skipped"],
+            "error": res["error"], "message": res["message"]}
 
 
 @router.post("/voip/playbook/build")

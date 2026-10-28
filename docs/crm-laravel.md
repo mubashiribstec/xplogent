@@ -254,3 +254,32 @@ class XplogentContactLookupController
     }
 }
 ```
+
+## API v2: vacancies, candidates, dial locks (recruitment CRM)
+The full contract is in [`crm-integration-prompt.md`](crm-integration-prompt.md): `sales/open`,
+`campaigns/queue`, `contact-lookup` (v2 record), `call-summary` (v2 fields),
+`send-job-details` and `dial-lock` / `dial-unlock`. All are signed exactly as above.
+
+What changes on the Xplogent side:
+- **`call-summary` now also carries `api_version: 2`**, plus:
+  - `applicant_id`, `sale_id`, `campaign_id`;
+  - `final_attempt`, `callback_at`;
+  - `answers` (the collected fields) and `email_confirmed`;
+  - `provider_call_id`;
+  - `outcome_detail` (the agent's own outcome word).
+
+  `outcome` is always one of the contract's values (`interested`, `callback`, `not_interested`,
+  `no_job`, `do_not_call`, `screen_incomplete`, `interrupted`, `other`…). A receiver built for
+  v1 ignores the new fields.
+- **The call brief:**
+  - a campaign call carries the vacancy (`sale`) and the candidate from `campaigns/queue`;
+  - an inbound caller the CRM knows carries their `applicant_id` and history from
+    `contact-lookup`;
+  - the agent sees them as read-only ROLE FACTS / CANDIDATE / HISTORY sections. Pay and hours
+    come only from ROLE FACTS.
+- **Calls cut off by a restart** are sent with `outcome: interrupted` and the transcript so far.
+
+**Trying it before the CRM is updated:** `xplogent voip mock-crm --port 8089` runs a stand-in
+that enforces the same token, signature and clock checks and serves sample vacancies and
+candidates. Point Calls → Call agent → CRM address at `http://127.0.0.1:8089` and press
+**Test connection**. `http://127.0.0.1:8089/_mock/state` shows what it received.

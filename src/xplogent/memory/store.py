@@ -238,6 +238,7 @@ _MIGRATIONS = [
     ("calls", "crm_detail", "TEXT DEFAULT ''"),
     ("calls", "crm_payload", "TEXT DEFAULT ''"),    # exactly what was sent, for Resend
     ("calls", "demo", "INTEGER DEFAULT 0"),         # sample data for demos: never counted, never sent
+    ("calls", "brief", "TEXT DEFAULT ''"),          # JSON call brief: applicant, vacancy, campaign (CRM v2)
 ]
 # Stored in the database (PRAGMA user_version): changes whenever the schema text or
 # the migration list changes, so existing databases get upgraded automatically.
@@ -292,6 +293,11 @@ class SkillRow:
 
 def _without_payload(call: dict[str, Any]) -> dict[str, Any]:
     call.pop("crm_payload", None)       # large, and only Resend needs it (get_crm_payload)
+    if "brief" in call:
+        try:
+            call["brief"] = json.loads(call["brief"]) if call["brief"] else None
+        except ValueError:
+            call["brief"] = None
     return call
 
 
@@ -934,6 +940,9 @@ class Store:
              int(test), transport, line, original_called_number, int(via_queue),
              diversion_reason, queue_wait_s))
         return int(cur.lastrowid)
+
+    def set_call_brief(self, call_id: int, brief: dict[str, Any]) -> None:
+        self._write("UPDATE calls SET brief=? WHERE id=?", (json.dumps(brief, default=str), call_id))
 
     def add_call_turn(self, call_id: int, speaker: str, text: str) -> None:
         self._write("INSERT INTO call_turns (call_id, speaker, text, created_at) VALUES (?,?,?,?)",

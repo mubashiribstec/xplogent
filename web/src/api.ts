@@ -418,7 +418,9 @@ export interface CallAgentInfo {
 export async function getCallAgent(): Promise<CallAgentInfo> {
   return (await fetch("/voip/agent")).json();
 }
-export const testCrm = () => postJSON<{ ok: boolean; status?: string; detail?: string; error?: string }>("/voip/crm/test");
+export interface CrmV2Check { ok: boolean; status: number; ms: number; error: string; api_version?: number;
+  open_vacancies_seen: number; reason: string; fix: string }
+export const testCrm = () => postJSON<{ ok: boolean; status?: string; detail?: string; error?: string; v2?: CrmV2Check }>("/voip/crm/test");
 export const clearSipBusy = (line = "") => postJSON<{ ok: boolean }>("/voip/sip/busy/clear", line ? { line } : {});
 export async function getVoices(provider = ""): Promise<{ ok: boolean; voices: { id: string; name: string }[]; error?: string }> {
   return (await fetch(`/voip/speech/voices${provider ? `?provider=${encodeURIComponent(provider)}` : ""}`)).json();

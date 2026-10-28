@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CallAgentInfo, getCallAgent, patchConfig, putSecrets, testCrm } from "../api";
+import { CallAgentInfo, CrmV2Check, getCallAgent, patchConfig, putSecrets, testCrm } from "../api";
 
 type Toaster = (m: string, kind?: any) => void;
 const fmt = (t: number) => (t ? new Date(t * 1000).toLocaleString() : "—");
@@ -12,6 +12,7 @@ const LABELS: Record<string, string> = {
 export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: () => void }) {
   const [info, setInfo] = useState<CallAgentInfo | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [v2, setV2] = useState<CrmV2Check | null>(null);
   const [busy, setBusy] = useState(false);
   const load = () => getCallAgent().then(setInfo).catch(() => {});
   useEffect(() => { load(); }, []);
@@ -21,10 +22,11 @@ export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: (
     await patchConfig({ voip }); toast(note, "success"); load(); onChange();
   };
   const test = async () => {
-    setBusy(true); setMsg(null);
+    setBusy(true); setMsg(null); setV2(null);
     try {
       const r = await testCrm();
-      setMsg(r.ok ? { ok: true, text: `delivered (${r.detail})` } : { ok: false, text: r.error ?? r.detail ?? r.status ?? "failed" });
+      setMsg(r.ok ? { ok: true, text: `call summaries: delivered (${r.detail})` } : { ok: false, text: "call summaries: " + (r.error ?? r.detail ?? r.status ?? "failed") });
+      setV2(r.v2 ?? null);
       load();
     } finally { setBusy(false); }
   };
@@ -65,11 +67,17 @@ export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: (
                 }} />
             : <span className="dim mono" style={{ fontSize: 12 }}>from ${info.crm.token_env}</span>}</label>
         <button className="btn" onClick={test} disabled={busy || !info.crm.enabled || !info.crm.base_url || !info.crm.token_set}>
-          {busy ? "Sending…" : "Send test"}</button>
+          {busy ? "Testing…" : "Test connection"}</button>
       </div>
       <p className="dim" style={{ fontSize: 12 }}>Signed with the token (HMAC-SHA256); nothing is sent until it is set.
-        See docs/crm-laravel.md for the receiving side.</p>
+        Test connection checks both the call-summary push and the CRM's v2 endpoints (vacancies, candidates, dial
+        locks). The CRM side is described in docs/crm-integration-prompt.md; to try everything before it's deployed,
+        run <span className="mono">xplogent voip mock-crm</span> and use http://127.0.0.1:8089 as the address.</p>
       {msg && <p className={msg.ok ? "ok" : "warn"}>{msg.ok ? "✓" : "✗"} {msg.text}</p>}
+      {v2 && (v2.ok
+        ? <p className="ok">✓ CRM API v2: vacancies, candidates and dial locks reachable ({Math.round(v2.ms)} ms,
+            {" "}{v2.open_vacancies_seen ? "open vacancies found" : "no open vacancies right now"})</p>
+        : <p className="warn">✗ CRM API v2: {v2.reason} <span className="dim">{v2.fix}</span></p>)}
       {info.crm.deliveries.length > 0 && (
         <details><summary className="dim">Recent deliveries ({info.crm.deliveries.length})</summary>
           <table className="data-table"><thead><tr><th>When</th><th>Call</th><th>Try</th><th>Result</th></tr></thead>

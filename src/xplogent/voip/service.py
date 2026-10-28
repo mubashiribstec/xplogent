@@ -97,9 +97,33 @@ def call_variables(v: dict[str, Any], info: dict[str, Any],
         "original_called_number": str(info.get("original_called_number") or ""),
         "queue_wait_s": info.get("queue_wait_s") or "",
     }
+    brief = info.get("brief") if isinstance(info.get("brief"), dict) else {}
+    sale, cand = brief.get("sale") or {}, brief.get("candidate") or {}
+    if cand.get("first_name") or cand.get("name"):
+        variables["candidate_name"] = cand.get("first_name") or str(cand["name"]).split()[0]
+        variables["first_name"] = variables["candidate_name"]
+    if sale.get("job_title"):
+        variables["role"] = sale["job_title"]
+    if sale.get("site_name") or sale.get("postcode_district"):
+        variables["location"] = sale.get("site_name") or sale["postcode_district"]
+    for key in ("salary", "timing", "position_type"):
+        if sale.get(key):
+            variables[key] = sale[key]
     for key, value in ((contact or {}).get("fields") or {}).items():
         variables.setdefault(str(key), value)
     return variables
+
+
+def brief_from_lookup(crm_contact: dict[str, Any]) -> dict[str, Any]:
+    """A CRM-known caller with no campaign brief (inbound, manual dial): enough for the
+    summary to name the applicant and for the agent to know their history."""
+    if not crm_contact.get("applicant_id"):
+        return {}
+    return {"applicant_id": crm_contact["applicant_id"],
+            "candidate": {k: crm_contact.get(k) for k in ("first_name", "postcode_district",
+                                                         "job_title", "flags") if crm_contact.get(k)},
+            "history": crm_contact.get("history") or [],
+            "callback_note": crm_contact.get("callback_note") or ""}
 
 
 def _session_class(v: dict[str, Any], session_kw: dict[str, Any]) -> tuple[type, dict[str, Any]]:
@@ -212,6 +236,10 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         contact = merge_crm_contact(contact, lookup["contact"], customer)
     if contact is not None and store.is_dnc(contact.get("phone") or customer):
         contact = {**contact, "do_not_call": True}
+    brief = dict(info.get("brief") or {}) if isinstance(info.get("brief"), dict) else {}
+    if not brief and lookup.get("found") and lookup.get("contact"):
+        brief = brief_from_lookup(lookup["contact"])
+    info = {**info, "brief": brief} if brief else info
     direction = str(info.get("direction_label") or ("outbound" if is_outbound(info) else "inbound"))
     call_id = store.start_call(direction, info.get("from", ""), info.get("to", ""),
                                provider_call_id=info.get("call_control_id", ""),
@@ -222,6 +250,8 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
                                via_queue=bool(info.get("via_queue")),
                                diversion_reason=str(info.get("diversion_reason") or ""),
                                queue_wait_s=info.get("queue_wait_s"))
+    if brief:
+        store.set_call_brief(call_id, brief)
 
     if provider is None:
         from xplogent.providers.registry import build_provider
@@ -267,7 +297,7 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
                       playbook=render_template(playbook_text, variables),
                       fields=build_collector(field_configs),
                       contact=contact, retrieve=retrieve, store=store, can_transfer=can_transfer,
-                      can_send_dtmf=send_dtmf is not None and dtmf_on)
+                      can_send_dtmf=send_dtmf is not None and dtmf_on, brief=brief)
     greeting_v = {**v, "greeting": template["greeting"]} if template else v
     if info.get("via_queue") and str(v.get("queue_greeting") or "").strip():
         greeting_v = {**greeting_v, "greeting": v["queue_greeting"]}   # disclosure rules still apply
@@ -467,7 +497,7 @@ class VoipService:
     # -- outbound ---------------------------------------------------------------------
     async def dial(self, to_number: str, cfg: Config | None = None, *, contact_id: int | None = None,
                    test: bool = False, via: str = "telnyx",
-                   ignore_hours: bool = False) -> dict[str, Any]:
+                   ignore_hours: bool = False, brief: dict[str, Any] | None = None) -> dict[str, Any]:
         """Place an outbound call. The do-not-call list is checked *before* dialing:
         ringing a number that opted out is already the violation. Calling hours are
         checked too (in the contact's time zone) unless overridden or a test call."""
@@ -496,12 +526,15 @@ class VoipService:
         # Both SIP lines share the "sip" transport; the line tag keeps them apart.
         meta = {"contact_id": contact["id"] if contact else None, "test": test,
                 "transport": "sip" if via in ("sip", "extension") else via}
+        if brief:                        # campaign call: the vacancy and the candidate (CRM v2)
+            meta["brief"] = brief
         if not test:
             from xplogent.voip import crm
 
             if crm.lookup_enabled(cfg):
                 found = await crm.lookup(cfg, number, direction="outbound",
-                                         line="extension" if via == "extension" else via)
+                                         line="extension" if via == "extension" else via,
+                                         sale_id=(brief or {}).get("sale_id"))
                 if found.get("found") and (found.get("contact") or {}).get("do_not_call"):
                     return {"ok": False, "error": "the CRM marks this number do-not-call"}
                 meta["crm_lookup"] = found

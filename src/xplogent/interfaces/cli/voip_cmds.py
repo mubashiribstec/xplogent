@@ -147,3 +147,27 @@ def debug_cmd(call_id: int = typer.Argument(..., help="Call number (from `xploge
         return
     for line in summary_lines(doc):
         console.print(line, markup=False, highlight=False)
+
+
+@voip_app.command("mock-crm")
+def mock_crm(port: int = typer.Option(8089, "--port"),
+             host: str = typer.Option("127.0.0.1", "--host"),
+             token: str = typer.Option("", "--token", help="Shared token (default: the CRM token saved "
+                                                           "in Xplogent, so the two match).")) -> None:
+    """Run a stand-in CRM (API v2) with sample vacancies and candidates, for trying the
+    CRM link before the real CRM is updated. Point Settings → CRM at http://HOST:PORT."""
+    import uvicorn
+
+    from xplogent.core.config import load_config, load_dotenv
+    from xplogent.voip.crm import token_env
+    from xplogent.voip.mock_crm import create_app
+
+    load_dotenv()
+    name = token_env(load_config())
+    token = token or os.environ.get(name, "")
+    if not token:
+        console.print(f"[red]No token:[/] save a CRM token in Xplogent ({name}) or pass --token.")
+        raise typer.Exit(2)
+    console.print(f"Mock CRM on http://{host}:{port} (token from {'--token' if token != os.environ.get(name) else name}). "
+                  f"What it received: http://{host}:{port}/_mock/state")
+    uvicorn.run(create_app(token), host=host, port=port, log_level="warning")
