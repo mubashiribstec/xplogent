@@ -283,7 +283,7 @@ export interface Contact {
 }
 export interface VoipStatus {
   enabled: boolean; public_url: string; has_secret: boolean; contacts: number; calls: number;
-  active: LiveCallInfo[];
+  active: LiveCallInfo[]; spend_today?: number; daily_cost_cap?: number;
 }
 export interface LiveCallInfo {
   call_id: number; number: string; direction: string; transport: string; test: boolean;

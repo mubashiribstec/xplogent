@@ -339,6 +339,15 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
             session_kw["amd"] = MachineDetector(window_s=float(vm.get("window_s", 6)),
                                                 long_speech_s=float(vm.get("long_speech_s", 4)),
                                                 beep=bool(vm.get("beep", True)))
+    # Limits: the campaign's, else the template's, else the general maximum call length.
+    max_call_s = float(brief.get("max_call_seconds") or (template or {}).get("max_call_seconds")
+                       or v.get("max_call_seconds", 900))
+    costs = v.get("costs") or {}
+    session_kw.setdefault("cost_rates", {"per_minute": float(v.get("cost_per_minute", 0) or 0),
+                                         **{k: float(costs.get(k) or 0) for k in
+                                            ("tts_per_1k_chars", "llm_input_per_m", "llm_output_per_m")}})
+    session_kw.setdefault("cost_cap", float(brief.get("per_call_cost_cap") or v.get("per_call_cost_cap") or 0))
+    session_kw.setdefault("quick_close_s", float(v.get("quick_close_s", 45)))
     vad_cfg = v.get("vad", {}) or {}
     # Live speech-to-text only with the configured provider (an injected stt is a test's).
     stream_stt = session_kw.pop("stream_stt") if "stream_stt" in session_kw else (
@@ -353,7 +362,7 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
                 silence_ms=int(vad_cfg.get("silence_ms", 700)),
                 min_speech_ms=int(vad_cfg.get("min_speech_ms", 200)),
                 max_utterance_ms=int(vad_cfg.get("max_utterance_ms", 15000))),
-        max_call_s=float(v.get("max_call_seconds", 900)),
+        max_call_s=max_call_s,
         send_dtmf=send_dtmf if dtmf_on else None, recorder=_recorder(v, call_id),
         stream_stt=stream_stt, **rt_kw, **session_kw)
     session.dtmf_enabled = dtmf_on
@@ -435,7 +444,8 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
     """Write the end-of-call record: outcome, summary, cost; honour do-not-call."""
     st = brain.state
     minutes = session.duration_s / 60.0
-    cost = round(minutes * float((cfg.voip or {}).get("cost_per_minute", 0.0)), 4)
+    cost = (session.cost_estimate() if hasattr(session, "cost_estimate")
+            else round(minutes * float((cfg.voip or {}).get("cost_per_minute", 0.0)), 4))
     outcome = st.outcome or ("callback" if st.callback else
                              "transfer_failed" if st.transfer_failed else "abandoned")
     summary = st.summary or (f"Callback requested: {st.callback}" if st.callback else "")
@@ -507,6 +517,33 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
                      "fields": fields_report, "latency_ms": session.latencies_ms})
 
 
+def spend_today(cfg: Config) -> float:
+    """Dollars spent on real calls since midnight (calling-hours time zone)."""
+    from datetime import datetime
+
+    from xplogent.voip import hours
+
+    tz, _ = hours._zone(cfg.voip or {}, None)
+    midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    with Store(cfg.db_path) as store:
+        return store.spend_since(midnight.timestamp())
+
+
+def daily_cap_problem(cfg: Config) -> str:
+    """Why no new outbound call may start today ("" = fine); alerts once at 80 % of the cap."""
+    cap = float((cfg.voip or {}).get("daily_cost_cap") or 0)
+    if cap <= 0:
+        return ""
+    spent = spend_today(cfg)
+    if spent >= cap:
+        alerts.alert("daily_cost_cap", f"Today's call spending (${spent:.2f}) reached the cap of ${cap:.2f}: "
+                                       "no new outbound calls until midnight.")
+        return f"today's spending cap is reached (${spent:.2f} of ${cap:.2f}); calls resume tomorrow"
+    if spent >= 0.8 * cap:
+        alerts.alert("daily_cost_80", f"Today's call spending is ${spent:.2f}, 80 % of the ${cap:.2f} cap.")
+    return ""
+
+
 def recover_interrupted_calls(cfg: Config | None = None, live_ids: set[int] | None = None) -> list[int]:
     """At start-up: calls left 'active' by a stop mid-call become 'interrupted', their
     transcript so far goes to the CRM, and an alert says how many were cut off."""
@@ -575,6 +612,8 @@ class VoipService:
             problem = calling_hours_problem(v, contact)
             if problem:
                 return {"ok": False, "error": problem, "hours": True}
+        if not test and (cap_problem := daily_cap_problem(cfg)):
+            return {"ok": False, "error": cap_problem, "cost_cap": True}
         # Both SIP lines share the "sip" transport; the line tag keeps them apart.
         meta = {"contact_id": contact["id"] if contact else None, "test": test,
                 "transport": "sip" if via in ("sip", "extension") else via}

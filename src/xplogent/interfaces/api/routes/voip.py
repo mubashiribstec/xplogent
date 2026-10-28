@@ -76,6 +76,10 @@ async def voip_status() -> dict:
 
     out["capacity"] = {line: {k: t.status()[k] for k in ("calls", "max_calls", "busy_24h", "last_busy_at")}
                        for line in ("trunk", "extension") if (t := current_line(line)) is not None}
+    from xplogent.voip.service import spend_today
+
+    out["spend_today"] = spend_today(cfg)
+    out["daily_cost_cap"] = float(v.get("daily_cost_cap") or 0)
     return out
 
 

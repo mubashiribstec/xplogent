@@ -284,6 +284,21 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
 - **Fast replies on Gemini Flash:** calls ask the model for no "thinking"
   (`thinkingBudget: 0`). With Gemini's default, one reply with a tool call took 17–30 s instead
   of about 1.5 s.
+- **Limits that save credit** (Setup → Conversation):
+  - **Length:** the screening template stops at 8 minutes (`max_call_seconds` otherwise; a
+    campaign can set its own). A minute before the limit the agent is told to wrap up and offer
+    a recruiter callback.
+  - **Off-topic:** each time the agent steers back to the purpose it says so (`redirect`);
+    the third time in a row it closes politely (`exit: off_topic`, CRM outcome
+    `screen_incomplete`).
+  - **No purpose left:** after "not interested", "no job", "do not call" or the wrong person,
+    the call ends within 45 s (`quick_close_s`).
+  - **Cost:** each call's estimate = minutes × `cost_per_minute` + voice characters × `costs.tts_per_1k_chars`
+    + model tokens × `costs.llm_input_per_m` / `llm_output_per_m`.
+    - At `per_call_cost_cap` the call ends politely.
+    - At `daily_cost_cap` no new outbound calls start until midnight; an alert goes out at
+      80 % and at 100 %.
+    - Test calls never count.
 - **No invented figures** (`voip.guard`): before each sentence is spoken, any pay ("£15 an hour",
   "£25k a year"), working hours ("37.5 hours a week", "12-hour shifts") or date ("the 1st of
   March") in it must appear in what the agent knows on this call:

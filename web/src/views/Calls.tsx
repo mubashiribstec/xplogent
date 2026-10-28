@@ -237,6 +237,12 @@ export function Calls() {
             <label className="bud"><span className="lbl-sm">Max call length (s)</span>
               <input type="number" defaultValue={cfg.max_call_seconds ?? 900}
                 onBlur={(e) => save({ max_call_seconds: Number(e.target.value) || 900 })} style={{ width: 90 }} /></label>
+            <label className="bud"><span className="lbl-sm">Cost cap per call ($, 0 = none)</span>
+              <input type="number" step="0.05" min={0} defaultValue={cfg.per_call_cost_cap ?? 0}
+                onBlur={(e) => save({ per_call_cost_cap: Math.max(0, Number(e.target.value) || 0) })} style={{ width: 90 }} /></label>
+            <label className="bud"><span className="lbl-sm">Daily cap ($, 0 = none)</span>
+              <input type="number" step="1" min={0} defaultValue={cfg.daily_cost_cap ?? 0}
+                onBlur={(e) => save({ daily_cost_cap: Math.max(0, Number(e.target.value) || 0) })} style={{ width: 90 }} /></label>
             <label className="bud"><span className="lbl-sm">Call recording</span>
               <select value={cfg.recording?.enabled === false ? "off" : "on"}
                 onChange={(e) => save({ recording: { enabled: e.target.value === "on" } })}>
@@ -263,6 +269,12 @@ export function Calls() {
                 <option value="on">detect and hang up (no message left)</option>
                 <option value="off">don't detect</option></select></label>
           </div>
+          {status?.spend_today !== undefined && <p className="dim" style={{ fontSize: 12 }}>
+            Spent today (estimate): <b>${status.spend_today.toFixed(2)}</b>
+            {status.daily_cost_cap ? <> of ${status.daily_cost_cap.toFixed(2)}{status.spend_today >= status.daily_cost_cap
+              ? <span className="warn"> · cap reached: no new outbound calls until midnight</span>
+              : status.spend_today >= 0.8 * status.daily_cost_cap ? <span className="warn"> · over 80 %</span> : null}</> : null}
+            . A call ends politely at its cost cap; the agent wraps up a minute before the length limit.</p>}
           <p className="dim" style={{ fontSize: 12 }}>Add your scripts and FAQs under Knowledge and your customers under
             Contacts: the agent answers only from those.</p>
         </div></CardBoundary>

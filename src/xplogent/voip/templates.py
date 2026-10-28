@@ -67,6 +67,7 @@ HARD RULES:
 OUTBOUND_SCREENER_TEMPLATE: dict[str, Any] = {
     "name": "kingsbury_outbound_screener",
     "direction": "outbound",
+    "max_call_seconds": 480,            # a screen takes 3-4 minutes; 8 at most
     "greeting": ("Hello, is that {{candidate_name}}? I'm an AI assistant calling from "
                  "{company} about the {{role}} role in {{location}} that you applied "
                  "for. This call is transcribed so we can pass your answers to our "

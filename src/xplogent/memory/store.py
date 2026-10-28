@@ -997,6 +997,12 @@ class Store:
             d["brief"] = {}
         return d
 
+    def spend_since(self, since: float) -> float:
+        """Estimated cost of real calls (not tests or demo data) started since ``since``."""
+        row = self._query("SELECT COALESCE(SUM(cost), 0) FROM calls WHERE started_at>=? AND test=0 AND demo=0",
+                          (since,))
+        return round(float(row[0][0] or 0), 4)
+
     def set_call_brief(self, call_id: int, brief: dict[str, Any]) -> None:
         self._write("UPDATE calls SET brief=? WHERE id=?", (json.dumps(brief, default=str), call_id))
 

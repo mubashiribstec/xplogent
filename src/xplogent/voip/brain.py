@@ -48,7 +48,10 @@ Rules:
   account number or a menu choice). Repeat important numbers back to confirm them."""
 
 OUTCOMES = {"resolved", "callback", "recruiter_callback", "transferred", "interested", "not_interested",
-            "do_not_call", "no_job", "wrong_person", "other"}
+            "do_not_call", "no_job", "wrong_person", "screen_incomplete", "other"}
+# After one of these the call has no purpose left: the engine closes it soon (quick close).
+CLOSING_OUTCOMES = {"not_interested", "no_job", "do_not_call", "wrong_person"}
+MAX_REDIRECTS = 3
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|(?<=[.!?])$")
 
@@ -77,6 +80,10 @@ TOOLS = [
                        "when": {"type": "string", "description": "Only if no exact time could be agreed."}}}),
     ToolSpec("transfer_to_human", "Hand the call to a human agent.", {
         "type": "object", "properties": {"reason": {"type": "string"}}}),
+    ToolSpec("redirect", "Call this each time you steer the caller back to the purpose of the call "
+             "because they went off-topic (asked for something unrelated, kept chatting). After "
+             "the third time in a row the system tells you to close the call politely.", {
+        "type": "object", "properties": {"topic": {"type": "string", "description": "What they went off on."}}}),
     ToolSpec("lookup_customer", "Re-read the record of the customer on this call (if known).", {
         "type": "object", "properties": {}}),
     ToolSpec("press_keys", "Press phone keypad keys (DTMF), e.g. to choose an option in a company's "
@@ -112,6 +119,8 @@ class CallState:
     callback_at: str = ""               # ISO time of an agreed callback (exact-time callbacks)
     callback_who: str = ""              # ai | recruiter
     callback_note: str = ""
+    closing_since: float = 0.0          # when a closing outcome was logged (quick close)
+    redirects: int = 0                  # consecutive off-topic redirects
     transfer: bool = False
     transfer_reason: str = ""
     end: bool = False
@@ -234,6 +243,8 @@ class CallBrain:
         # Exact-time callbacks (voip/callbacks.py): checks a proposed time; NOW in the prompt.
         self.callback_check: Any = None     # (at, who) -> callbacks.check() result
         self._vague_callback_refused = False
+        self._redirected_this_turn = False
+        self.tokens = {"input": 0, "output": 0}     # model usage on this call (cost estimate)
         self.now_line: Any = None           # () -> "NOW: Wednesday 28 October 2026, 10:15 (...)"
         self.identity_check = ""        # outbound: whose identity the opening line asked about
         self.opening_words = ""         # what the callee said before the agent's first line
@@ -349,6 +360,10 @@ class CallBrain:
                 outcome = st.outcome                   # a booked callback stays the result
             st.outcome = outcome
             st.summary = str(args.get("summary", ""))
+            if outcome in CLOSING_OUTCOMES and not st.closing_since:
+                import time
+
+                st.closing_since = time.time()
             if st.outcome == "do_not_call":
                 st.do_not_call = True
             return "outcome recorded"
@@ -387,6 +402,16 @@ class CallBrain:
             st.transfer_reason = str(args.get("reason", ""))
             st.outcome = st.outcome or "transferred"
             return "transferring now; tell the customer you are connecting them"
+        if name == "redirect":
+            self._redirected_this_turn = True
+            st.redirects += 1
+            if st.redirects >= MAX_REDIRECTS:
+                st.exit_path, st.end = "off_topic", True
+                if not st.outcome:
+                    st.outcome = "screen_incomplete"
+                return ("That's the third time: close the call now, politely. Say a recruiter can help "
+                        "with anything else, then say goodbye.")
+            return "noted; carry on with the call's purpose"
         if name == "press_keys":
             digits = "".join(c for c in str(args.get("digits", "")) if c in "0123456789*#ABCDabcd")[:32]
             if not digits:
@@ -448,6 +473,15 @@ class CallBrain:
                 self.sources.add(chunk)
         system = Message(role=Role.SYSTEM, content=self._system(knowledge))
         blocked_turn = [False]
+        self._redirected_this_turn = False
+        try:
+            async for sentence in self._respond_rounds(system, blocked_turn):
+                yield sentence
+        finally:
+            if not self._redirected_this_turn:
+                self.state.redirects = 0          # only consecutive redirects count
+
+    async def _respond_rounds(self, system: Message, blocked_turn: list[bool]) -> AsyncIterator[str]:
 
         for _round in range(3):  # tool round-trips within one turn
             buffer = ""
@@ -465,6 +499,9 @@ class CallBrain:
                             yield s
                 elif ev.kind == StreamKind.DONE:
                     final_msg = ev.message
+                    usage = getattr(final_msg, "usage", None) or {}
+                    self.tokens["input"] += int(usage.get("input_tokens") or 0)
+                    self.tokens["output"] += int(usage.get("output_tokens") or 0)
             tail, _ = split_sentences(buffer, final=True)
             for s in tail:
                 if (s := self._check(s, blocked_turn)) is not None:

@@ -220,7 +220,14 @@ voip:
     days: { mon: "", tue: "", wed: "", thu: "", fri: "", sat: "10:00-16:00", sun: closed }   # "" = start-end · closed · or like 10:00-16:00
     bank_holidays: closed          # closed | open (UK bank holidays from gov.uk, refreshed weekly)
     bank_holiday_region: england-and-wales   # or scotland, northern-ireland
-  cost_per_minute: 0.012           # your estimate: carrier + LLM (shown in the Calls view)
+  cost_per_minute: 0.012           # your estimate per minute: carrier + speech (shown in the Calls view)
+  costs:                           # added to the estimate: voice and model usage (0 = not counted)
+    tts_per_1k_chars: 0            # e.g. ElevenLabs Flash ≈ 0.04
+    llm_input_per_m: 0             # the call model's price per million input tokens
+    llm_output_per_m: 0            # ... and per million output tokens
+  per_call_cost_cap: 0             # end a call politely once its estimate reaches this ($; 0 = no cap)
+  daily_cost_cap: 0                # no new outbound calls once today's spend reaches this ($; 0 = no cap; alert at 80 %)
+  quick_close_s: 45                # after "not interested" / "no job" / "do not call", the call ends within this time
   knowledge_top_k: 3
   vad: { threshold: 500, silence_ms: 700, min_speech_ms: 200, max_utterance_ms: 15000 }
   silence: { prompt_after_s: 12, hangup_after_s: 30, max_prompts: 2 }   # caller gone quiet: up to max_prompts short prompts, then a polite goodbye and hang up

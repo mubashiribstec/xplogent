@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-EXIT_PATHS = {"refused", "hung_up", "wrong_party", "not_interested", "do_not_call"}
+EXIT_PATHS = {"refused", "hung_up", "wrong_party", "not_interested", "do_not_call", "off_topic"}
 
 
 def _validate_phone(raw: str, default_country: str = "") -> str | None:

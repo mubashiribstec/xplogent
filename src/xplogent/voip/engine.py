@@ -85,8 +85,16 @@ class CallSession:
                  send_dtmf: Callable[[str], Awaitable[None]] | None = None,
                  dtmf_keys: dict[str, str] | None = None, dtmf_gap_s: float = 2.0,
                  recorder: Any = None, stream_stt: Any = None,
-                 listen_first: bool = False, hello_wait_s: float = 2.5, amd: Any = None) -> None:
+                 listen_first: bool = False, hello_wait_s: float = 2.5, amd: Any = None,
+                 wrap_up_s: float = 60.0, quick_close_s: float = 45.0, cost_cap: float = 0.0,
+                 cost_rates: dict[str, float] | None = None) -> None:
         self.brain, self.stt, self.tts = brain, stt, tts
+        # Limits: a wrap-up note ``wrap_up_s`` before the time limit; ``quick_close_s`` after
+        # a closing outcome (not interested…); a polite end at ``cost_cap`` (0 = none).
+        self.wrap_up_s, self.quick_close_s, self.cost_cap = wrap_up_s, quick_close_s, cost_cap
+        self.cost_rates = dict(cost_rates or {})
+        self.tts_chars = 0
+        self._wrapped_up = False
         # Outbound: wait for the callee's "Hello?" (or ``hello_wait_s``) before the greeting,
         # so the agent doesn't talk over them and voicemail can be spotted first.
         self.listen_first, self.hello_wait_s = listen_first, hello_wait_s
@@ -256,6 +264,15 @@ class CallSession:
     @property
     def duration_s(self) -> float:
         return time.time() - self.started
+
+    def cost_estimate(self) -> float:
+        """Live estimate (dollars): minutes × per-minute rate + voice characters + model tokens."""
+        r = self.cost_rates
+        tokens = getattr(self.brain, "tokens", None) or {}
+        return round(self.duration_s / 60 * float(r.get("per_minute", 0))
+                     + self.tts_chars / 1000 * float(r.get("tts_per_1k_chars", 0))
+                     + int(tokens.get("input", 0)) / 1e6 * float(r.get("llm_input_per_m", 0))
+                     + int(tokens.get("output", 0)) / 1e6 * float(r.get("llm_output_per_m", 0)), 4)
 
     def _record(self, speaker: str, text: str) -> None:
         if text.strip():
@@ -691,6 +708,7 @@ class CallSession:
         self._speak_gen += 1
         gen = self._speak_gen
         self._speaking = True
+        self.tts_chars += len(text)
         loop = asyncio.get_running_loop()
         play_end = loop.time()  # when the carrier will have played everything sent
 
@@ -754,6 +772,28 @@ class CallSession:
                 await self._prompt("I'm sorry, we've reached the time limit for this call. "
                                    "Goodbye.", interrupt=True, wait=True)
                 await self._hangup("time limit reached")
+                return
+            if (not self._wrapped_up and self.max_call_s > 2 * self.wrap_up_s
+                    and now - self.started > self.max_call_s - self.wrap_up_s):
+                self._wrapped_up = True
+                self.event("wrap_up", f"{int(self.wrap_up_s)} s left")
+                self.brain.instruct("About one minute left on this call: wrap up now. Briefly sum up, "
+                                    "offer a recruiter callback for anything still open, then say goodbye.")
+            if self.cost_cap and self.cost_estimate() >= self.cost_cap:
+                self.event("cost_cap", f"${self.cost_estimate():.2f} of ${self.cost_cap:.2f}")
+                st = self.brain.state
+                st.outcome = st.outcome or "screen_incomplete"
+                st.exit_path = st.exit_path or "cost_cap"
+                await self._prompt("I'm sorry, I need to end our call now. A recruiter will follow up "
+                                   "with you. Goodbye.", interrupt=True, wait=True)
+                await self._hangup("cost cap reached")
+                return
+            since = getattr(self.brain.state, "closing_since", 0.0)
+            if since and now - since > self.quick_close_s and not self._speaking \
+                    and not (self._turn_task is not None and not self._turn_task.done()):
+                self.event("quick_close", f"{int(now - since)} s after the call's purpose ended")
+                await self._prompt("Thanks for your time. Goodbye.", wait=True)
+                await self._hangup("quick close")
                 return
             if self._speaking or self.vad.in_speech or getattr(self.brain, "paused", False):
                 continue
