@@ -235,6 +235,11 @@ card (`voip.recording.enabled: false`).
   the agent; re-transcribe with the other channel if it's wrong).
 - **Scripts, FAQs, price lists** (txt, md, pdf).
 - **Q&A sheet** (csv with `question` and `answer` columns): each row is one answer.
+- **Limits** (`voip.training`): 200 MB a file, 1 GB an upload, 20 GB kept in total, and 2 GB
+  of disk must stay free. An upload over a limit is refused before it is read, at most two
+  uploads are processed at once, and half-written files are always removed. Raise the limits
+  there if you need to; if you put a reverse proxy other than the bundled Caddy in front,
+  give it a matching body-size limit.
 
 Everything goes into the knowledge base the agent searches during a call (deleting an item
 removes it). **Build from calls** asks the call model to write a playbook draft (call flow,
@@ -254,7 +259,8 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
     The dates come from gov.uk, refreshed weekly, with a built-in list as the fallback, so a
     dial never waits on the internet;
   - the card shows whether calls are allowed now and the next allowed time. Test calls ignore
-    the hours.
+    the hours, which is why they may only ring your own test numbers (see **Call me**).
+    "Call anyway" outside the hours is an operator override and is written to the audit log.
 - **Outbound calls open safely** (Setup → Conversation; `voip.outbound`, `voip.voicemail`):
   - **Listen first:** after the callee answers, the agent waits for their "Hello?" (at most
     2.5 s) instead of talking over them.
@@ -298,7 +304,7 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
     - At `per_call_cost_cap` the call ends politely.
     - At `daily_cost_cap` no new outbound calls start until midnight; an alert goes out at
       80 % and at 100 %.
-    - Test calls never count.
+    - Test calls count too: they cost the same as any other call.
 - **No invented figures** (`voip.guard`): before each sentence is spoken, any pay ("£15 an hour",
   "£25k a year"), working hours ("37.5 hours a week", "12-hour shifts") or date ("the 1st of
   March") in it must appear in what the agent knows on this call:
@@ -393,8 +399,15 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
   - "the API key was refused";
   - "all 50 free-model requests for today are used". OpenRouter allows 20 requests a minute
     and 50 a day on free models; buying $10 of credits raises that to 1,000 a day.
-- **Call me**: rings your phone. Test calls are marked "test", not counted, and never change
-  a contact or the do-not-call list.
+- **Call me**: rings your phone. Test calls are marked "test", not counted in the stats, and
+  never change a contact or the do-not-call list. Because they skip the calling hours, they
+  are fenced in:
+  - they only ring your **test numbers** (listed under Call me, `voip.test_numbers`; adding or
+    removing one is audited), the PBX test extensions (`sip_extension.test_callers`), or a
+    short internal extension on a SIP line (2–6 digits);
+  - at most `voip.test_calls_per_day` a day (default 30);
+  - the do-not-call list and the daily cost cap still apply;
+  - the AI never dials 999, 112, 911 or 000, on any line.
 
 ## Debugging a call
 
@@ -469,7 +482,11 @@ live, especially before outbound calling. This is engineering documentation, not
   greeting and playbook. Pick one in Calls → Call agent.
 - **CRM (`voip.crm`).** On call end, a signed (HMAC-SHA256) `call.completed`
   webhook is POSTed with outcome, summary, field completeness and the
-  transcript — 3 attempts, backoff, delivery log at
+  transcript. The summary is stored in the database first (an outbox), then sent (3 quick
+  tries). If the CRM is down, it is retried after 1, 5 and 15 minutes, then hourly, also
+  across restarts; after 10 tries it is marked **gave up**, an alert goes out, and **Resend**
+  starts again. Summaries older than 7 days are only sent by hand. The CRM dedupes on
+  `call_id`, so a retry never adds a second note. Delivery log at
   `voip/crm_deliveries.jsonl`. Nothing is sent until the API token is set
   (Calls → Call agent, stored encrypted as `XPLOGENT_CRM_API_TOKEN`); **Send
   test** posts a sample. Each call row shows its delivery (`CRM sent` / `retrying` /
@@ -478,6 +495,17 @@ live, especially before outbound calling. This is engineering documentation, not
   agent also asks the CRM who the number is (signed `contact-lookup`, 1.5 s max, fails
   open to local contacts; the CRM's `do_not_call` blocks dialling). See
   `docs/crm-laravel.md`.
+  A manual call to a candidate the CRM knows takes the CRM's dial lock, as campaign calls do:
+  if a recruiter holds it, the call is refused with their name; if the CRM can't answer, the
+  call goes ahead with a warning (a person chose to call; campaigns stop instead). The lock
+  is freed when the call ends or doesn't connect, and only by the same lease's token.
+  **CRM address:** plain `http://` is fine when the CRM is on this machine or your local
+  network (a private address such as `http://192.168.1.20`, a machine name such as
+  `http://crm-server`, or a `.local`/`.lan` name). Across the internet it must be `https://`,
+  so the API token and candidate data never cross the internet unencrypted. If your CRM has
+  an internal name that looks public (`crm.mycompany.co.uk` resolving to a LAN address), set
+  `voip.crm.allow_http: true`. Redirects are never followed, so a redirect answer shows as an
+  error: put the final address in the settings instead.
 - **Knowledge gaps.** Questions the knowledge base couldn't answer are logged
   to `voip/knowledge_gaps.jsonl` (size-capped) and ranked in Calls → Call
   agent — that list is what to teach the agent next.

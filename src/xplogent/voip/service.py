@@ -8,6 +8,7 @@ socket loop, wrap up the call record, honour do-not-call).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from typing import Any
@@ -25,7 +26,7 @@ from xplogent.voip.control import (
     clean_number,
     resolve_transfer_number,
 )
-from xplogent.voip.crm import build_payload, crm_enabled, enqueue_delivery
+from xplogent.voip.crm import build_payload, crm_enabled
 from xplogent.voip.engine import CallSession
 from xplogent.voip.fields import build_collector
 from xplogent.voip.providers import build_streaming_stt, build_stt, build_tts
@@ -118,6 +119,32 @@ def call_variables(v: dict[str, Any], info: dict[str, Any],
     for key, value in ((contact or {}).get("fields") or {}).items():
         variables.setdefault(str(key), value)
     return variables
+
+
+_LOCK_KEYS = ("lock_token", "lock_phone", "manual_lock")
+
+
+async def release_manual_lock(cfg: Config, brief: dict[str, Any]) -> None:
+    """Free the CRM dial lock a manual call took (only its own token can)."""
+    from xplogent.voip import crm
+
+    try:
+        await crm.dial_unlock(cfg, str(brief.get("lock_phone") or ""), str(brief.get("lock_token") or ""))
+    except Exception:  # noqa: BLE001 - the lock expires by itself
+        _log.warning("could not release the CRM dial lock for %s", brief.get("lock_phone"))
+
+
+def _release_soon(cfg: Config, brief: dict[str, Any]) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return                       # no loop: the lock's TTL frees it
+    task = loop.create_task(release_manual_lock(cfg, brief))
+    _BG.add(task)
+    task.add_done_callback(_BG.discard)
+
+
+_BG: set[asyncio.Task] = set()
 
 
 def brief_from_lookup(crm_contact: dict[str, Any]) -> dict[str, Any]:
@@ -484,16 +511,16 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
         # Post-call CRM push (Part 3a): fire-and-forget, retried in crm.deliver;
         # a CRM outage never blocks or loses the call record.
         if crm_enabled(cfg):
-            from xplogent.voip.crm import status_writer
+            from xplogent.voip.crm import queue_summary
 
             payload = build_payload(cfg, store, call_id, result, brain, session)
-            store.set_crm_payload(call_id, payload)          # exactly this is resent, if needed
-            store.set_crm_status(call_id, "sending")
-            enqueue_delivery(cfg, payload, on_status=status_writer(cfg.db_path, call_id))
+            queue_summary(cfg, store, call_id, payload)      # stored first: the outbox retries it
         return result
     if not call.get("test"):
         alerts.session_result(session.turn_timings)
     campaign_brief = call.get("brief") if isinstance(call.get("brief"), dict) else {}
+    if campaign_brief.get("manual_lock"):          # a manual call's CRM dial lock ends with the call
+        _release_soon(cfg, campaign_brief)
     if campaign_brief.get("campaign_item_id") and not call.get("test"):
         # A campaign call: the campaign item carries the retry / callback, not scheduled_callbacks.
         get_service().dialler.call_finished(cfg, campaign_brief, outcome, call_id,
@@ -505,7 +532,7 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
 
         via = "extension" if call.get("line") == "extension" else (
             "sip" if call.get("transport") == "sip" else "telnyx")
-        brief = dict(call.get("brief") or {})
+        brief = {k: val for k, val in (call.get("brief") or {}).items() if k not in _LOCK_KEYS}
         note = st.callback_note or st.summary
         brief["callback_note"] = f"They asked us to call back {st.callback}." + (f" ({note[:200]})" if note else "")
         store.add_scheduled_callback(call_id, contact_phone, datetime.fromisoformat(st.callback_at).timestamp(),
@@ -536,6 +563,44 @@ def spend_today(cfg: Config) -> float:
         return store.spend_since(midnight.timestamp())
 
 
+# The AI never rings emergency services, on any line (999/112 UK and EU, 911 US, 000 AU).
+EMERGENCY_NUMBERS = {"999", "112", "911", "000"}
+
+
+def is_test_number(cfg: Config, number: str, via: str = "") -> bool:
+    """A saved test number, a PBX test extension, or a short internal extension on a SIP
+    line (internal calls don't reach the public network)."""
+    v = cfg.voip or {}
+    key = Store.phone_key(number)
+    if key and key in {Store.phone_key(str(n)) for n in (v.get("test_numbers") or [])}:
+        return True
+    if via in ("sip", "extension"):
+        testers = {str(t) for t in ((v.get("sip_extension") or {}).get("test_callers") or [])}
+        return number in testers or bool(re.fullmatch(r"[0-9*#]{2,6}", number))
+    return False
+
+
+def test_call_problem(cfg: Config, number: str, via: str) -> str:
+    """Why this test call may not be placed ("" = fine). Test calls skip the calling hours
+    and the stats, so they only go to your own test numbers, a limited number of times a day."""
+    v = cfg.voip or {}
+    if not is_test_number(cfg, number, via):
+        return ("test calls only go to your own test numbers: add this number under Calls → Call now → "
+                "Test numbers first")
+    limit = int(v.get("test_calls_per_day", 30) or 0)
+    from datetime import datetime
+
+    from xplogent.voip import hours
+
+    tz, _ = hours._zone(v, None)
+    midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    with Store(cfg.db_path) as store:
+        made = store.count_test_calls_since(midnight)
+    if limit and made >= limit:
+        return f"today's limit of {limit} test calls is reached (voip.test_calls_per_day)"
+    return ""
+
+
 def daily_cap_problem(cfg: Config) -> str:
     """Why no new outbound call may start today ("" = fine); alerts once at 80 % of the cap."""
     cap = float((cfg.voip or {}).get("daily_cost_cap") or 0)
@@ -560,12 +625,10 @@ def recover_interrupted_calls(cfg: Config | None = None, live_ids: set[int] | No
         for call_id in ids:
             call = store.get_call(call_id) or {}
             if crm_enabled(cfg) and not call.get("test"):
-                from xplogent.voip.crm import status_writer
+                from xplogent.voip.crm import queue_summary
 
                 payload = build_payload(cfg, store, call_id, {"outcome": "interrupted"})
-                store.set_crm_payload(call_id, payload)
-                store.set_crm_status(call_id, "sending")
-                enqueue_delivery(cfg, payload, on_status=status_writer(cfg.db_path, call_id))
+                queue_summary(cfg, store, call_id, payload)
     if ids:
         alerts.alert("calls_interrupted",
                      f"{len(ids)} call(s) were cut off because the server stopped during the call "
@@ -611,6 +674,8 @@ class VoipService:
             number = short if re.fullmatch(r"[0-9*#+]{2,15}", short) else ""
         if not number:
             return {"ok": False, "error": "not a valid phone number (use +countrycode…)"}
+        if number.lstrip("+") in EMERGENCY_NUMBERS:
+            return {"ok": False, "error": "the AI never dials emergency numbers"}
         store = Store(cfg.db_path)
         try:
             if store.is_dnc(number):
@@ -622,11 +687,15 @@ class VoipService:
             problem = calling_hours_problem(v, contact)
             if problem:
                 return {"ok": False, "error": problem, "hours": True}
-        if not test and (cap_problem := daily_cap_problem(cfg)):
+        if test and (test_problem := test_call_problem(cfg, number, via)):
+            return {"ok": False, "error": test_problem, "test_policy": True}
+        if cap_problem := daily_cap_problem(cfg):             # test calls cost money too
             return {"ok": False, "error": cap_problem, "cost_cap": True}
         # Both SIP lines share the "sip" transport; the line tag keeps them apart.
         meta = {"contact_id": contact["id"] if contact else None, "test": test,
                 "transport": "sip" if via in ("sip", "extension") else via}
+        if brief and not brief.get("campaign_item_id"):   # a lease from an earlier call is never reused
+            brief = {k: val for k, val in brief.items() if k not in _LOCK_KEYS}
         if brief:                        # campaign call: the vacancy and the candidate (CRM v2)
             meta["brief"] = brief
         if not test:
@@ -639,6 +708,23 @@ class VoipService:
                 if found.get("found") and (found.get("contact") or {}).get("do_not_call"):
                     return {"ok": False, "error": "the CRM marks this number do-not-call"}
                 meta["crm_lookup"] = found
+                person = found.get("contact") or {}
+                if found.get("found") and person.get("applicant_id") and not (brief or {}).get("campaign_item_id"):
+                    # A manual call to a CRM candidate takes the dial lock too (campaigns take their own),
+                    # so a recruiter and the AI never ring the same person at once.
+                    lock = await crm.dial_lock(cfg, number, int(person["applicant_id"]),
+                                               ttl_seconds=int(v.get("max_call_seconds") or 900) + 300)
+                    if lock["status"] == 409:
+                        return {"ok": False, "locked": True,
+                                "error": f"{lock['locked_by'] or 'a recruiter'} is calling this person right now "
+                                         "(CRM dial lock): try again in a few minutes"}
+                    if lock["locked"]:
+                        brief = {**(brief or brief_from_lookup(person)), "lock_token": lock["lock_token"],
+                                 "lock_phone": number, "manual_lock": True}
+                        meta["brief"] = brief
+                    else:                # the CRM can't say: a person chose to call, so go ahead and warn
+                        meta["lock_warning"] = f"CRM dial lock unavailable ({lock.get('error') or lock['status']})"
+                        _log.warning("calling %s without the CRM dial lock: %s", number, meta["lock_warning"])
         if via in ("sip", "extension"):
             meta["line"] = via if via == "extension" else "trunk"
         if via in ("sip", "extension"):
@@ -652,11 +738,17 @@ class VoipService:
             res = await self.telnyx.dial(number, meta, v)
         if not test:
             alerts.dial_result(res)          # 5 carrier/line failures in a row → alert
+        if not res.get("ok") and (brief or {}).get("manual_lock"):
+            await release_manual_lock(cfg, brief)
+        if meta.get("lock_warning") and res.get("ok"):
+            res = {**res, "warning": meta["lock_warning"]}
         return res
 
     def not_answered(self, meta: dict[str, Any], reason: str) -> None:
         """A line says a placed call rang out, was busy or failed (campaign bookkeeping)."""
         self.dialler.not_answered(meta, reason)
+        if (meta.get("brief") or {}).get("manual_lock"):
+            _release_soon(load_config(), meta["brief"])
 
     # -- callbacks we promised ---------------------------------------------------------
     async def run_due_callbacks(self, cfg: Config | None = None, now: float | None = None) -> list[dict[str, Any]]:

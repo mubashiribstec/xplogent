@@ -9,6 +9,16 @@ const LABELS: Record<string, string> = {
 };
 
 /** Template pack, CRM post-call push and the knowledge-gap report. */
+/** Mirrors crm.is_local_network_host: plain http is fine to this machine or the local network. */
+function localNetwork(url: string): boolean {
+  let host = "";
+  try { host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, ""); } catch { return false; }
+  if (host === "localhost" || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return true;
+  if (host === "::1" || /^f[cd][0-9a-f]{2}:/.test(host) || /^fe80:/.test(host)) return true;
+  if (/^[\d.]+$/.test(host) || host.includes(":")) return false;
+  return !host.includes(".") || /\.(local|lan|home|internal|intranet|localdomain|home\.arpa|corp)$/.test(host);
+}
+
 export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: () => void }) {
   const [info, setInfo] = useState<CallAgentInfo | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -50,11 +60,16 @@ export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: (
           <select value={info.crm.enabled ? "on" : "off"} onChange={(e) => save({ crm: { enabled: e.target.value === "on" } })}>
             <option value="off">off</option><option value="on">on</option></select></label>
         <label className="bud"><span className="lbl-sm">CRM address (POSTs go to …/api/xplogent/call-summary)</span>
-          <input defaultValue={info.crm.base_url} placeholder="https://crm.example.com" style={{ width: 260 }}
+          <input defaultValue={info.crm.base_url} placeholder="http://192.168.1.20 or https://crm.example.com" style={{ width: 260 }}
             onBlur={(e) => {
               const v = e.target.value.trim().replace(/\/$/, "");
               if (v === info.crm.base_url) return;
-              if (v && !/^https?:\/\//.test(v)) { toast("the CRM address must start with https://", "error"); return; }
+              if (v && !/^https?:\/\/[^/\s]+/.test(v)) {
+                toast("the CRM address must look like http://192.168.1.20 or https://crm.example.com", "error"); return;
+              }
+              if (/^http:\/\//.test(v) && !localNetwork(v))
+                toast("plain http:// to an internet address: summaries won't be sent until you use https:// or the CRM's "
+                      + "local-network address (or set voip.crm.allow_http for an internal name)", "error");
               save({ crm: { base_url: v } });
             }} /></label>
         <label className="bud"><span className="lbl-sm">API token {info.crm.token_set ? "✓ set" : "✗ not set"}</span>
@@ -72,7 +87,8 @@ export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: (
       <p className="dim" style={{ fontSize: 12 }}>Signed with the token (HMAC-SHA256); nothing is sent until it is set.
         Test connection checks both the call-summary push and the CRM's v2 endpoints (vacancies, candidates, dial
         locks). The CRM side is described in docs/crm-integration-prompt.md; to try everything before it's deployed,
-        run <span className="mono">xplogent voip mock-crm</span> and use http://127.0.0.1:8089 as the address.</p>
+        run <span className="mono">xplogent voip mock-crm</span> and use http://127.0.0.1:8089 as the address.
+        Plain http:// is fine when the CRM is on your local network (e.g. http://192.168.1.20); across the internet use https://.</p>
       {msg && <p className={msg.ok ? "ok" : "warn"}>{msg.ok ? "✓" : "✗"} {msg.text}</p>}
       {v2 && (v2.ok
         ? <p className="ok">✓ CRM API v2: vacancies, candidates and dial locks reachable ({Math.round(v2.ms)} ms,

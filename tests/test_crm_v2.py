@@ -191,13 +191,12 @@ async def test_payload_v2_reaches_the_crm_once(mock):
     assert payload["outcome"] == "screen_incomplete" and payload["outcome_detail"] == "abandoned"
     brain.state.outcome = "not_interested"
     sent = []
-    import xplogent.voip.service as service
-    real = service.enqueue_delivery
-    service.enqueue_delivery = lambda c, p, on_status=None: sent.append(p)
+    real = crm.queue_summary
+    crm.queue_summary = lambda c, st, cid, p: sent.append(p)
     try:
         finalize_call(cfg, store, call_id, session, brain, "+447700900123")
     finally:
-        service.enqueue_delivery = real
+        crm.queue_summary = real
     assert sent[0]["outcome"] == "not_interested"
     first = await crm.deliver(cfg, sent[0], backoff_s=0)
     again = await crm.deliver(cfg, sent[0], backoff_s=0)

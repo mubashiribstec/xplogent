@@ -116,7 +116,8 @@ skills:
 
 # ─── Per-agent rights (role profiles) ─────────────────────────────────
 # Each role limits which tools an agent may use, its risk policy, the
-# filesystem paths it may touch, and network access. A runtime can be
+# filesystem paths it may read and write (a role with allowed_paths also
+# loses shell, which no path check can confine), and network access. A runtime can be
 # scoped to a role profile. "*" means "all".
 roles:
   orchestrator:
@@ -134,7 +135,7 @@ roles:
   coder:
     allowed_tools: [read_file, write_file, edit_file, list_dir, shell, memory]
     policy: { low: auto, medium: auto, high: confirm, critical: deny }
-    allowed_paths: []         # set to e.g. ["./workspace"] to sandbox writes
+    allowed_paths: []         # e.g. ["./workspace"]: reads, listings and writes stay inside it, and shell is turned off
     network: false
     max_steps: 25
   reviewer:
@@ -228,15 +229,25 @@ voip:
     llm_input_per_m: 0             # the call model's price per million input tokens
     llm_output_per_m: 0            # ... and per million output tokens
   per_call_cost_cap: 0             # end a call politely once its estimate reaches this ($; 0 = no cap)
-  daily_cost_cap: 0                # no new outbound calls once today's spend reaches this ($; 0 = no cap; alert at 80 %)
+  daily_cost_cap: 0                # no new outbound calls (test calls too) once today's spend reaches this ($; 0 = no cap; alert at 80 %)
   quick_close_s: 45                # after "not interested" / "no job" / "do not call", the call ends within this time
+  test_numbers: []                 # your own phones: the only numbers a test call (Call me) may ring
+  test_calls_per_day: 30           # at most this many test calls a day (they skip calling hours, not the cost cap)
   knowledge_top_k: 3
   vad: { threshold: 500, silence_ms: 700, min_speech_ms: 200, max_utterance_ms: 15000 }
   silence: { prompt_after_s: 12, hangup_after_s: 30, max_prompts: 2 }   # caller gone quiet: up to max_prompts short prompts, then a polite goodbye and hang up
   template: ""                     # built-in template pack: kingsbury_inbound | kingsbury_outbound_screener (supplies greeting + playbook + field schema)
+  training:                        # uploads in Calls → Training (recordings, Q&A sheets, documents)
+    max_file_mb: 200               # one file
+    max_request_mb: 1024           # one upload, all files together
+    max_storage_gb: 20             # everything kept for training
+    min_free_gb: 2                 # disk that must stay free after an upload
+    whisper_model: ""              # transcribing training recordings ("" = the call speech model, else small.en)
+    language: ""                   # "" = the call speech language
   crm:                             # post-call summary push (Laravel CRM, brief Part 3a)
     enabled: false
-    base_url: ""                   # e.g. https://crm.example.com — POSTs go to {base_url}/api/xplogent/call-summary
+    base_url: ""                   # e.g. http://192.168.1.20 (same network) or https://crm.example.com — POSTs go to {base_url}/api/xplogent/call-summary
+    allow_http: false              # plain http is always allowed to local-network addresses; true also allows an internal name that looks public
     api_token_env: XPLOGENT_CRM_API_TOKEN   # env var / secrets-store name holding the bearer token (also the HMAC key)
     lookup: true                   # ask the CRM who is calling before answering / dialling (POST {base_url}/api/xplogent/contact-lookup, 1.5 s max)
   fields: []                       # mandatory fields: the call CANNOT close successfully while a required field is missing (Part D enforcement). Example — uncomment to require a read-back-confirmed callback number:

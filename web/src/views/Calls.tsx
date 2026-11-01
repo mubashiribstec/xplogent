@@ -19,7 +19,8 @@ import { CallbacksCard } from "./CallbacksCard";
 import { CallingHoursCard } from "./CallingHoursCard";
 import { ModelTestButton } from "../components/ModelTest";
 
-const CRM_BADGE: Record<string, string> = { sent: "ok", failed: "bad", skipped: "bad", retrying: "warn", sending: "warn" };
+const CRM_BADGE: Record<string, string> = { sent: "ok", failed: "warn", skipped: "bad", dead: "bad", retrying: "warn",
+                                            sending: "warn", pending: "warn" };
 const fmtTime = (t?: number | null) => (t ? new Date(t * 1000).toLocaleString() : "—");
 const fmtDur = (c: CallRow) => {
   const end = c.ended_at ?? Date.now() / 1000;
@@ -148,8 +149,10 @@ export function Calls() {
                     <tr><td colSpan={6}>
                       {c.summary && <p className="dim" style={{ marginBottom: 6 }}><b>Summary:</b> {c.summary}</p>}
                       {c.recording && <Recording callId={c.id} toast={toast} onDeleted={reload} />}
-                      {(c.crm_status === "failed" || c.crm_status === "skipped") && (
-                        <p className="warn" style={{ margin: "4px 0" }}>CRM: {c.crm_status}{c.crm_detail ? ` (${c.crm_detail})` : ""}{" "}
+                      {(c.crm_status === "failed" || c.crm_status === "skipped" || c.crm_status === "dead") && (
+                        <p className="warn" style={{ margin: "4px 0" }}>CRM: {c.crm_status === "dead" ? "gave up" : c.crm_status}
+                          {c.crm_detail ? ` (${c.crm_detail})` : ""}
+                          {c.crm_status === "failed" ? " · retried automatically (1, 5, 15 min, then hourly)" : ""}{" "}
                           <button className="btn" onClick={async () => {
                             const r = await resendCrm(c.id);
                             toast(r.ok ? "sent to the CRM" : r.error ?? r.detail ?? "still failing", r.ok ? "success" : "error");

@@ -265,9 +265,7 @@ class Dialler:
             store.end_call(call_id, outcome=outcome, summary=f"Not answered ({reason[:120]})")
             if crm.crm_enabled(cfg):
                 payload = crm.build_payload(cfg, store, call_id, {"outcome": outcome})
-                store.set_crm_payload(call_id, payload)
-                store.set_crm_status(call_id, "sending")
-                crm.enqueue_delivery(cfg, payload, on_status=crm.status_writer(cfg.db_path, call_id))
+                crm.queue_summary(cfg, store, call_id, payload)
         await self.advance(cfg, item_id, outcome, call_id)
 
     async def advance(self, cfg: Config, item_id: int, outcome: str, call_id: int | None = None,

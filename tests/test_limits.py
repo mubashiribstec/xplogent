@@ -135,8 +135,8 @@ async def test_daily_cap_stops_new_calls_and_warns_at_80_percent():
     with Store(cfg.db_path) as s:
         cid = s.start_call("outbound", "2001", "201")
         s.end_call(cid, outcome="interested", cost=0.85)
-        t = s.start_call("outbound", "2001", "202", test=True)          # tests don't count
-        s.end_call(t, outcome="other", cost=5.0)
+        t = s.start_call("outbound", "2001", "202", test=True)          # tests count too
+        s.end_call(t, outcome="other", cost=0.05)
     svc = VoipService()
     dialled = []
 
@@ -151,8 +151,9 @@ async def test_daily_cap_stops_new_calls_and_warns_at_80_percent():
         s.end_call(cid, outcome="interested", cost=0.2)
     res = await svc.dial("201", cfg, via="extension")
     assert not res["ok"] and res["cost_cap"] and "spending cap" in res["error"]
-    assert (await svc.dial("201", cfg, via="extension", test=True))["ok"]   # test calls still work
-    assert dialled == ["201", "201"]
+    test = await svc.dial("201", cfg, via="extension", test=True)     # test calls cost money too
+    assert not test["ok"] and test["cost_cap"]
+    assert dialled == ["201"]
 
 
 def test_finalize_records_the_estimate():

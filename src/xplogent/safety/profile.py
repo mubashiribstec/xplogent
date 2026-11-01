@@ -16,8 +16,13 @@ from typing import Any
 # Tools that perform network access (used when a profile sets network=False).
 NETWORK_TOOLS = {"web_search", "web_fetch", "browser"}
 
-# Filesystem-writing tools whose path arguments are checked against allowed_paths.
+# Filesystem tools whose ``path`` argument is checked: writes against the global
+# ``safety.allowed_write_roots`` and a role's ``allowed_paths``; reads and listings
+# against a role's ``allowed_paths`` (a role's paths are a full boundary).
 PATH_WRITE_TOOLS = {"write_file", "edit_file"}
+PATH_READ_TOOLS = {"read_file", "list_dir"}
+# Can't be confined to a set of paths by argument checks: off for roles with allowed_paths.
+UNCONFINABLE_TOOLS = {"shell"}
 
 
 @dataclass
@@ -29,7 +34,7 @@ class PermissionProfile:
             "low": "auto", "medium": "confirm", "high": "confirm", "critical": "deny"
         }
     )
-    allowed_paths: list[str] = field(default_factory=list)  # empty = unrestricted
+    allowed_paths: list[str] = field(default_factory=list)  # empty = unrestricted; else reads+writes, no shell
     network: bool = True
     max_steps: int = 25
 

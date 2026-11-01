@@ -124,7 +124,7 @@ class _Telnyx:
 
 async def test_switched_off_agent_only_places_test_calls(monkeypatch):
     save_user_config({"voip": {"enabled": False, "from_number": "+15559990000", "connection_id": "c",
-                               "calling_hours": {"enabled": False}}})
+                               "calling_hours": {"enabled": False}, "test_numbers": ["+15550101111"]}})
     monkeypatch.setattr(telnyx_trunk, "TelnyxClient", _Telnyx)
     svc = service_mod.VoipService()
     off = await svc.dial("+15550101111")

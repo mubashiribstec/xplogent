@@ -87,6 +87,7 @@ class _Telnyx:
 @pytest.fixture
 def telnyx(monkeypatch):
     save_user_config({"voip": {"enabled": True, "from_number": "+15559990000", "connection_id": "c",
+                               "test_numbers": ["+15550103333"],
                                "calling_hours": {"start": "00:00", "end": "00:00", "timezone": "UTC",
                                                  "days": {"sat": ""}}}})
     _Telnyx.dialed = []

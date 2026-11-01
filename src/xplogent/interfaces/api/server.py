@@ -52,12 +52,15 @@ def create_app():
         holidays_task = asyncio.create_task(refresh_loop())   # UK bank holidays, weekly
         callbacks_task = asyncio.create_task(get_service().callback_loop())   # promised callbacks
         dialler_task = asyncio.create_task(get_service().dialler.loop())     # campaigns
+        from xplogent.voip.crm import outbox_loop
+        outbox_task = asyncio.create_task(outbox_loop())     # CRM summaries not delivered yet
         try:
             yield
         finally:
             holidays_task.cancel()
             callbacks_task.cancel()
             dialler_task.cancel()
+            outbox_task.cancel()
             if sip_task is not None:
                 sip_task.cancel()
             if ext_task is not None:

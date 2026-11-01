@@ -664,6 +664,11 @@ export const pauseAI = (id: number, paused: boolean) => postJSON<CallResult>(`/v
 export const dialCall = (b: { number?: string; contact_id?: number; via?: string; test?: boolean; ignore_hours?: boolean }) =>
   postJSON<CallResult>("/voip/dial", b);
 
+// Test calls only ring these (plus PBX test extensions and short internal extensions).
+export interface TestNumbers { ok?: boolean; error?: string; numbers: string[]; per_day?: number }
+export async function getTestNumbers(): Promise<TestNumbers> { return (await fetch("/voip/test-numbers")).json(); }
+export const saveTestNumber = (b: { add?: string; remove?: string }) => postJSON<TestNumbers>("/voip/test-numbers", b);
+
 // ── SIP trunk ────────────────────────────────────────────────────────────────
 export interface SipExtensionStatus {
   enabled: boolean; configured: boolean; password_set: boolean; running: boolean; registered: boolean;

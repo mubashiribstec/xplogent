@@ -18,7 +18,6 @@ _OPTIONAL: dict[str, Any] = {
                      "device": ""},
     "tts_fallback": {"provider": "", "base_url": "", "model": "", "voice": "", "sample_rate": 0,
                      "api_key_env": "", "language": ""},
-    "training": {"whisper_model": "", "language": ""},
 }
 _FREE_FORM = {"dtmf.keys"}          # user-defined keys inside these dicts
 _RETIRED = {"voip.provider"}        # old keys that may linger in existing configs: ignored

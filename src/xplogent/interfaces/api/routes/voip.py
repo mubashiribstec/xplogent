@@ -615,46 +615,77 @@ async def voip_training() -> dict:
     return {"items": items, "busy": bool(training.worker.task and not training.worker.task.done())}
 
 
+_upload_slots = asyncio.Semaphore(2)     # training.UPLOAD_SLOTS: big uploads at once
+
+
+def _upload_error(status: int, error: str) -> JSONResponse:
+    return JSONResponse({"ok": False, "error": error, "added": [], "rejected": [{"file": "upload", "error": error}]},
+                        status_code=status)
+
+
 @router.post("/voip/training/upload")
 async def voip_training_upload(request: Request) -> JSONResponse:
+    """Training files (deep audit P2: bounded). The size, storage quota and free disk are
+    checked from the headers before the body is parsed; the copy is capped per file and in
+    total; at most two uploads are processed at once; partial files are always removed."""
     import secrets
 
     from xplogent.core.rag import is_sensitive
     from xplogent.voip import training
 
-    form = await request.form(max_files=50, max_part_size=training.MAX_UPLOAD_BYTES)
-    layout = str(form.get("layout") or "agent-left")
-    if layout not in training.LAYOUTS:
-        layout = "agent-left"
-    added, rejected = [], []
-    with Store(load_config().db_path) as store:
-        for upload in form.getlist("files"):
-            if isinstance(upload, str):
-                continue
-            name = training.safe_name(upload.filename or "upload")
-            kind = training.classify(name)
-            if not kind or is_sensitive(Path(name)):
-                rejected.append({"file": name, "error": "unsupported file type"})
-                continue
-            dest = training.training_dir() / f"{secrets.token_hex(4)}_{name}"
-            size = 0
-            too_big = False
-            with dest.open("wb") as fh:
-                while chunk := await upload.read(1024 * 1024):
-                    size += len(chunk)
-                    if size > training.MAX_UPLOAD_BYTES:
-                        too_big = True
-                        break
-                    fh.write(chunk)
-            await upload.close()
-            if too_big or size == 0:
-                dest.unlink(missing_ok=True)
-                rejected.append({"file": name, "error": "larger than 200 MB" if too_big else "empty file"})
-                continue
-            item_id = store.add_training_item(kind, name, str(dest), size,
-                                              {"layout": layout} if kind == "recording" else {})
-            added.append({"id": item_id, "file": name, "kind": kind})
-    await form.close()
+    limits = training.upload_limits()
+    status, why = training.upload_refusal(request.headers.get("content-length"), limits)
+    if status:
+        return _upload_error(status, why)
+    if _upload_slots.locked():
+        return _upload_error(429, "two uploads are already being processed: try again when they finish")
+    async with _upload_slots:
+        form = await request.form(max_files=50)
+        added, rejected = [], []
+        total = 0
+        try:
+            layout = str(form.get("layout") or "agent-left")
+            if layout not in training.LAYOUTS:
+                layout = "agent-left"
+            with Store(load_config().db_path) as store:
+                for upload in form.getlist("files"):
+                    if isinstance(upload, str):
+                        continue
+                    name = training.safe_name(upload.filename or "upload")
+                    kind = training.classify(name)
+                    if not kind or is_sensitive(Path(name)):
+                        rejected.append({"file": name, "error": "unsupported file type"})
+                        continue
+                    dest = training.training_dir() / f"{secrets.token_hex(4)}_{name}"
+                    size, error = 0, ""
+                    try:
+                        with dest.open("wb") as fh:
+                            while chunk := await upload.read(1024 * 1024):
+                                size += len(chunk)
+                                if size > limits["file"]:
+                                    error = f"larger than {training._mb(limits['file'])}"
+                                    break
+                                if total + size > limits["request"]:
+                                    error = f"the upload passed {training._mb(limits['request'])} in total"
+                                    break
+                                fh.write(chunk)
+                    except OSError as exc:
+                        error = f"could not be saved ({exc.strerror or exc})"
+                    except BaseException:             # the client went away mid-file
+                        dest.unlink(missing_ok=True)
+                        raise
+                    finally:
+                        await upload.close()
+                    if error or size == 0:
+                        dest.unlink(missing_ok=True)
+                        rejected.append({"file": name, "error": error or "empty file"})
+                        continue
+                    total += size
+                    item_id = store.add_training_item(kind, name, str(dest), size,
+                                                      {"layout": layout} if kind == "recording" else {})
+                    added.append({"id": item_id, "file": name, "kind": kind})
+        finally:
+            await form.close()
     if added:
         deps.audit_event("voip_training_upload", target=", ".join(a["file"] for a in added)[:300],
                          risk="low")
@@ -756,7 +787,9 @@ async def voip_call_crm_resend(call_id: int) -> dict:
         return {"ok": False, "error": "demo calls are never sent to the CRM"}
     if payload is None:
         return {"ok": False, "error": "this call has no stored CRM summary to resend"}
-    out = await crm.deliver(cfg, payload, attempts=1, on_status=crm.status_writer(cfg.db_path, call_id))
+    with Store(cfg.db_path) as store:         # a manual resend restarts the outbox's retries
+        store.crm_queue(call_id, payload, time.time() + crm.OUTBOX_LEASE_S)
+    out = await crm.send_queued(cfg, call_id, payload, attempts=1)
     deps.audit_event("voip_crm_resend", target=f"{call_id}: {out['status']}", risk="low")
     return {"ok": out["status"] == "sent", "status": out["status"], "detail": out["detail"]}
 
@@ -934,12 +967,45 @@ async def voip_dial(body: dict):
     brief = body.get("brief")              # a CRM call brief (campaign queue preview → "Call")
     if brief is not None and (not isinstance(brief, dict) or len(json.dumps(brief, default=str)) > 16_000):
         return JSONResponse({"ok": False, "error": "brief must be an object under 16 KB"}, status_code=400)
+    if body.get("ignore_hours") and not body.get("test"):
+        deps.audit_event("voip_dial_hours_override", target=f"{number} via {via}", risk="high",
+                         detail="an operator placed a call outside the calling hours")
     res = await get_service().dial(
         number, contact_id=int(contact_id) if contact_id else None, test=bool(body.get("test")),
         via=via, ignore_hours=bool(body.get("ignore_hours")), brief=brief or None)
     deps.audit_event("voip_dial", target=f"{number} via {via}{' (test)' if body.get('test') else ''}",
                      risk="medium", allowed=bool(res.get("ok")), detail=str(res.get("error", ""))[:200])
     return res
+
+
+@router.get("/voip/test-numbers")
+async def voip_test_numbers() -> dict:
+    v = load_config().voip or {}
+    return {"numbers": list(v.get("test_numbers") or []), "per_day": int(v.get("test_calls_per_day", 30) or 0)}
+
+
+@router.post("/voip/test-numbers")
+async def voip_test_numbers_save(body: dict) -> dict:
+    """Add or remove one of your own test phones (audited: test calls may ring only these)."""
+    from xplogent.core.config import save_user_config
+    from xplogent.voip.control import clean_number
+
+    v = load_config().voip or {}
+    numbers = [str(n) for n in (v.get("test_numbers") or [])]
+    if body.get("add"):
+        raw = str(body["add"]).strip()
+        number = clean_number(raw) or (re.sub(r"[\s()-]", "", raw) if re.fullmatch(r"[0-9*#\s()-]{2,15}", raw) else "")
+        if not number:
+            return {"ok": False, "error": "not a phone number or extension"}
+        if number not in numbers:
+            if len(numbers) >= 10:
+                return {"ok": False, "error": "at most 10 test numbers"}
+            numbers.append(number)
+    if body.get("remove"):
+        numbers = [n for n in numbers if n != str(body["remove"]).strip()]
+    save_user_config({"voip": {"test_numbers": numbers}})
+    deps.audit_event("voip_test_numbers", target=", ".join(numbers)[:300], risk="high")
+    return {"ok": True, "numbers": numbers}
 
 
 @router.websocket("/ws/voip/test")

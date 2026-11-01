@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import Any
 
 from xplogent.safety.commands import is_catastrophic
-from xplogent.safety.profile import PATH_WRITE_TOOLS, PermissionProfile
+from xplogent.safety.profile import (
+    PATH_READ_TOOLS,
+    PATH_WRITE_TOOLS,
+    UNCONFINABLE_TOOLS,
+    PermissionProfile,
+)
 
 
 class RiskLevel(StrEnum):
@@ -98,6 +103,8 @@ class SafetyManager:
     )
     deny_patterns: list[str] = field(default_factory=lambda: list(_DEFAULT_DENY))
     allowed_write_roots: list[str] = field(default_factory=list)
+    # A role's allowed_paths: a boundary for reads and listings too (and no shell).
+    allowed_read_roots: list[str] = field(default_factory=list)
     # Optional per-agent profile. When set, it overrides policy and adds
     # tool allow-listing + filesystem path scoping.
     profile: PermissionProfile | None = None
@@ -116,6 +123,7 @@ class SafetyManager:
             policy=profile.policy or self.policy,
             deny_patterns=_merge_patterns(safety_cfg.get("deny_patterns"), self.deny_patterns),
             allowed_write_roots=profile.allowed_paths or self.allowed_write_roots,
+            allowed_read_roots=list(profile.allowed_paths or []),
             profile=profile,
         )
 
@@ -135,15 +143,27 @@ class SafetyManager:
         return False
 
     def _path_violation(self, tool_name: str, arguments: dict[str, Any]) -> str | None:
-        """Return a reason string if a write escapes allowed_write_roots."""
-        roots = self.allowed_write_roots
-        if not roots or tool_name not in PATH_WRITE_TOOLS:
+        """A reason string if the call leaves this agent's paths, else None.
+
+        Writes are checked against ``allowed_write_roots``; with a role's ``allowed_paths``,
+        reads and listings are checked too, and shell is refused (argument checks can't
+        confine a shell command: that needs an OS/container sandbox)."""
+        if self.allowed_read_roots and tool_name in UNCONFINABLE_TOOLS:
+            return (f"'{tool_name}' is off for this role: its allowed paths can't be enforced on shell "
+                    "commands (run the agent in a container, or remove allowed_paths)")
+        if tool_name in PATH_WRITE_TOOLS:
+            roots = self.allowed_write_roots
+        elif tool_name in PATH_READ_TOOLS:
+            roots = self.allowed_read_roots
+        else:
             return None
-        target = arguments.get("path")
+        if not roots:
+            return None
+        target = arguments.get("path") or ("." if tool_name == "list_dir" else "")
         if not target:
             return None
         try:
-            resolved = Path(str(target)).expanduser().resolve()
+            resolved = Path(str(target)).expanduser().resolve()   # symlinks resolved: no escape
         except (OSError, RuntimeError):
             return f"invalid path: {target}"
         for root in roots:

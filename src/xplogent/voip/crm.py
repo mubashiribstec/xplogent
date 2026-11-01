@@ -50,6 +50,51 @@ def crm_enabled(cfg: Config) -> bool:
     return bool(crm.get("enabled")) and bool(str(crm.get("base_url", "")).strip())
 
 
+# Host names that only mean something inside a private network.
+_LAN_SUFFIXES = (".local", ".lan", ".home", ".internal", ".intranet", ".localdomain", ".home.arpa", ".corp")
+
+
+def is_local_network_host(host: str) -> bool:
+    """This machine or the local network: loopback/private/link-local IPs, ``localhost``,
+    a bare machine name (``crm-server``) or a LAN-only suffix (``crm.local``)."""
+    import ipaddress
+
+    host = (host or "").strip().lower().rstrip(".")
+    if not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return host == "localhost" or "." not in host or host.endswith(_LAN_SUFFIXES)
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback or ip.is_private or ip.is_link_local
+
+
+def base_url_problem(url: str, allow_http: bool = False) -> str:
+    """Why the CRM address must not be used ("" = fine). The token is the bearer credential
+    and the HMAC key, and summaries carry transcripts, so plain http is fine on this
+    machine or the local network (a CRM on the office LAN) but never across the internet.
+    ``voip.crm.allow_http: true`` also allows an internal DNS name that looks public."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(str(url or "").strip())
+    if parts.scheme == "https" and parts.hostname:
+        return ""
+    if parts.scheme == "http" and parts.hostname:
+        if allow_http or is_local_network_host(parts.hostname):
+            return ""
+        return ("plain http:// to an internet address would send the API token and call transcripts "
+                "unencrypted: use https://, or the CRM's local-network address (e.g. http://192.168.1.20); "
+                "for an internal name that looks public set voip.crm.allow_http: true")
+    return "the CRM address must look like http://192.168.1.20 or https://crm.example.com"
+
+
+def address_problem(cfg: Config) -> str:
+    c = crm_config(cfg)
+    return base_url_problem(str(c.get("base_url", "")), bool(c.get("allow_http")))
+
+
 def deliveries_path():
     return data_dir() / "voip" / "crm_deliveries.jsonl"
 
@@ -163,6 +208,12 @@ async def deliver(cfg: Config, payload: dict[str, Any], *, attempts: int = 3,
         _log.warning("CRM delivery for call %s skipped: %s", call_id, last["detail"])
         status("skipped", last["detail"])
         return last
+    if problem := base_url_problem(str(crm.get("base_url", "")), bool(crm.get("allow_http"))):
+        last.update(status="skipped", detail=f"insecure address: {problem}")
+        _log_attempt(call_id, 0, "skipped", last["detail"])
+        _log.warning("CRM delivery for call %s skipped: %s", call_id, problem)
+        status("skipped", last["detail"])
+        return last
     status("sending")
     body = json.dumps(payload).encode()
     ts = str(int(time.time()))
@@ -174,7 +225,8 @@ async def deliver(cfg: Config, payload: dict[str, Any], *, attempts: int = 3,
     for attempt in range(1, attempts + 1):
         last["attempts"] = attempt
         try:
-            async with httpx.AsyncClient(timeout=5.0, transport=transport or _TRANSPORT) as client:
+            async with httpx.AsyncClient(timeout=5.0, transport=transport or _TRANSPORT,
+                                         follow_redirects=False) as client:
                 resp = await client.post(url, content=body, headers=headers)
             if resp.status_code < 300:
                 last.update(status="sent", detail=f"HTTP {resp.status_code}")
@@ -280,6 +332,90 @@ async def lookup(cfg: Config, phone: str, *, direction: str = "inbound", line: s
     return out
 
 
+# ── Durable outbox: a summary is stored first, then sent; retried until the CRM has it ──
+OUTBOX_LEASE_S = 120                       # a send in progress owns the row this long
+OUTBOX_MAX_TRIES = 10                      # then the row is "dead": alert + manual Resend
+OUTBOX_BACKOFF_S = (60, 300, 900, 3600)    # after try 1, 2, 3, 4+ (seconds)
+OUTBOX_MAX_AGE_S = 7 * 86400               # older summaries are only sent by hand
+OUTBOX_EVERY_S = 30
+
+
+def queue_summary(cfg: Config, store: Any, call_id: int, payload: dict[str, Any]) -> None:
+    """Record the call's summary as pending in the database, then try to send it now.
+    If the send fails, or the server stops first, the outbox loop sends it later; the CRM
+    dedupes on ``call_id``, so a repeat never duplicates its note."""
+    store.crm_queue(call_id, payload, time.time() + OUTBOX_LEASE_S)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return                                   # no loop here: the outbox sends it
+    task = loop.create_task(send_queued(cfg, call_id, payload, attempts=3))
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
+
+
+async def send_queued(cfg: Config, call_id: int, payload: dict[str, Any], *, attempts: int = 1,
+                      transport=None, backoff_s: float | None = None, now: float | None = None) -> dict[str, Any]:
+    """Send a stored summary and book the next try if it failed."""
+    from xplogent.memory.store import Store
+
+    extra = {k: v for k, v in (("transport", transport), ("backoff_s", backoff_s)) if v is not None}
+    res = await deliver(cfg, payload, attempts=attempts, on_status=status_writer(cfg.db_path, call_id), **extra)
+    with Store(cfg.db_path) as store:
+        if res["status"] != "failed":
+            store.crm_schedule(call_id, next_at=0)
+            return res
+        tries = store.crm_attempts(call_id) + int(res.get("attempts") or 1)
+        if tries >= OUTBOX_MAX_TRIES:
+            store.crm_schedule(call_id, attempts=tries, next_at=0, status="dead",
+                               detail=f"gave up after {tries} tries: {res['detail']}")
+            res["status"] = "dead"
+        else:
+            wait = OUTBOX_BACKOFF_S[min(tries, len(OUTBOX_BACKOFF_S)) - 1]
+            store.crm_schedule(call_id, attempts=tries, next_at=(time.time() if now is None else now) + wait)
+    if res["status"] == "dead":
+        alerts.alert("crm_dead_letter", f"Call {call_id}'s summary could not reach the CRM after "
+                                        f"{OUTBOX_MAX_TRIES} tries ({res['detail']}): use Resend on the call.")
+    return res
+
+
+async def outbox_tick(cfg: Config, now: float | None = None, transport=None) -> int:
+    """Send whatever is due; returns how many summaries the CRM accepted."""
+    from xplogent.memory.store import Store
+
+    if not crm_enabled(cfg):
+        return 0
+    now = time.time() if now is None else now
+    with Store(cfg.db_path) as store:
+        due = store.crm_due(now, now - OUTBOX_MAX_AGE_S, OUTBOX_MAX_TRIES)
+        work = []
+        for call_id in due:
+            payload = store.get_crm_payload(call_id)
+            if payload is None:
+                continue
+            store.crm_schedule(call_id, next_at=now + OUTBOX_LEASE_S)     # in flight
+            work.append((call_id, payload))
+    sent = 0
+    for call_id, payload in work:
+        res = await send_queued(cfg, call_id, payload, attempts=1, transport=transport, now=now)
+        sent += res["status"] == "sent"
+    return sent
+
+
+async def outbox_loop() -> None:
+    """Started by the API: every 30 s, resend summaries the CRM hasn't got yet."""
+    from xplogent.core.config import load_config
+
+    while True:
+        await asyncio.sleep(OUTBOX_EVERY_S)
+        try:
+            await outbox_tick(load_config())
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - keep the loop alive
+            _log.exception("CRM outbox pass failed")
+
+
 def enqueue_delivery(cfg: Config, payload: dict[str, Any], on_status=None) -> None:
     """Fire-and-forget from finalize_call (sync, called inside async wrap-ups)."""
     try:
@@ -340,10 +476,14 @@ async def post(cfg: Config, path: str, body: dict[str, Any], *, timeout_s: float
     if not token:
         out["error"] = f"no API token ({token_env(cfg)} is not set)"
         return out
+    if problem := address_problem(cfg):
+        out["error"] = f"insecure address: {problem}"
+        return out
     raw = json.dumps(body).encode()
     url = str(crm_config(cfg).get("base_url", "")).rstrip("/") + "/api/xplogent/" + path.lstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=timeout_s, transport=transport or _TRANSPORT) as client:
+        async with httpx.AsyncClient(timeout=timeout_s, transport=transport or _TRANSPORT,
+                                     follow_redirects=False) as client:   # never carry the token elsewhere
             resp = await asyncio.wait_for(
                 client.post(url, content=raw, headers=_signed_headers(raw, token)), timeout=timeout_s)
         out["status"] = resp.status_code
@@ -494,6 +634,14 @@ def explain_failure(res: dict[str, Any]) -> dict[str, str]:
     if error == "not configured":
         return {"reason": "CRM link is off or has no address.",
                 "fix": "Switch it on and enter the CRM address (e.g. https://crm.example.com)."}
+    if error.startswith("insecure address"):
+        return {"reason": "The CRM address is plain http:// to an internet address, which would send the token "
+                          "and call data unencrypted.",
+                "fix": "Use the CRM's https:// address, or its local-network address (e.g. http://192.168.1.20) "
+                       "when Xplogent and the CRM are on the same network."}
+    if 300 <= status < 400:
+        return {"reason": "The CRM answered with a redirect; Xplogent doesn't follow redirects with the token.",
+                "fix": "Enter the final https:// address of the CRM (no redirect)."}
     if error.startswith("no API token"):
         return {"reason": "No API token saved.", "fix": "Paste the same token as XPLOGENT_API_TOKEN in the CRM's .env."}
     if status == 401:

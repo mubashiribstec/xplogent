@@ -300,6 +300,8 @@ _MIGRATIONS = [
     ("calls", "crm_payload", "TEXT DEFAULT ''"),    # exactly what was sent, for Resend
     ("calls", "demo", "INTEGER DEFAULT 0"),         # sample data for demos: never counted, never sent
     ("calls", "brief", "TEXT DEFAULT ''"),          # JSON call brief: applicant, vacancy, campaign (CRM v2)
+    ("calls", "crm_attempts", "INTEGER DEFAULT 0"),  # CRM outbox: tries so far (crm.outbox_tick)
+    ("calls", "crm_next_at", "REAL DEFAULT 0"),      # next try / in-flight lease end
 ]
 # Stored in the database (PRAGMA user_version): changes whenever the schema text or
 # the migration list changes, so existing databases get upgraded automatically.
@@ -1043,10 +1045,15 @@ class Store:
         return d
 
     def spend_since(self, since: float) -> float:
-        """Estimated cost of real calls (not tests or demo data) started since ``since``."""
-        row = self._query("SELECT COALESCE(SUM(cost), 0) FROM calls WHERE started_at>=? AND test=0 AND demo=0",
-                          (since,))
+        """Estimated cost of calls (test calls included, demo data not) started since ``since``."""
+        row = self._query("SELECT COALESCE(SUM(cost), 0) FROM calls WHERE started_at>=? AND demo=0", (since,))
         return round(float(row[0][0] or 0), 4)
+
+    def count_test_calls_since(self, since: float) -> int:
+        """Test calls on a phone line (browser test calls don't dial anyone)."""
+        rows = self._query("SELECT COUNT(*) FROM calls WHERE test=1 AND started_at>=? AND transport<>'browser'",
+                           (since,))
+        return int(rows[0][0])
 
     # -- TPS screening cache (voip/compliance.py) ---------------------------------------
     def tps_cached(self, phone: str, since: float) -> dict[str, Any] | None:
@@ -1257,6 +1264,37 @@ class Store:
     def get_crm_payload(self, call_id: int) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT crm_payload FROM calls WHERE id=?", (call_id,)).fetchone()
         return json.loads(row[0]) if row and row[0] else None
+
+    # -- CRM outbox (crm.queue_summary / crm.outbox_tick) ---------------------------------
+    def crm_queue(self, call_id: int, payload: dict[str, Any], lease_until: float) -> None:
+        """Store a summary as pending: the outbox owns it until the CRM accepts it."""
+        self._write("UPDATE calls SET crm_payload=?, crm_status='pending', crm_detail='', crm_attempts=0, "
+                    "crm_next_at=? WHERE id=?", (json.dumps(payload, default=str), lease_until, call_id))
+
+    def crm_due(self, now: float, since: float, max_tries: int, limit: int = 20) -> list[int]:
+        """Summaries to (re)send: pending or failed ones whose time has come, and ones left
+        mid-send by a restart (their lease ran out). Older than ``since``: manual Resend only."""
+        rows = self._query(
+            "SELECT id FROM calls WHERE crm_payload<>'' AND demo=0 AND test=0 "
+            "AND crm_status IN ('pending','sending','retrying','failed') AND crm_next_at<=? "
+            "AND crm_attempts<? AND started_at>=? ORDER BY crm_next_at, id LIMIT ?",
+            (now, max_tries, since, limit))
+        return [int(r[0]) for r in rows]
+
+    def crm_schedule(self, call_id: int, *, attempts: int | None = None, next_at: float | None = None,
+                     status: str = "", detail: str | None = None) -> None:
+        sets, params = [], []
+        for col, val in (("crm_attempts", attempts), ("crm_next_at", next_at),
+                         ("crm_status", status or None), ("crm_detail", detail[:300] if detail else detail)):
+            if val is not None:
+                sets.append(f"{col}=?")
+                params.append(val)
+        if sets:
+            self._write(f"UPDATE calls SET {', '.join(sets)} WHERE id=?", (*params, call_id))
+
+    def crm_attempts(self, call_id: int) -> int:
+        row = self.conn.execute("SELECT crm_attempts FROM calls WHERE id=?", (call_id,)).fetchone()
+        return int(row[0] or 0) if row else 0
 
     def set_crm_status(self, call_id: int, status: str, detail: str = "") -> None:
         self._write("UPDATE calls SET crm_status=?, crm_detail=? WHERE id=?", (status, detail[:300], call_id))

@@ -37,7 +37,9 @@ def test_restart_marks_active_calls_interrupted_and_tells_the_crm(monkeypatch):
     cfg = load_config()
     cut, live, test_call = _active_call(cfg), _active_call(cfg), _active_call(cfg, test=True)
     sent = []
-    monkeypatch.setattr(service, "enqueue_delivery", lambda c, payload, on_status=None: sent.append(payload))
+    from xplogent.voip import crm
+
+    monkeypatch.setattr(crm, "queue_summary", lambda c, store, call_id, payload: sent.append(payload))
     ids = service.recover_interrupted_calls(cfg, {live})
     assert ids == [cut, test_call]
     with Store(cfg.db_path) as s:

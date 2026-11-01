@@ -3,6 +3,7 @@ import { Mic, MicOff, Pause, Phone, PhoneForwarded, PhoneOff, Play, Send } from 
 import {
   CallResult, CallTurn, LiveCallInfo, dialCall, getCall, hangupCall, instructCall, pauseAI, sayOnCall,
   transferCall, wsTokenParam, wsUrl, testModel, testSpeech, getBackupModel, testBackupModel,
+  getTestNumbers, saveTestNumber,
 } from "../api";
 
 type Toaster = (m: string, kind?: any) => void;
@@ -96,10 +97,27 @@ export function CallNow({ toast, via, onCalled }: { toast: Toaster; via: string[
   const [line, setLine] = useState(via[0] ?? "telnyx");
   const [me, setMe] = useState(() => { try { return localStorage.getItem("xpl_test_phone") || ""; } catch { return ""; } });
   const [busy, setBusy] = useState(false);
+  const [tests, setTests] = useState<{ numbers: string[]; per_day?: number }>({ numbers: [] });
   useEffect(() => { if (!via.includes(line) && via[0]) setLine(via[0]); }, [via.join(",")]);
+  useEffect(() => { getTestNumbers().then(setTests).catch(() => {}); }, []);
+  const editTests = async (b: { add?: string; remove?: string }) => {
+    const r = await saveTestNumber(b);
+    if (r.ok) setTests((t) => ({ ...t, numbers: r.numbers })); else toast(r.error ?? "not saved", "error");
+    return !!r.ok;
+  };
+  // Mirrors the server rule (service.is_test_number), so "Call me" can offer to add the number first.
+  const listed = (n: string) => {
+    const key = n.replace(/[\s()-]/g, "");
+    return (line !== "telnyx" && /^[0-9*#]{2,6}$/.test(key))
+      || tests.numbers.some((t) => t.replace(/^\+/, "") === key.replace(/^\+/, ""));
+  };
   const call = async (n: string, test: boolean) => {
     setBusy(true);
-    try { if (await placeCall({ number: n, via: line, test }, toast)) onCalled(); } finally { setBusy(false); }
+    try {
+      if (test && !listed(n) && !(confirm(`${n} isn't one of your test numbers yet. Add it? (Only you should answer it.)`)
+                                  && await editTests({ add: n }))) return;
+      if (await placeCall({ number: n, via: line, test }, toast)) onCalled();
+    } finally { setBusy(false); }
   };
   return (
     <div className="card">
@@ -119,7 +137,14 @@ export function CallNow({ toast, via, onCalled }: { toast: Toaster; via: string[
           onChange={(e) => { setMe(e.target.value); try { localStorage.setItem("xpl_test_phone", e.target.value); } catch { /* not saved */ } }} />
         <button className="btn" disabled={busy || !me.trim()} onClick={() => call(me, true)}>Call me</button>
       </div>
-      <p className="dim" style={{ fontSize: 12 }}>A test call: not counted in stats and never changes a contact.</p>
+      <p className="dim" style={{ fontSize: 12 }}>A test call: not counted in stats and never changes a contact. It may only
+        ring your own test numbers{tests.per_day ? `, at most ${tests.per_day} a day` : ""}; it still counts toward the daily cost cap.</p>
+      <div className="row wrap" style={{ gap: 6, alignItems: "center" }}>
+        <span className="dim" style={{ fontSize: 12 }}>Test numbers:</span>
+        {tests.numbers.length ? tests.numbers.map((t) => (
+          <span key={t} className="pill">{t} <button className="btn ghost sm" title={`Remove ${t}`} aria-label={`Remove ${t}`}
+            onClick={() => editTests({ remove: t })}>✕</button></span>)) : <span className="dim" style={{ fontSize: 12 }}>none yet</span>}
+      </div>
     </div>
   );
 }

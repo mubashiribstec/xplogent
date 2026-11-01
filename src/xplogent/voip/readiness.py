@@ -229,6 +229,16 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
         add("greeting", "Greeting is truthful", False,
             "the greeting says calls are recorded but recording is off: change one of them",
             required=False)
+    crm = v.get("crm") or {}
+    if crm.get("enabled") and str(crm.get("base_url") or "").strip():
+        from xplogent.voip.crm import base_url_problem
+
+        problem = base_url_problem(str(crm["base_url"]), bool(crm.get("allow_http")))
+        plain = str(crm["base_url"]).strip().lower().startswith("http://")
+        add("crm_https", "CRM address is safe (https, or your local network)", not problem,
+            problem or (f"{crm['base_url']}: plain http on your local network (fine while the CRM and "
+                        "Xplogent share a private network)" if plain else str(crm["base_url"])),
+            required=False)
     from xplogent.voip.config_check import check_voip
 
     bad = check_voip(v)

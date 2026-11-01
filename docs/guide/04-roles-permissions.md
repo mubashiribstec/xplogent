@@ -9,7 +9,7 @@ Edit roles in **Settings → Roles** or in `config.yaml` under `roles:`.
 |---|---|
 | `allowed_tools` | which tools the agent may call (`"*"` = all) |
 | `policy` | per-risk-tier action: `auto` / `confirm` / `deny` |
-| `allowed_paths` | filesystem roots the agent may write to (empty = unrestricted) |
+| `allowed_paths` | filesystem roots the agent may read, list and write (empty = unrestricted); a role with roots set gets no shell |
 | `network` | whether network-capable tools are allowed |
 | `max_steps` | the agent's step budget |
 
@@ -17,7 +17,9 @@ Edit roles in **Settings → Roles** or in `config.yaml` under `roles:`.
 
 - **operator** — full access, risky actions need confirmation.
 - **researcher** — read-only files + memory, no shell, no writes.
-- **coder** — files + shell, can be sandboxed to `allowed_paths`.
+- **coder** — files + shell. Give it `allowed_paths` to confine it to a folder: reads,
+  listings and writes outside those folders are refused (symlinks are resolved first),
+  and shell is switched off, because a shell command can't be confined without an OS sandbox.
 - **reviewer** — read-only.
 - **restricted** — read files / list dirs only.
 

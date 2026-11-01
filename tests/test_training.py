@@ -225,3 +225,91 @@ def test_playbook_save_and_build(client, monkeypatch):
             if job["status"] != "running":
                 break
     assert job["status"] == "done" and job["draft"] == "# Playbook\n## Call flow"
+
+
+# ── deep audit P2: uploads are bounded ─────────────────────────────────────────
+def _limits(monkeypatch, **kw):
+    base = {"file": 1000, "request": 3000, "storage": 10_000, "min_free": 0}
+    base.update(kw)
+    monkeypatch.setattr(training, "upload_limits", lambda cfg=None: base)
+
+
+def test_upload_without_a_size_is_refused(client):
+    from xplogent.interfaces.api.routes import voip as voip_routes
+
+    status, why = training.upload_refusal(None, training.upload_limits())
+    assert status == 411 and "Content-Length" in why
+    assert training.upload_refusal("chunked", training.upload_limits())[0] == 411
+    assert not voip_routes._upload_slots.locked()
+
+
+def test_an_upload_over_the_request_limit_is_refused_before_parsing(client, monkeypatch):
+    _limits(monkeypatch, request=500)
+    parsed = []
+    monkeypatch.setattr("starlette.requests.Request.form", lambda *a, **k: parsed.append(1))
+    res = client.post("/voip/training/upload", files=[("files", ("a.txt", b"x" * 900, "text/plain"))])
+    assert res.status_code == 413 and "at most" in res.json()["error"] and not parsed
+    assert list(training.training_dir().iterdir()) == []
+
+
+def test_one_file_over_the_limit_is_rejected_and_removed(client, monkeypatch):
+    _limits(monkeypatch)
+    res = client.post("/voip/training/upload", files=[("files", ("big.txt", b"x" * 1500, "text/plain")),
+                                                      ("files", ("ok.txt", b"hello", "text/plain"))]).json()
+    assert [a["file"] for a in res["added"]] == ["ok.txt"]
+    assert res["rejected"][0]["file"] == "big.txt" and "larger than" in res["rejected"][0]["error"]
+    assert [p.name.split("_", 1)[1] for p in training.training_dir().iterdir()] == ["ok.txt"]
+
+
+def test_many_files_over_the_aggregate_cap(client, monkeypatch):
+    _limits(monkeypatch, request=2500)
+    files = [("files", (f"f{i}.txt", b"y" * 900, "text/plain")) for i in range(2)]
+    files += [("files", ("f2.txt", b"y" * 900, "text/plain"))]
+    # 2.7 kB of file data (plus multipart framing) is over 2.5 kB: refused from the header
+    assert client.post("/voip/training/upload", files=files).status_code == 413
+    monkeypatch.setattr(training, "upload_refusal", lambda *a: (0, ""))   # a lying header: the copy is capped too
+    _limits(monkeypatch, request=2000)
+    res = client.post("/voip/training/upload", files=files).json()
+    assert len(res["added"]) == 2 and "in total" in res["rejected"][0]["error"]
+    assert len(list(training.training_dir().iterdir())) == 2
+
+
+def test_storage_quota_and_free_disk(client, monkeypatch):
+    import shutil
+    from collections import namedtuple
+
+    _limits(monkeypatch, storage=1000)
+    (training.training_dir() / "old.wav").write_bytes(b"z" * 900)
+    res = client.post("/voip/training/upload", files=[("files", ("a.txt", b"x" * 200, "text/plain"))])
+    assert res.status_code == 413 and "storage is full" in res.json()["error"]
+    _limits(monkeypatch, min_free=10 ** 9)
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: usage(10 ** 10, 0, 10 ** 8))
+    res = client.post("/voip/training/upload", files=[("files", ("a.txt", b"x" * 200, "text/plain"))])
+    assert res.status_code == 507 and "free disk" in res.json()["error"]
+
+
+def test_only_two_uploads_at_once(client):
+    import asyncio
+
+    from xplogent.interfaces.api.routes import voip as voip_routes
+
+    async def hold_both():
+        await voip_routes._upload_slots.acquire()
+        await voip_routes._upload_slots.acquire()
+    asyncio.run(hold_both())
+    try:
+        res = client.post("/voip/training/upload", files=[("files", ("a.txt", b"hi", "text/plain"))])
+        assert res.status_code == 429 and "try again" in res.json()["error"]
+    finally:
+        voip_routes._upload_slots.release()
+        voip_routes._upload_slots.release()
+
+
+def test_upload_limits_come_from_settings():
+    from xplogent.core.config import load_config, save_user_config
+
+    save_user_config({"voip": {"training": {"max_file_mb": 50, "max_storage_gb": 1}}})
+    lim = training.upload_limits(load_config())
+    assert lim["file"] == 50 * 1024 * 1024 and lim["storage"] == 1024 ** 3
+    assert lim["request"] == training.MAX_REQUEST_BYTES

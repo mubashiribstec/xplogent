@@ -32,7 +32,11 @@ from xplogent.memory.store import Store
 
 _log = get_logger("voip.training")
 
-MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024          # one file (voip.training.max_file_mb)
+MAX_REQUEST_BYTES = 1024 * 1024 * 1024        # one upload request, all files (max_request_mb)
+MAX_STORAGE_BYTES = 20 * 1024 ** 3            # everything kept for training (max_storage_gb)
+MIN_FREE_BYTES = 2 * 1024 ** 3                # disk left free after an upload (min_free_gb)
+UPLOAD_SLOTS = 2                              # uploads processed at once
 AUDIO_EXT = {".wav", ".mp3", ".m4a", ".ogg", ".oga", ".opus", ".flac", ".webm", ".aac", ".wma",
              ".mp4"}
 DOC_EXT = {".txt", ".md", ".markdown", ".pdf", ".rst", ".html", ".json"}
@@ -41,6 +45,57 @@ LAYOUTS = ("agent-left", "agent-right")
 
 _Q_NAMES = ("question", "questions", "q", "query", "prompt", "customer", "ask")
 _A_NAMES = ("answer", "answers", "a", "response", "reply", "agent")
+
+
+def upload_limits(cfg: Config | None = None) -> dict[str, int]:
+    """Byte limits for training uploads, from ``voip.training`` (each has a safe default)."""
+    t = ((cfg or load_config()).voip or {}).get("training") or {}
+
+    def num(key: str, default: int, unit: int) -> int:
+        try:
+            value = float(t.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        return int(value * unit) if value > 0 else default
+    mb, gb = 1024 * 1024, 1024 ** 3
+    return {"file": num("max_file_mb", MAX_UPLOAD_BYTES, mb), "request": num("max_request_mb", MAX_REQUEST_BYTES, mb),
+            "storage": num("max_storage_gb", MAX_STORAGE_BYTES, gb), "min_free": num("min_free_gb", MIN_FREE_BYTES, gb)}
+
+
+def storage_used() -> int:
+    """Bytes kept in the training folder (uploads waiting for or done with processing)."""
+    total = 0
+    for p in training_dir().iterdir():
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def upload_refusal(content_length: str | None, limits: dict[str, int]) -> tuple[int, str]:
+    """Checked from the headers before a byte of the body is parsed: (HTTP status, reason),
+    or (0, "") when the upload may go ahead."""
+    import shutil
+
+    if not content_length or not content_length.strip().isdigit():
+        return 411, "the upload must say its size (Content-Length)"
+    size = int(content_length)
+    if size > limits["request"]:
+        return 413, f"this upload is {_mb(size)}; at most {_mb(limits['request'])} at once: send fewer files at a time"
+    used = storage_used()
+    if used + size > limits["storage"]:
+        return 413, (f"training storage is full ({_mb(used)} of {_mb(limits['storage'])}): delete processed "
+                     "items you no longer need, or raise voip.training.max_storage_gb")
+    free = shutil.disk_usage(training_dir()).free
+    if free - size < limits["min_free"]:
+        return 507, f"not enough free disk space ({_mb(free)} free; {_mb(limits['min_free'])} must stay free)"
+    return 0, ""
+
+
+def _mb(n: int) -> str:
+    return f"{n / 1024 ** 3:.1f} GB" if n >= 1024 ** 3 else f"{n / (1024 * 1024):.0f} MB"
 
 
 def training_dir() -> Path:
