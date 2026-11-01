@@ -229,6 +229,17 @@ Caddy forwards WebSockets automatically, which the call audio stream needs.
   without the key file next to them, and the key file is useless without being kept private.
 - The carrier webhook is public by necessity and is protected by its secret path; use a long
   random secret and regenerate it if exposed.
+- **One instance per data directory.** Xplogent keeps its state in one SQLite database and
+  runs its background work (the campaign dialler, promised callbacks, the CRM outbox, SIP
+  registration) in its own process. Run exactly one container or service against a data
+  directory: two copies would both dial the same campaign and send the same summaries.
+  Several replicas behind a load balancer are not supported; for more calls at once, give the
+  one instance more CPU and raise the lines' `max_calls` (`voip.sip.max_calls`, `voip.sip_extension.max_calls`).
+- **Recordings and transcripts** are stored unencrypted in the data directory
+  (`voip/recordings/`, the database) and pruned after `voip.recording.retention_days`.
+  Keep the data directory on an encrypted disk if your policy requires encryption at rest.
+- **Role folders** (`roles.<name>.allowed_paths`) confine that role's file reads, listings
+  and writes, and switch shell off for it (a shell can't be confined without an OS sandbox).
 
 ## Packages and reproducibility
 

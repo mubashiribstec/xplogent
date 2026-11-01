@@ -209,4 +209,4 @@ Docker build and installer checks).
 
 ## License
 
-MIT
+MIT: see [LICENSE](LICENSE).
