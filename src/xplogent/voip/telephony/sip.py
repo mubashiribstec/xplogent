@@ -733,6 +733,15 @@ class SipTrunk(asyncio.DatagramProtocol):
             return {"ok": True, "via": self.via_name, "call": {"sip_call_id": call.call_id},
                     "state": "calling"}
 
+    def _not_answered(self, call: SipCall, early: asyncio.Future, why: str) -> None:
+        """It rang, then failed (busy, no answer): the dial already returned, so tell the
+        service (a campaign item waits for this)."""
+        if early.done() and self.service is not None and hasattr(self.service, "not_answered"):
+            try:
+                self.service.not_answered(dict(call.meta), why)
+            except Exception:  # noqa: BLE001
+                _log.exception("could not report the unanswered call")
+
     async def _outbound(self, call: SipCall, early: asyncio.Future) -> None:
         uri = f"sip:{call.number}@{self.domain}"
         sdp = build_sdp(self.contact_ip, call.rtp.port, (PCMU, PCMA))
@@ -773,6 +782,7 @@ class SipTrunk(asyncio.DatagramProtocol):
                                                           on_error_ack=ack_error)
         except Exception as exc:  # noqa: BLE001
             self.last_error = f"call to {call.number}: {exc}"
+            self._not_answered(call, early, self.last_error)
             settle({"ok": False, "error": self.last_error})
             await self._end(call)
             return
@@ -781,6 +791,7 @@ class SipTrunk(asyncio.DatagramProtocol):
         if not 200 <= resp.status < 300:
             ack_error(req, resp)
             self.last_error = f"call to {call.number}: {resp.status} {resp.reason}"
+            self._not_answered(call, early, self.last_error)
             settle({"ok": False, "error": self.last_error})
             call.remote_ended = True
             await self._end(call)

@@ -251,6 +251,13 @@ voip:
     long_speech_s: 4               # speech this long without a pause = a recorded greeting
     beep: true                     # a voicemail beep (800-1200 Hz tone) = machine
     telnyx_amd: premium            # Telnyx calls also use the carrier's detection: premium | detect | "" (off)
+  campaigns:                       # automatic calling of a vacancy's candidates (Campaigns page)
+    stop_all: false                # the big red button: no campaign dials while this is on
+    tick_s: 5                      # how often the dialler looks for calls to place
+  tps:                             # UK TPS / CTPS screening before automatic calls (always for cold campaigns)
+    enabled: false                 # true: screen every campaign number, whatever its consent basis
+    url: ""                        # your screening service (POST {"numbers": [...]}, key in XPLOGENT_TPS_API_KEY)
+    cache_days: 28                 # re-check a number after this many days
   callbacks:                       # exact-time callbacks the agent books ("tomorrow at 5:30")
     auto_dial: true                # the AI calls back itself at the agreed time (inside calling hours)
   recruiter_hours:                 # when a person can call back (recruiter callbacks); same format as calling_hours

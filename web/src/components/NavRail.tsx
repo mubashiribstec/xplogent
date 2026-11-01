@@ -1,14 +1,15 @@
 import type { Branding } from "../api";
 import {
   BarChart3, BookOpen, BookText, GraduationCap, type LucideIcon,
-  MessageSquare, Moon, PhoneCall, Contact, Settings as Cog, ShieldAlert, Sparkles, Sun,
+  Megaphone, MessageSquare, Moon, PhoneCall, Contact, Settings as Cog, ShieldAlert, Sparkles, Sun,
 } from "lucide-react";
 
-export type Tab = "chat" | "calls" | "contacts" | "training" | "knowledge" | "analytics" | "persona" | "audit" | "settings" | "guide";
+export type Tab = "chat" | "calls" | "campaigns" | "contacts" | "training" | "knowledge" | "analytics" | "persona" | "audit" | "settings" | "guide";
 
 export const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "calls", label: "Calls", icon: PhoneCall },
+  { id: "campaigns", label: "Campaigns", icon: Megaphone },
   { id: "contacts", label: "Contacts", icon: Contact },
   { id: "training", label: "Call training", icon: GraduationCap },
   { id: "knowledge", label: "Knowledge", icon: BookText },

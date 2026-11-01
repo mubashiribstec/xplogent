@@ -312,6 +312,45 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
   recruiter will confirm it". The original sentence is shown under **Not said** in the call's
   debug view, and the call summary counts it. If a blocked figure is right, add it to the
   vacancy in the CRM or to Knowledge.
+- **Campaigns** (the Campaigns page): automatic calling of one vacancy's candidates, from
+  the CRM's `campaigns/queue` (nearest first; the CRM leaves out the blocked, the not
+  interested, CVs already sent and so on).
+  - **Create:** search the CRM's open vacancies, see how many candidates fall within the
+    radius and why the others are left out, then create the campaign. It starts **off**.
+  - **When it dials:** only when every one of these holds:
+    - the phone agent is on, and **Stop all** isn't pressed (also
+      `xplogent voip campaigns stop-all`);
+    - it's inside the calling hours;
+    - the campaign's and today's spending caps aren't reached;
+    - there are fewer than "calls at once" calls in progress, and fewer than "new calls a minute"
+      started in the last minute.
+  - **Checks right before each call:**
+    - the CRM again (do not call, not interested, not looking for work);
+    - the do-not-call list;
+    - TPS (below);
+    - the CRM's dial lock, so no recruiter rings the same person at the same moment. Locked
+      means it's tried again in 2 hours.
+
+    If the CRM or TPS can't answer, nothing is dialled.
+  - **Results:**
+    - no answer, busy, voicemail or the callee hanging up → tried again later, 3 tries over
+      about 3 days by default (gaps of 2, 22 and 24 hours, moved into calling hours). The last
+      try is sent to the CRM with `final_attempt`;
+    - an agreed callback is dialled at its time;
+    - anything else is final.
+
+    Unanswered tries are logged as calls too, so the CRM sees every attempt.
+  - **Never more than 3 campaign calls to one person in 7 days, across all campaigns.**
+- **TPS screening** (Campaigns → TPS screening):
+  - **Cold campaigns:** always screened, and they can't be switched on until an admin has
+    confirmed the legal basis (recorded in the audit log).
+  - **Other campaigns:** screened when "screen every campaign" is on.
+  - Results are kept for 28 days. A number registered with TPS or CTPS is skipped. If the
+    screening service can't answer, the number is not dialled and you get an alert.
+  - **Wiring a service:** it receives `POST {"numbers": ["+447…"]}` with the key
+    (`XPLOGENT_TPS_API_KEY`) as a bearer token, and answers
+    `{"results": {"+447…": {"tps": false, "ctps": false}}}`. A provider with another format
+    needs a small proxy in front of it.
 - **Alerts** (Setup → Alerts): paste a Slack or Teams incoming-webhook address (it's stored
   as the secret `XPLOGENT_ALERT_WEBHOOK_URL`). You're told when:
   - 5 calls in a row fail (a busy line or no answer doesn't count);

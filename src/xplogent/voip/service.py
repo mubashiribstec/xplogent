@@ -258,6 +258,8 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
                                queue_wait_s=info.get("queue_wait_s"))
     if brief:
         store.set_call_brief(call_id, brief)
+        if brief.get("campaign_item_id") and not info.get("test"):
+            get_service().dialler.call_started(cfg, brief, call_id)
 
     if provider is None:
         from xplogent.providers.registry import build_provider
@@ -491,7 +493,12 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
         return result
     if not call.get("test"):
         alerts.session_result(session.turn_timings)
-    if st.callback_at and st.callback_who == "ai" and not call.get("test") and contact_phone \
+    campaign_brief = call.get("brief") if isinstance(call.get("brief"), dict) else {}
+    if campaign_brief.get("campaign_item_id") and not call.get("test"):
+        # A campaign call: the campaign item carries the retry / callback, not scheduled_callbacks.
+        get_service().dialler.call_finished(cfg, campaign_brief, outcome, call_id,
+                                            st.callback_at if st.callback_who == "ai" else "")
+    elif st.callback_at and st.callback_who == "ai" and not call.get("test") and contact_phone \
             and outcome in ("callback",):
         # We promised to call back at an exact time: the callback runner places that call.
         from datetime import datetime
@@ -582,6 +589,9 @@ class VoipService:
         # Set by the SIP lines when they are running: async (number, meta) -> result.
         self.sip_dialer: Any = None                       # trunk line (via="sip")
         self.sip_extension_dialer: Any = None             # extension line (via="extension")
+        from xplogent.voip.dialler import Dialler
+
+        self.dialler = Dialler(self)                      # campaigns (automatic calling)
 
     # -- outbound ---------------------------------------------------------------------
     async def dial(self, to_number: str, cfg: Config | None = None, *, contact_id: int | None = None,
@@ -643,6 +653,10 @@ class VoipService:
         if not test:
             alerts.dial_result(res)          # 5 carrier/line failures in a row → alert
         return res
+
+    def not_answered(self, meta: dict[str, Any], reason: str) -> None:
+        """A line says a placed call rang out, was busy or failed (campaign bookkeeping)."""
+        self.dialler.not_answered(meta, reason)
 
     # -- callbacks we promised ---------------------------------------------------------
     async def run_due_callbacks(self, cfg: Config | None = None, now: float | None = None) -> list[dict[str, Any]]:

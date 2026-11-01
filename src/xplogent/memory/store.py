@@ -229,6 +229,51 @@ CREATE TABLE IF NOT EXISTS scheduled_callbacks (
     updated_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_callbacks_due ON scheduled_callbacks(status, at);
+CREATE TABLE IF NOT EXISTS tps_cache (
+    phone TEXT PRIMARY KEY,
+    tps INTEGER DEFAULT 0,
+    ctps INTEGER DEFAULT 0,
+    checked_at REAL
+);
+CREATE TABLE IF NOT EXISTS campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    sale_id INTEGER,
+    sale TEXT DEFAULT '',
+    template TEXT DEFAULT '',
+    line TEXT DEFAULT '',
+    enabled INTEGER DEFAULT 0,
+    max_concurrent INTEGER DEFAULT 2,
+    calls_per_min INTEGER DEFAULT 4,
+    radius_km REAL DEFAULT 15,
+    retry_policy TEXT DEFAULT '',
+    daily_cost_cap REAL DEFAULT 0,
+    per_call_cost_cap REAL DEFAULT 0,
+    max_call_seconds INTEGER DEFAULT 480,
+    consent_basis TEXT DEFAULT 'applied',
+    cold_signoff TEXT DEFAULT '',
+    paused_reason TEXT DEFAULT '',
+    created_at REAL,
+    updated_at REAL
+);
+CREATE TABLE IF NOT EXISTS campaign_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER,
+    applicant_id INTEGER,
+    phone TEXT,
+    name TEXT DEFAULT '',
+    brief TEXT DEFAULT '',
+    state TEXT DEFAULT 'queued',
+    attempts INTEGER DEFAULT 0,
+    next_at REAL DEFAULT 0,
+    last_outcome TEXT DEFAULT '',
+    last_call_id INTEGER,
+    skip_reason TEXT DEFAULT '',
+    created_at REAL,
+    updated_at REAL,
+    UNIQUE(campaign_id, applicant_id)
+);
+CREATE INDEX IF NOT EXISTS idx_items_due ON campaign_items(campaign_id, state, next_at);
 """
 
 
@@ -1002,6 +1047,127 @@ class Store:
         row = self._query("SELECT COALESCE(SUM(cost), 0) FROM calls WHERE started_at>=? AND test=0 AND demo=0",
                           (since,))
         return round(float(row[0][0] or 0), 4)
+
+    # -- TPS screening cache (voip/compliance.py) ---------------------------------------
+    def tps_cached(self, phone: str, since: float) -> dict[str, Any] | None:
+        rows = self._query("SELECT tps, ctps, checked_at FROM tps_cache WHERE phone=? AND checked_at>=?",
+                           (phone, since))
+        return {"tps": bool(rows[0][0]), "ctps": bool(rows[0][1]), "checked_at": rows[0][2]} if rows else None
+
+    def tps_store(self, phone: str, tps: bool, ctps: bool) -> None:
+        self._write("INSERT OR REPLACE INTO tps_cache (phone, tps, ctps, checked_at) VALUES (?,?,?,?)",
+                    (phone, int(tps), int(ctps), time.time()))
+
+    # -- campaigns (voip/dialler.py) -----------------------------------------------------
+    _CAMPAIGN_JSON = ("sale", "retry_policy", "cold_signoff")
+    _CAMPAIGN_FIELDS = ("name", "sale_id", "sale", "template", "line", "enabled", "max_concurrent",
+                        "calls_per_min", "radius_km", "retry_policy", "daily_cost_cap", "per_call_cost_cap",
+                        "max_call_seconds", "consent_basis", "cold_signoff", "paused_reason")
+
+    def _campaign_row(self, row: Any) -> dict[str, Any]:
+        d = dict(row)
+        for key in self._CAMPAIGN_JSON:
+            try:
+                d[key] = json.loads(d.get(key) or "{}")
+            except ValueError:
+                d[key] = {}
+        d["enabled"] = bool(d.get("enabled"))
+        return d
+
+    def create_campaign(self, fields: dict[str, Any]) -> int:
+        now = time.time()
+        cols = [k for k in self._CAMPAIGN_FIELDS if k in fields]
+        vals = [json.dumps(fields[k]) if k in self._CAMPAIGN_JSON else fields[k] for k in cols]
+        cur = self._write(f"INSERT INTO campaigns ({', '.join(cols)}, created_at, updated_at) "
+                          f"VALUES ({', '.join('?' * len(cols))}, ?, ?)", (*vals, now, now))
+        return int(cur.lastrowid)
+
+    def update_campaign(self, campaign_id: int, fields: dict[str, Any]) -> None:
+        cols = [k for k in self._CAMPAIGN_FIELDS if k in fields]
+        if not cols:
+            return
+        vals = [json.dumps(fields[k]) if k in self._CAMPAIGN_JSON else fields[k] for k in cols]
+        self._write(f"UPDATE campaigns SET {', '.join(c + '=?' for c in cols)}, updated_at=? WHERE id=?",
+                    (*vals, time.time(), campaign_id))
+
+    def get_campaign(self, campaign_id: int) -> dict[str, Any] | None:
+        rows = self._query("SELECT * FROM campaigns WHERE id=?", (campaign_id,))
+        return self._campaign_row(rows[0]) if rows else None
+
+    def list_campaigns(self) -> list[dict[str, Any]]:
+        return [self._campaign_row(r) for r in self._query("SELECT * FROM campaigns ORDER BY id DESC")]
+
+    def add_campaign_items(self, campaign_id: int, items: list[dict[str, Any]]) -> int:
+        """Queue candidates (an applicant already in the campaign is ignored)."""
+        now, added = time.time(), 0
+        for it in items:
+            cur = self._write(
+                "INSERT OR IGNORE INTO campaign_items (campaign_id, applicant_id, phone, name, brief, state, "
+                "next_at, created_at, updated_at) VALUES (?,?,?,?,?,'queued',0,?,?)",
+                (campaign_id, it["applicant_id"], it["phone"], it.get("name", ""),
+                 json.dumps(it.get("brief") or {}, default=str), now, now))
+            added += cur.rowcount
+        return added
+
+    @staticmethod
+    def _item_row(row: Any) -> dict[str, Any]:
+        d = dict(row)
+        try:
+            d["brief"] = json.loads(d.get("brief") or "{}")
+        except ValueError:
+            d["brief"] = {}
+        return d
+
+    def due_items(self, campaign_id: int, now: float, limit: int) -> list[dict[str, Any]]:
+        rows = self._query("SELECT * FROM campaign_items WHERE campaign_id=? AND state IN ('queued','retry_wait') "
+                           "AND next_at<=? ORDER BY next_at, id LIMIT ?", (campaign_id, now, limit))
+        return [self._item_row(r) for r in rows]
+
+    def get_item(self, item_id: int) -> dict[str, Any] | None:
+        rows = self._query("SELECT * FROM campaign_items WHERE id=?", (item_id,))
+        return self._item_row(rows[0]) if rows else None
+
+    def update_item(self, item_id: int, fields: dict[str, Any]) -> None:
+        allowed = ("state", "attempts", "next_at", "last_outcome", "last_call_id", "skip_reason", "brief")
+        cols = [k for k in allowed if k in fields]
+        vals = [json.dumps(fields[k], default=str) if k == "brief" else fields[k] for k in cols]
+        self._write(f"UPDATE campaign_items SET {', '.join(c + '=?' for c in cols)}, updated_at=? WHERE id=?",
+                    (*vals, time.time(), item_id))
+
+    def list_items(self, campaign_id: int, limit: int = 200) -> list[dict[str, Any]]:
+        rows = self._query("SELECT * FROM campaign_items WHERE campaign_id=? ORDER BY updated_at DESC LIMIT ?",
+                           (campaign_id, limit))
+        return [self._item_row(r) for r in rows]
+
+    def stale_items(self, before: float) -> list[dict[str, Any]]:
+        rows = self._query("SELECT * FROM campaign_items WHERE state IN ('dialling','in_call') AND updated_at<?",
+                           (before,))
+        return [self._item_row(r) for r in rows]
+
+    def item_counts(self, campaign_id: int) -> dict[str, int]:
+        counts = {r[0]: int(r[1]) for r in self._query(
+            "SELECT state, COUNT(*) FROM campaign_items WHERE campaign_id=? GROUP BY state", (campaign_id,))}
+        for r in self._query("SELECT last_outcome, COUNT(*) FROM campaign_items WHERE campaign_id=? "
+                             "AND last_outcome<>'' GROUP BY last_outcome", (campaign_id,)):
+            counts[f"outcome:{r[0]}"] = int(r[1])
+        return counts
+
+    def ai_attempts_since(self, applicant_id: int, since: float) -> int:
+        """Campaign calls placed to this applicant since ``since``, across all campaigns."""
+        rows = self._query("SELECT COUNT(*) FROM calls WHERE test=0 AND started_at>=? "
+                           "AND json_extract(CASE WHEN json_valid(brief) THEN brief ELSE '{}' END, '$.applicant_id')=? "
+                           "AND json_extract(CASE WHEN json_valid(brief) THEN brief ELSE '{}' END, '$.campaign_id') IS NOT NULL", (since, applicant_id))
+        return int(rows[0][0])
+
+    def campaign_spend_since(self, campaign_id: int, since: float) -> float:
+        rows = self._query("SELECT COALESCE(SUM(cost), 0) FROM calls WHERE test=0 AND started_at>=? "
+                           "AND json_extract(CASE WHEN json_valid(brief) THEN brief ELSE '{}' END, '$.campaign_id')=?", (since, campaign_id))
+        return round(float(rows[0][0] or 0), 4)
+
+    def campaign_calls_since(self, campaign_id: int, since: float) -> int:
+        rows = self._query("SELECT COUNT(*) FROM calls WHERE started_at>=? "
+                           "AND json_extract(CASE WHEN json_valid(brief) THEN brief ELSE '{}' END, '$.campaign_id')=?", (since, campaign_id))
+        return int(rows[0][0])
 
     def set_call_brief(self, call_id: int, brief: dict[str, Any]) -> None:
         self._write("UPDATE calls SET brief=? WHERE id=?", (json.dumps(brief, default=str), call_id))

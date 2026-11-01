@@ -171,3 +171,26 @@ def mock_crm(port: int = typer.Option(8089, "--port"),
     console.print(f"Mock CRM on http://{host}:{port} (token from {'--token' if token != os.environ.get(name) else name}). "
                   f"What it received: http://{host}:{port}/_mock/state")
     uvicorn.run(create_app(token), host=host, port=port, log_level="warning")
+
+
+@voip_app.command("campaigns")
+def campaigns_cmd(action: str = typer.Argument("list", help="list | stop-all | resume-all"),
+                  url: str | None = _URL) -> None:
+    """Automatic calling: list campaigns, or stop / resume every campaign at once."""
+    if action == "stop-all":
+        api("POST", "/voip/campaigns/stop-all", url, {"stop": True})
+        console.print("[bold red]All campaigns stopped.[/] Calls in progress finish; nothing new is dialled.")
+        return
+    if action == "resume-all":
+        api("POST", "/voip/campaigns/stop-all", url, {"stop": False})
+        console.print("Campaigns may dial again (each still needs to be switched on).")
+        return
+    data = api("GET", "/voip/campaigns", url)
+    table = Table("id", "name", "on", "queued", "done", "spend today", "note")
+    for c in data["campaigns"]:
+        n = c["counts"]
+        table.add_row(str(c["id"]), c["name"], "yes" if c["enabled"] else "no", str(n.get("queued", 0)),
+                      str(n.get("done", 0)), f"${c['spend_today']:.2f}", c.get("paused_reason") or c["enable_problem"])
+    console.print(table)
+    if data["stop_all"]:
+        console.print("[bold red]Stop all is ON[/]: no campaign dials (xplogent voip campaigns resume-all).")

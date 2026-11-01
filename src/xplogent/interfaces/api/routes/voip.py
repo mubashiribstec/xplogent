@@ -115,6 +115,201 @@ async def voip_readiness() -> dict:
     return {"ready": all(i["ok"] for i in items if i["required"]), "items": items}
 
 
+# ── campaigns (voip/dialler.py) ─────────────────────────────────────────────────
+def _campaign_fields(body: dict, current: dict | None = None) -> tuple[dict, str]:
+    """Validated campaign settings from a request (clamped to sane ranges)."""
+    from xplogent.voip import crm
+    from xplogent.voip.dialler import CONSENT, LINES
+    from xplogent.voip.templates import TEMPLATES
+
+    out: dict = {}
+
+    def num(key, lo, hi, cast=float):
+        if key in body:
+            try:
+                out[key] = cast(min(hi, max(lo, float(body[key]))))
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} must be a number") from None
+
+    try:
+        num("max_concurrent", 1, 20, int)
+        num("calls_per_min", 1, 60, int)
+        num("radius_km", 1, 80)
+        num("daily_cost_cap", 0, 100_000)
+        num("per_call_cost_cap", 0, 100)
+        num("max_call_seconds", 120, 1800, int)
+    except ValueError as exc:
+        return {}, str(exc)
+    if "name" in body:
+        out["name"] = " ".join(str(body["name"] or "").split())[:80]
+    if "line" in body:
+        if body["line"] not in LINES:
+            return {}, "line must be telnyx, sip or extension"
+        out["line"] = body["line"]
+    if "consent_basis" in body:
+        if body["consent_basis"] not in CONSENT:
+            return {}, "consent_basis must be applied, registered or cold"
+        out["consent_basis"] = body["consent_basis"]
+        if body["consent_basis"] != "cold":
+            out["cold_signoff"] = {}
+    if "template" in body:
+        if body["template"] and body["template"] not in TEMPLATES:
+            return {}, "unknown template"
+        out["template"] = body["template"] or ""
+    if "retry_policy" in body:
+        rp = body["retry_policy"] or {}
+        try:
+            gaps = [min(168.0, max(0.5, float(g))) for g in (rp.get("gaps_hours") or [2, 22, 24])][:5]
+            out["retry_policy"] = {"max_attempts": int(min(5, max(1, int(rp.get("max_attempts") or 3)))),
+                                   "gaps_hours": gaps}
+        except (TypeError, ValueError):
+            return {}, "retry_policy needs max_attempts and gaps_hours (numbers)"
+    if "sale" in body and isinstance(body["sale"], dict):
+        out["sale"] = crm._pick(body["sale"], crm.SALE_SPEC)
+    if "sale_id" in body and current is None:
+        try:
+            out["sale_id"] = int(body["sale_id"])
+        except (TypeError, ValueError):
+            return {}, "sale_id must be a number"
+    return out, ""
+
+
+def _campaign_view(store, c: dict, cfg) -> dict:
+    import time as _time
+    from datetime import datetime
+
+    from xplogent.voip import hours
+    from xplogent.voip.dialler import enable_problem
+
+    tz, _ = hours._zone(cfg.voip or {}, None)
+    midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    return {**c, "counts": store.item_counts(c["id"]), "spend_today": store.campaign_spend_since(c["id"], midnight),
+            "calls_last_minute": store.campaign_calls_since(c["id"], _time.time() - 60),
+            "enable_problem": enable_problem(cfg, c)}
+
+
+@router.get("/voip/campaigns")
+async def voip_campaigns() -> dict:
+    cfg = load_config()
+    with Store(cfg.db_path) as store:
+        rows = [_campaign_view(store, c, cfg) for c in store.list_campaigns()]
+    return {"campaigns": rows, "stop_all": bool(((cfg.voip or {}).get("campaigns") or {}).get("stop_all")),
+            "agent_on": bool((cfg.voip or {}).get("enabled"))}
+
+
+@router.post("/voip/campaigns")
+async def voip_campaign_create(body: dict) -> dict:
+    fields, problem = _campaign_fields(body)
+    if problem:
+        return {"ok": False, "error": problem}
+    if not fields.get("sale_id"):
+        return {"ok": False, "error": "pick a vacancy (sale_id)"}
+    cfg = load_config()
+    mode = str((cfg.voip or {}).get("telephony") or "telnyx")
+    fields.setdefault("line", {"sip": "sip", "extension": "extension"}.get(mode, "telnyx"))
+    fields.setdefault("template", "kingsbury_outbound_screener")
+    fields.setdefault("name", f"{(fields.get('sale') or {}).get('job_title') or 'Vacancy'} #{fields['sale_id']}")
+    fields.setdefault("retry_policy", {"max_attempts": 3, "gaps_hours": [2, 22, 24]})
+    fields["enabled"] = 0
+    with Store(cfg.db_path) as store:
+        cid = store.create_campaign(fields)
+        view = _campaign_view(store, store.get_campaign(cid), cfg)
+    deps.audit_event("voip_campaign_create", target=f"{cid}: sale {fields['sale_id']}", risk="medium")
+    return {"ok": True, "campaign": view}
+
+
+@router.get("/voip/campaigns/{campaign_id}")
+async def voip_campaign(campaign_id: int, limit: int = 200) -> dict:
+    cfg = load_config()
+    with Store(cfg.db_path) as store:
+        c = store.get_campaign(campaign_id)
+        if c is None:
+            return JSONResponse({"ok": False, "error": "no such campaign"}, status_code=404)
+        items = [{k: it[k] for k in ("id", "applicant_id", "phone", "name", "state", "attempts", "next_at",
+                                     "last_outcome", "last_call_id", "skip_reason", "updated_at")}
+                 | {"distance_miles": (it["brief"].get("candidate") or {}).get("distance_miles")}
+                 for it in store.list_items(campaign_id, max(1, min(limit, 1000)))]
+        return {"ok": True, "campaign": _campaign_view(store, c, cfg), "items": items}
+
+
+@router.patch("/voip/campaigns/{campaign_id}")
+async def voip_campaign_update(campaign_id: int, body: dict) -> dict:
+    cfg = load_config()
+    with Store(cfg.db_path) as store:
+        c = store.get_campaign(campaign_id)
+        if c is None:
+            return {"ok": False, "error": "no such campaign"}
+        fields, problem = _campaign_fields(body, c)
+        if problem:
+            return {"ok": False, "error": problem}
+        if fields.get("consent_basis") == "cold" and c.get("consent_basis") != "cold":
+            fields["enabled"] = 0                 # a change to cold needs the sign-off again
+        store.update_campaign(campaign_id, fields)
+        view = _campaign_view(store, store.get_campaign(campaign_id), cfg)
+    deps.audit_event("voip_campaign_update", target=f"{campaign_id}: {', '.join(fields)}", risk="low")
+    return {"ok": True, "campaign": view}
+
+
+@router.post("/voip/campaigns/{campaign_id}/enable")
+async def voip_campaign_enable(campaign_id: int, body: dict | None = None) -> dict:
+    from xplogent.voip.dialler import enable_problem
+
+    on = bool((body or {}).get("on", True))
+    cfg = load_config()
+    with Store(cfg.db_path) as store:
+        c = store.get_campaign(campaign_id)
+        if c is None:
+            return {"ok": False, "error": "no such campaign"}
+        if on and (problem := enable_problem(cfg, c)):
+            return {"ok": False, "error": problem}
+        store.update_campaign(campaign_id, {"enabled": int(on), "paused_reason": ""})
+        view = _campaign_view(store, store.get_campaign(campaign_id), cfg)
+    deps.audit_event("voip_campaign_on" if on else "voip_campaign_off", target=str(campaign_id), risk="medium")
+    return {"ok": True, "campaign": view}
+
+
+@router.post("/voip/campaigns/{campaign_id}/cold-signoff")
+async def voip_campaign_cold_signoff(campaign_id: int, body: dict) -> dict:
+    """An admin confirms cold calling for this campaign is lawful (recorded and audited)."""
+    import time as _time
+
+    by = " ".join(str(body.get("by") or "").split())[:80]
+    if not by or not body.get("confirm"):
+        return {"ok": False, "error": "type your name and tick the confirmation"}
+    cfg = load_config()
+    with Store(cfg.db_path) as store:
+        if store.get_campaign(campaign_id) is None:
+            return {"ok": False, "error": "no such campaign"}
+        store.update_campaign(campaign_id, {"cold_signoff": {"by": by, "at": _time.time()}})
+        view = _campaign_view(store, store.get_campaign(campaign_id), cfg)
+    deps.audit_event("voip_campaign_cold_signoff", target=f"{campaign_id} by {by}", risk="high", allowed=True)
+    return {"ok": True, "campaign": view}
+
+
+@router.post("/voip/campaigns/{campaign_id}/refill")
+async def voip_campaign_refill(campaign_id: int) -> dict:
+    """Ask the CRM for this vacancy's next candidates now."""
+    from xplogent.voip.service import get_service
+
+    cfg = load_config()
+    with Store(cfg.db_path) as store:
+        c = store.get_campaign(campaign_id)
+    if c is None:
+        return {"ok": False, "error": "no such campaign"}
+    return await get_service().dialler.refill(cfg, c)
+
+
+@router.post("/voip/campaigns/stop-all")
+async def voip_campaigns_stop_all(body: dict | None = None) -> dict:
+    """The big red button (or resume with {"stop": false}). Calls in progress finish."""
+    from xplogent.core.config import save_user_config
+
+    stop = bool((body or {}).get("stop", True))
+    save_user_config({"voip": {"campaigns": {"stop_all": stop}}})
+    deps.audit_event("voip_campaigns_stop_all" if stop else "voip_campaigns_resume_all", risk="high")
+    return {"ok": True, "stop_all": stop}
+
+
 @router.get("/voip/callbacks")
 async def voip_callbacks(limit: int = 50) -> dict:
     """Callbacks the agent promised (the AI places them at the agreed time)."""

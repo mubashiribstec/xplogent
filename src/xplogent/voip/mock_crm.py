@@ -210,15 +210,20 @@ class MockCRM:
         current = self._locked(str(body.get("phone") or ""))
         if current and current["by"] != by:
             return 409, {"locked": False, "locked_by": current["by"], "expires_at": current["expires"]}
+        if current and current.get("token") and body.get("lock_token") != current["token"]:
+            return 409, {"locked": False, "locked_by": f"{by} (another call)", "expires_at": current["expires"]}
         expires = time.time() + int(body.get("ttl_seconds") or 900)
-        self.locks[tail(str(body.get("phone") or ""))] = {"by": by, "expires": expires}
+        self.locks[tail(str(body.get("phone") or ""))] = {"by": by, "expires": expires,
+                                                          "token": str(body.get("lock_token") or "")}
         return 200, {"locked": True, "expires_at": expires}
 
     def unlock(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         key = tail(str(body.get("phone") or ""))
-        if (self.locks.get(key) or {}).get("by") == "Xplogent AI":
+        lock = self.locks.get(key) or {}
+        if lock.get("by") == "Xplogent AI" and (not lock.get("token") or lock["token"] == body.get("lock_token")):
             self.locks.pop(key, None)
-        return 200, {"ok": True}
+            return 200, {"ok": True}
+        return 200, {"ok": True, "released": False}
 
 
 def create_app(token: str, crm: MockCRM | None = None) -> FastAPI:

@@ -272,15 +272,18 @@ Request:
 - Rate-limit: at most 3 per applicant per day.
 
 ### 4.6 `POST /api/xplogent/dial-lock` and `POST /api/xplogent/dial-unlock`
-- **`dial-lock`** request: `{"phone": "+447700900123", "applicant_id": 123, "ttl_seconds": 900}`.
+- **`dial-lock`** request: `{"phone": "+447700900123", "applicant_id": 123, "ttl_seconds": 900,
+  "lock_token": "<random, per call>"}`.
+  - Store `lock_token` with the lock. The same token renews it; a different token while it is
+    unexpired gets 409 (another Xplogent call or worker holds it).
   - Use `PhoneNumber::lockKey` and the `DialLock` model, owned by the AI user.
   - Success: 200 `{"locked": true, "expires_at": …}`.
   - Already locked by someone else and unexpired: 409
     `{"locked": false, "locked_by": "<user name>", "expires_at": …}`.
   - Recruiters' existing click-to-dial must show the AI's lock like any other ("being called
     by Xplogent AI").
-- **`dial-unlock`** request: `{"phone": "+447700900123"}`. It removes only the AI user's own
-  lock.
+- **`dial-unlock`** request: `{"phone": "+447700900123", "lock_token": "…"}`. It removes the
+  AI user's lock only when the token matches, so one worker can never release another's lock.
 
 ## 5. Tests (PHPUnit feature tests, `RefreshDatabase`; add factories where missing)
 

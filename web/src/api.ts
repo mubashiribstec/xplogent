@@ -412,6 +412,43 @@ export async function getCallbacks(): Promise<{ callbacks: CallbackRow[] }> {
 export async function cancelCallback(id: number): Promise<{ ok: boolean }> {
   return (await fetch(`/voip/callbacks/${id}/cancel`, { method: "POST" })).json();
 }
+// ── Campaigns (automatic calling, CRM v2) ─────────────────────────────────────
+export interface Campaign {
+  id: number; name: string; sale_id: number; sale: Record<string, any>; template: string; line: string;
+  enabled: boolean; max_concurrent: number; calls_per_min: number; radius_km: number;
+  retry_policy: { max_attempts?: number; gaps_hours?: number[] }; daily_cost_cap: number; per_call_cost_cap: number;
+  max_call_seconds: number; consent_basis: "applied" | "registered" | "cold"; cold_signoff: { by?: string; at?: number };
+  paused_reason: string; counts: Record<string, number>; spend_today: number; calls_last_minute: number;
+  enable_problem: string;
+}
+export interface CampaignItem {
+  id: number; applicant_id: number; phone: string; name: string; state: string; attempts: number; next_at: number;
+  last_outcome: string; last_call_id: number | null; skip_reason: string; updated_at: number; distance_miles?: number;
+}
+export interface CrmSale { sale_id: number; job_title: string; postcode_district: string; office_name: string;
+  unit_name: string; salary: string; position_type: string; cvs_sent: number; cv_limit: number }
+export const getCampaigns = async (): Promise<{ campaigns: Campaign[]; stop_all: boolean; agent_on: boolean }> =>
+  (await fetch("/voip/campaigns")).json();
+export const getCampaign = async (id: number): Promise<{ ok: boolean; campaign: Campaign; items: CampaignItem[] }> =>
+  (await fetch(`/voip/campaigns/${id}`)).json();
+export const createCampaign = (body: Record<string, any>) =>
+  postJSON<{ ok: boolean; error?: string; campaign?: Campaign }>("/voip/campaigns", body);
+export const updateCampaign = async (id: number, body: Record<string, any>): Promise<{ ok: boolean; error?: string; campaign?: Campaign }> =>
+  (await fetch(`/voip/campaigns/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) })).json();
+export const enableCampaign = (id: number, on: boolean) =>
+  postJSON<{ ok: boolean; error?: string; campaign?: Campaign }>(`/voip/campaigns/${id}/enable`, { on });
+export const coldSignoff = (id: number, by: string) =>
+  postJSON<{ ok: boolean; error?: string }>(`/voip/campaigns/${id}/cold-signoff`, { by, confirm: true });
+export const refillCampaign = (id: number) =>
+  postJSON<{ ok: boolean; error?: string; added?: number; skipped?: Record<string, number> }>(`/voip/campaigns/${id}/refill`);
+export const stopAllCampaigns = (stop: boolean) => postJSON<{ ok: boolean; stop_all: boolean }>("/voip/campaigns/stop-all", { stop });
+export const crmSales = (search: string) =>
+  postJSON<{ ok: boolean; sales: CrmSale[]; error?: string; reason?: string; fix?: string }>("/voip/crm/sales", { search, limit: 50 });
+export const crmQueue = (sale_id: number, radius_km: number) =>
+  postJSON<{ ok: boolean; candidates: any[]; skipped: Record<string, number>; error?: string; message?: string }>(
+    "/voip/crm/queue", { sale_id, radius_km, limit: 50 });
+
 export interface ReadinessItem { id: string; label: string; ok: boolean; detail: string; required: boolean }
 export async function getVoipReadiness(): Promise<{ ready: boolean; items: ReadinessItem[] }> {
   return (await fetch("/voip/readiness")).json();

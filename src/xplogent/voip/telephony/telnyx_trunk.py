@@ -188,6 +188,9 @@ class TelnyxTrunk:
         elif ev["event"] == "call.hangup":
             self.by_call.pop(ccid, None)
             self._seen_at.pop(ccid, None)
+            never_answered = self.outbound.pop(ccid, None)    # ours, and call.answered never came
+            if never_answered is not None and hasattr(self.service, "not_answered"):
+                self.service.not_answered(never_answered, f"Telnyx: {ev.get('hangup_cause') or 'not answered'}")
         return {"ok": True}
 
     @staticmethod

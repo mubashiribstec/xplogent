@@ -15,6 +15,7 @@ import { Knowledge } from "./views/Knowledge";
 import { Analytics } from "./views/Analytics";
 import { Audit } from "./views/Audit";
 import { Calls } from "./views/Calls";
+import { Campaigns } from "./views/Campaigns";
 import { Contacts } from "./views/Contacts";
 import { Training } from "./views/Training";
 import { Settings } from "./Settings";
@@ -154,6 +155,7 @@ export function App() {
         )}
         {tab === "chat" && <Chat />}
         {tab === "calls" && <Calls />}
+        {tab === "campaigns" && <Campaigns />}
         {tab === "contacts" && <Contacts />}
         {tab === "training" && <Training />}
         {tab === "knowledge" && <Knowledge />}

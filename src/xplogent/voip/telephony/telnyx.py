@@ -110,6 +110,7 @@ def parse_webhook(payload: dict[str, Any]) -> dict[str, str]:
         "client_state": state,
         "digit": str(p.get("digit", "")),
         "result": str(p.get("result", "")),          # call.machine.*.detection.ended
+        "hangup_cause": str(p.get("hangup_cause", "")),
     }
 
 

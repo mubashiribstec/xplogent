@@ -100,16 +100,22 @@ async def test_lookup_parses_the_v2_record(mock):
 
 async def test_dial_locks(mock):
     cfg = load_config()
-    assert (await crm.dial_lock(cfg, "+447700900123", 123))["locked"]
-    assert (await crm.dial_lock(cfg, "+447700900123", 123))["locked"]          # ours: renewed
+    first = await crm.dial_lock(cfg, "+447700900123", 123)
+    assert first["locked"] and first["lock_token"]
+    renewed = await crm.dial_lock(cfg, "+447700900123", 123, lock_token=first["lock_token"])
+    assert renewed["locked"]                                                  # same lease: renewed
+    other = await crm.dial_lock(cfg, "+447700900123", 123)                    # another call / worker
+    assert not other["locked"] and other["status"] == 409
     mock.lock({"phone": "07700900124"}, by="Jane Recruiter")
     taken = await crm.dial_lock(cfg, "+447700900124", 124)
     assert not taken["locked"] and taken["status"] == 409 and taken["locked_by"] == "Jane Recruiter"
     q = await crm.campaign_queue(cfg, 45)
     assert [c["applicant_id"] for c in q["candidates"]] == []                 # both locked
     assert q["skipped"]["locked"] == 2
-    await crm.dial_unlock(cfg, "+447700900123")
-    await crm.dial_unlock(cfg, "+447700900124")                                # not ours: stays
+    await crm.dial_unlock(cfg, "+447700900123", "not-the-token")             # can't free it
+    assert mock._locked("07700900123")
+    await crm.dial_unlock(cfg, "+447700900123", first["lock_token"])
+    await crm.dial_unlock(cfg, "+447700900124", first["lock_token"])         # Jane's: stays
     q = await crm.campaign_queue(cfg, 45)
     assert [c["applicant_id"] for c in q["candidates"]] == [123]
 

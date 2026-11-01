@@ -466,19 +466,24 @@ async def send_job_details(cfg: Config, applicant_id: int, sale_id: int, email: 
 
 
 async def dial_lock(cfg: Config, phone: str, applicant_id: int | None = None, ttl_seconds: int = 900,
-                    *, transport=None) -> dict[str, Any]:
+                    *, lock_token: str = "", transport=None) -> dict[str, Any]:
     """Take the CRM's dial lock so no recruiter rings the same person (contract 4.6).
 
-    ``locked`` is False with ``locked_by`` when someone else holds it."""
+    ``locked`` is False with ``locked_by`` when someone else holds it. ``lock_token`` (made
+    here when not given) identifies this lease: only the same token releases it, so one
+    worker can never free another's lock."""
+    import secrets
+
+    token = lock_token or secrets.token_hex(12)
     res = await post(cfg, "dial-lock", {"phone": phone, "applicant_id": applicant_id,
-                                        "ttl_seconds": int(ttl_seconds)}, transport=transport)
+                                        "ttl_seconds": int(ttl_seconds), "lock_token": token}, transport=transport)
     data = res["data"]
-    return {**res, "locked": res["ok"] and data.get("locked") is True,
+    return {**res, "locked": res["ok"] and data.get("locked") is True, "lock_token": token,
             "locked_by": _clean(data.get("locked_by"), 100), "expires_at": _clean(data.get("expires_at"), 40)}
 
 
-async def dial_unlock(cfg: Config, phone: str, *, transport=None) -> dict[str, Any]:
-    return await post(cfg, "dial-unlock", {"phone": phone}, transport=transport)
+async def dial_unlock(cfg: Config, phone: str, lock_token: str = "", *, transport=None) -> dict[str, Any]:
+    return await post(cfg, "dial-unlock", {"phone": phone, "lock_token": lock_token}, transport=transport)
 
 
 def explain_failure(res: dict[str, Any]) -> dict[str, str]:
