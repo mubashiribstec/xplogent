@@ -55,6 +55,30 @@ def unanswered_outcome(reason: str) -> str:
     return "no_answer"
 
 
+# Our own line failing (not the candidate's phone): never counts as an attempt.
+_LINE_FAULT = re.compile(r"\b(401|407)\b|unauthori[sz]ed|proxy authentication|not set up|not switched on"
+                         r"|not registered", re.I)
+
+
+def line_fault(reason: str) -> bool:
+    """The dial failed because of our line (credentials, line off), not the callee."""
+    return bool(_LINE_FAULT.search(reason or ""))
+
+
+def line_not_ready(line: str) -> str:
+    """A SIP line that is set up to register but isn't registered yet (e.g. just after a
+    restart): wait for it instead of failing dials. A line that isn't set up at all still
+    fails the dial, which raises the line alert."""
+    if line not in ("sip", "extension"):
+        return ""
+    from xplogent.voip.telephony import sip
+
+    trunk = sip.current_line("trunk" if line == "sip" else "extension")
+    if trunk is not None and trunk.s.register and not trunk.registered:
+        return f"waiting for the {line} line to register"
+    return ""
+
+
 def policy(campaign: dict[str, Any]) -> dict[str, Any]:
     p = {**DEFAULT_POLICY, **(campaign.get("retry_policy") or {})}
     p["max_attempts"] = max(1, int(p.get("max_attempts") or 3))
@@ -140,6 +164,8 @@ class Dialler:
         from xplogent.voip.service import daily_cap_problem
 
         if problem := daily_cap_problem(cfg):
+            return problem
+        if problem := line_not_ready(c.get("line", "")):
             return problem
         in_flight = counts.get("dialling", 0) + counts.get("in_call", 0)
         recent = self._dials[c["id"]]
@@ -248,8 +274,22 @@ class Dialler:
         if "do-not-call" in str(res.get("error")):
             await crm.dial_unlock(cfg, phone, lock["lock_token"])
             return self._skip(cfg, item, "do-not-call list")
+        if line_fault(str(res.get("error"))):
+            await self._line_fault(cfg, c, item["id"], attempt, phone, lock["lock_token"], str(res.get("error")))
+            return "stop"
         await self.record_unanswered(cfg, item["id"], str(res.get("error") or "dial failed"))
         return "failed"
+
+    async def _line_fault(self, cfg: Config, c: dict[str, Any], item_id: int, attempt: int, phone: str,
+                          lock_token: str, error: str) -> None:
+        """Our line refused the dial: put the item back untouched and tell someone."""
+        with Store(cfg.db_path) as store:
+            store.update_item(item_id, {"state": "queued", "attempts": max(0, attempt - 1),
+                                        "skip_reason": f"line problem: {error[:120]}"})
+        await crm.dial_unlock(cfg, phone, lock_token)
+        alerts.alert("campaign_line", f"Campaign '{c.get('name', '')}' can't dial: the {c.get('line', '')} line "
+                                      f"refused the call ({error[:160]}). Check the line in Calls → Telephony; "
+                                      "nobody's attempts were used up.")
 
     # -- results ---------------------------------------------------------------------
     async def record_unanswered(self, cfg: Config, item_id: int, reason: str) -> None:
@@ -259,6 +299,12 @@ class Dialler:
             item = store.get_item(item_id)
             if item is None or item["state"] not in ("dialling", "in_call"):
                 return
+            campaign = store.get_campaign(item["campaign_id"]) or {}
+        if line_fault(reason):           # reported after the dial was placed
+            await self._line_fault(cfg, campaign, item_id, int(item["attempts"]), item["phone"],
+                                   str(item["brief"].get("lock_token") or ""), reason)
+            return
+        with Store(cfg.db_path) as store:
             outcome = unanswered_outcome(reason)
             call_id = store.start_call("outbound", "", item["phone"], transport="", line="")
             store.set_call_brief(call_id, item["brief"])

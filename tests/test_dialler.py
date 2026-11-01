@@ -305,3 +305,38 @@ def test_campaign_api(mock):
         assert len(detail["items"]) == 2 and detail["campaign"]["counts"]["queued"] == 2
         assert c.post("/voip/campaigns/stop-all", json={"stop": True}).json()["stop_all"]
         assert c.get("/voip/campaigns").json()["stop_all"] is True
+
+
+# ── our own line failing never uses up a candidate's attempts (found on the rig) ─────────
+def test_line_faults_are_recognised():
+    from xplogent.voip.dialler import line_fault
+
+    assert line_fault("call to +447700900124: 401 Unauthorized")
+    assert line_fault("the PBX extension line is not set up or not switched on (Calls → Telephony)")
+    assert not line_fault("486 Busy Here") and not line_fault("480 Temporarily Unavailable")
+
+
+def test_an_unregistered_line_makes_the_campaign_wait(monkeypatch):
+    from types import SimpleNamespace
+
+    from xplogent.voip import dialler
+    from xplogent.voip.telephony import sip
+
+    line = SimpleNamespace(s=SimpleNamespace(register=True), registered=False)
+    monkeypatch.setattr(sip, "current_line", lambda name="trunk": line)
+    assert "waiting" in dialler.line_not_ready("extension")
+    line.registered = True
+    assert dialler.line_not_ready("extension") == ""
+    assert dialler.line_not_ready("telnyx") == ""
+
+
+async def test_our_line_refusing_puts_the_item_back_and_alerts(mock):
+    cid = campaign()
+    svc = FakeService({"ok": False, "error": "call to +447700900123: 401 Unauthorized"})
+    d = Dialler(svc)
+    out = await d.tick()
+    assert "stopped" in out[cid]                                   # no more dials this round
+    it = items(cid)[123]
+    assert it["state"] == "queued" and it["attempts"] == 0 and "line problem" in it["skip_reason"]
+    assert not mock.events and not mock._locked("07700900123")     # no attempt logged, lock released
+    assert alerts.recent()[0]["kind"] == "campaign_line"

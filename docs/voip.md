@@ -337,7 +337,10 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
     - the CRM's dial lock, so no recruiter rings the same person at the same moment. Locked
       means it's tried again in 2 hours.
 
-    If the CRM or TPS can't answer, nothing is dialled.
+    If the CRM or TPS can't answer, nothing is dialled. If the campaign's own line refuses
+    the call (wrong SIP password, line switched off) or hasn't registered yet after a
+    restart, the candidate is put back untouched (no attempt used) and a `campaign_line`
+    alert says what to fix.
   - **Results:**
     - no answer, busy, voicemail or the callee hanging up → tried again later, 3 tries over
       about 3 days by default (gaps of 2, 22 and 24 hours, moved into calling hours). The last
