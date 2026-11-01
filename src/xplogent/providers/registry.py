@@ -7,14 +7,13 @@ from typing import Any
 from xplogent.providers.anthropic import AnthropicProvider
 from xplogent.providers.base import Provider
 from xplogent.providers.gemini import GeminiProvider
-from xplogent.providers.ollama import LocalOllamaProvider, OllamaProvider
+from xplogent.providers.ollama import OllamaProvider
 from xplogent.providers.openai import OpenAIProvider
 from xplogent.providers.openrouter import OpenRouterProvider
 from xplogent.providers.vercel import VercelGatewayProvider
 
 _PROVIDERS: dict[str, type[Provider]] = {
     "ollama": OllamaProvider,
-    "ollama-local": LocalOllamaProvider,
     "openai": OpenAIProvider,
     "anthropic": AnthropicProvider,
     "openrouter": OpenRouterProvider,
@@ -32,7 +31,26 @@ def register_provider(name: str, cls: type[Provider]) -> None:
     _PROVIDERS[name] = cls
 
 
+class NoModelProvider(Provider):
+    """Stands in for a model setting left empty (e.g. no embedding model): chatting says
+    what to set, and embeddings switch off for good (full-text search still works)."""
+
+    name = "none"
+
+    def __init__(self, model: str = "", **kwargs: Any) -> None:
+        super().__init__(model)
+
+    async def stream(self, messages, tools=None, **kwargs):  # type: ignore[override]
+        raise RuntimeError("no model is set: choose one in Settings → Models")
+        yield  # pragma: no cover - makes this an async generator
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        raise NotImplementedError("no embedding model set: search uses full-text matching")
+
+
 def _make(spec: str, **kwargs: Any) -> Provider:
+    if not (spec or "").strip():
+        return NoModelProvider()
     provider_name, sep, model = spec.partition(":")
     if sep and not model:
         raise ValueError(f"no model in spec '{spec}' — write it as 'provider:model'")
@@ -46,13 +64,16 @@ def _make(spec: str, **kwargs: Any) -> Provider:
 
 
 def backup_target_spec(fb: dict) -> str:
-    """Spec for the configured backup model (enabled or not): a full spec as given, a
-    model on a named Ollama server (``fallback.server``), or the local Docker Ollama."""
-    model = str(fb.get("model") or "llama3.2:3b").strip()
-    if ":" in model and model.split(":", 1)[0] in _PROVIDERS:
+    """Spec for the configured backup model (enabled or not): a full spec as given, or a
+    bare Ollama model name on your Ollama server (``fallback.server`` names one of them;
+    older settings). "" when none is set. Nothing runs locally any more."""
+    model = str(fb.get("model") or "").strip()
+    if not model:
+        return ""
+    if model.split(":", 1)[0] in _PROVIDERS and ":" in model:
         return model
     server = str(fb.get("server") or "").strip()
-    return f"ollama:{model}@{server}" if server else f"ollama-local:{model}"
+    return f"ollama:{model}@{server}" if server else f"ollama:{model}"
 
 
 def backup_spec() -> str:

@@ -67,7 +67,7 @@ def test_named_server_works_through_the_registry_and_as_backup(home, monkeypatch
     prov = build_provider("openrouter:google/gemma-4-31b-it:free")
     assert prov.backup_spec == "ollama:qwen2.5:7b@gpu" and prov.primary.model == "google/gemma-4-31b-it:free"
     save_user_config({"fallback": {"server": ""}})
-    assert backup_spec() == "ollama-local:qwen2.5:7b"
+    assert backup_spec() == "ollama:qwen2.5:7b"          # your default Ollama server (nothing local)
 
 
 def test_server_tokens_are_stored_encrypted_and_listed_without_values(home):
@@ -116,10 +116,13 @@ def test_backup_status_probes_the_named_server(client, monkeypatch):
 
     monkeypatch.setattr(system, "_probe_ollama", fake_probe)
     client.post("/providers/ollama/servers", json={"name": "gpu", "host": "https://gpu.example.com", "token": "t-999999"})
-    client.post("/providers/backup", json={"server": "gpu", "model": "qwen2.5:7b", "enabled": True})
+    assert client.post("/providers/backup", json={"model": "ollama:qwen2.5:7b@gpu", "enabled": True}).json()["ok"]
     st = client.get("/providers/backup").json()
-    assert st["server"] == "gpu" and st["reachable"] and st["installed"]
+    assert st["server"] == "gpu" and st["ready"] and st["models"] == ["qwen2.5:7b"]
     assert seen[-1] == ("https://gpu.example.com", "t-999999")
+    client.post("/providers/backup", json={"model": "ollama:llama3.2:3b@gpu"})
+    st = client.get("/providers/backup").json()
+    assert not st["ready"] and "not downloaded" in st["problem"]
 
 
 def test_readiness_warns_about_a_local_cpu_only_call_model(home):
@@ -127,7 +130,6 @@ def test_readiness_warns_about_a_local_cpu_only_call_model(home):
 
     local = "http://localhost:11434"
     assert "no GPU" in slow_model_problem("ollama:llama3.1", gpu=False, ollama_host=local)
-    assert "no GPU" in slow_model_problem("ollama-local:qwen2.5:3b", gpu=False)
     assert slow_model_problem("ollama:llama3.1", gpu=True, ollama_host=local) == ""
     save_user_config({"ollama": {"servers": [{"name": "gpu", "host": "https://gpu.example.com"},
                                              {"name": "here", "host": "http://127.0.0.1:11434"}]}})

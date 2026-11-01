@@ -1,7 +1,7 @@
 # Getting started
 
 Xplogent is a personal, self-improving AI agent you run yourself. It works with
-any LLM provider (including local **Ollama**, fully offline), keeps its own
+any LLM provider (hosted, or your own **Ollama** server), keeps its own
 persistent memory, learns reusable skills from its work, and can answer and
 place **phone calls** (Telnyx or your own FreePBX/Asterisk) — all behind a
 configurable safety/approval layer.
@@ -15,8 +15,8 @@ curl -fsSL https://raw.githubusercontent.com/mubashiribstec/xplogent/main/get.sh
 ```
 
 It installs Docker if needed, asks for your domain (automatic HTTPS) or uses no-domain
-mode, optionally runs local models with Ollama, and prints the address and your access
-token. Manage it afterwards with `xplogent-docker` (`status`, `update`, `backup`, `token`,
+mode, asks for your model and its key, and prints the address and your access token. No
+language model runs on the server itself, so a small CPU-only machine is enough. Manage it afterwards with `xplogent-docker` (`status`, `update`, `backup`, `token`,
 `help`). Full details: `docs/deploy-linux.md` in the repository.
 
 ### On your own computer
@@ -40,9 +40,9 @@ Run the wizard once:
 xplogent setup
 ```
 
-It asks for your provider (Ollama / OpenAI / Anthropic / OpenRouter), the model,
-and an API key if you chose a hosted provider. For Ollama it prints the exact
-`ollama pull` commands for the models you picked. Everything is saved under
+It asks for your provider (OpenAI / Anthropic / Gemini / OpenRouter / Vercel, or
+your own Ollama server), the model, and an API key for a hosted provider. For an
+Ollama server it prints the exact `ollama pull` commands to run there. Everything is saved under
 `~/.xplogent/`. If anything looks off afterwards, run `xplogent doctor` — it
 checks your config, keys, model and ports and tells you how to fix each problem.
 

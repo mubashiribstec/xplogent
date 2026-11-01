@@ -49,7 +49,9 @@ async def status() -> dict:
 
     cfg = load_config()
     ollama_host, token = ollama_settings()
-    probe = await _probe_ollama(ollama_host, token, timeout=3.0)
+    used = ollama_in_use(cfg)
+    # Nothing to probe when no setting uses Ollama (it no longer runs next to Xplogent).
+    probe = await _probe_ollama(ollama_host, token, timeout=3.0) if used else {"ok": False, "error": "not used"}
     return {
         "status": "ok",
         **repo_info.build_info(),
@@ -57,11 +59,21 @@ async def status() -> dict:
         "providers": available_providers(),
         "secrets": secret_status(),
         "ollama": {"host": ollama_host, "reachable": probe["ok"], "auth": bool(token),
-                   "error": probe.get("error", "")},
+                   "error": probe.get("error", ""), "in_use": used},
         # What this install can do, so the dashboard can disable what can't work here.
         "capabilities": {"display": has_display(), "docker": repo_info.in_docker(),
                          "git": repo_info.repo_root() is not None and not repo_info.in_docker()},
     }
+
+
+def ollama_in_use(cfg) -> bool:
+    """Whether any model setting points at an Ollama server (chat, summaries, embeddings,
+    vision, calls or the backup)."""
+    from xplogent.providers.registry import backup_target_spec
+
+    specs = [cfg.model, cfg.reflection_model, cfg.embedding_model, cfg.vision_model,
+             str((cfg.voip or {}).get("model") or ""), backup_target_spec(cfg.raw.get("fallback") or {})]
+    return any(str(s).startswith("ollama:") for s in specs)
 
 
 async def _probe_ollama(host: str, token: str, timeout: float = 8.0) -> dict:
@@ -197,77 +209,68 @@ def _save_servers(servers: list[dict]) -> None:
 
 
 def _backup_target() -> tuple[str, str, str, str]:
-    """``(spec, host, token, server)`` of the backup model: the local Docker Ollama, or a
-    named server (config ``fallback.server``), or any other provider spec."""
-    from xplogent.providers.ollama import local_ollama_host, ollama_server
+    """``(spec, host, token, server)`` of the backup model. Host/token are set only when
+    it is an Ollama model (on your default or a named Ollama server)."""
+    from xplogent.providers.ollama import ollama_server, split_server
     from xplogent.providers.registry import backup_target_spec
 
-    fb = load_config().raw.get("fallback") or {}
-    server = str(fb.get("server") or "").strip()
-    spec = backup_target_spec(fb)
-    if server:
-        try:
-            host, token = ollama_server(server)
-        except ValueError:
-            host, token = "", ""
-        return spec, host, token, server
-    return spec, local_ollama_host(), "", ""
+    spec = backup_target_spec(load_config().raw.get("fallback") or {})
+    provider, _, model = spec.partition(":")
+    if provider != "ollama":
+        return spec, "", "", ""
+    server = split_server(model)[1]
+    try:
+        host, token = ollama_server(server)
+    except ValueError:
+        host, token = "", ""
+    return spec, host, token, server
 
 
-# ── Backup model (local Ollama in Docker) ─────────────────────────────────────
+# ── Backup model (any model: hosted, or on one of your Ollama servers) ────────────
 @router.get("/providers/backup")
 async def backup_model_status() -> dict:
+    from xplogent.core.doctor import _PROVIDER_KEYS
+    from xplogent.providers.ollama import split_server
+
     fb = load_config().raw.get("fallback") or {}
-    _spec, host, token, server = _backup_target()
-    probe = await _probe_ollama(host, token, timeout=4.0) if host else {
-        "ok": False, "models": [], "error": f"no Ollama server named '{server}'"}
-    model = str(fb.get("model") or "llama3.2:3b")
-    installed = any(m == model or m == f"{model}:latest" or m.split(":")[0] == model
-                    for m in probe["models"])
-    return {"enabled": bool(fb.get("enabled")), "model": model, "host": host, "server": server,
-            "reachable": probe["ok"], "models": probe["models"], "installed": installed,
-            "error": probe.get("error", "")}
+    spec, host, token, server = _backup_target()
+    provider = spec.partition(":")[0]
+    out = {"enabled": bool(fb.get("enabled")) and bool(spec), "model": spec, "server": server,
+           "ready": bool(spec), "problem": "" if spec else "choose a backup model first"}
+    if provider == "ollama":
+        name = split_server(spec.partition(":")[2])[0]
+        probe = await _probe_ollama(host, token, timeout=4.0) if host else {
+            "ok": False, "models": [], "error": f"no Ollama server named '{server}'"}
+        installed = any(m in (name, f"{name}:latest") for m in probe["models"])
+        out.update(ready=probe["ok"] and installed, models=probe["models"],
+                   problem="" if probe["ok"] and installed else (
+                       probe.get("error") or f"{name} is not downloaded on that Ollama server"))
+    elif spec:
+        keys = _PROVIDER_KEYS.get(provider, ())
+        if keys and not any(os.environ.get(k) for k in keys):
+            out.update(ready=False, problem=f"{keys[-1]} is not set: add it under Settings → API keys")
+    return out
 
 
 @router.post("/providers/backup")
 async def backup_model_save(body: dict) -> dict:
+    from xplogent.providers.registry import available_providers
+
     updates: dict = {}
     if "enabled" in body:
         updates["enabled"] = bool(body["enabled"])
-    if str(body.get("model") or "").strip():
-        updates["model"] = str(body["model"]).strip()
-    if "server" in body:
-        updates["server"] = str(body.get("server") or "").strip()
-    if "host" in body:
-        host = str(body.get("host") or "").strip().rstrip("/")
-        if host and not host.startswith(("http://", "https://")):
-            return {"ok": False, "error": "the URL must start with http:// or https://"}
-        updates["host"] = host
+    if "model" in body:
+        model = str(body.get("model") or "").strip()
+        if model and (":" not in model or model.split(":", 1)[0] not in available_providers()):
+            return {"ok": False, "error": "write the backup as provider:model, e.g. gemini:gemini-3.6-flash "
+                                          "or ollama:llama3.2:3b@gpu"}
+        updates["model"] = model
+        updates["server"] = ""            # a full spec now says where it runs
+    if updates.get("enabled") and not (updates.get("model") or (load_config().raw.get("fallback") or {}).get("model")):
+        return {"ok": False, "error": "choose a backup model first"}
     save_user_config({"fallback": updates})
     deps.audit_event("backup_model", target=str(updates), risk="low")
     return {"ok": True, **(load_config().raw.get("fallback") or {})}
-
-
-@router.post("/providers/backup/pull")
-async def backup_model_pull(body: dict) -> dict:
-    """Download the backup model onto the local Ollama (can take several minutes)."""
-    import httpx
-
-    from xplogent.providers.ollama import ollama_headers
-
-    model = str(body.get("model") or (load_config().raw.get("fallback") or {}).get("model")
-                or "llama3.2:3b").strip()
-    _spec, host, token, _server = _backup_target()
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(3600.0, connect=10.0),
-                                     headers=ollama_headers(token)) as client:
-            resp = await client.post(f"{host}/api/pull", json={"model": model, "stream": False})
-    except (httpx.HTTPError, httpx.InvalidURL) as exc:
-        return {"ok": False, "error": f"local Ollama not reachable at {host} ({type(exc).__name__}): "
-                                      "on the server run `xplogent-docker backup-model on`"}
-    if resp.status_code != 200:
-        return {"ok": False, "error": f"pull failed: HTTP {resp.status_code} {resp.text[:300]}"}
-    return {"ok": True, "model": model}
 
 
 @router.post("/providers/backup/test")
@@ -279,6 +282,8 @@ async def backup_model_test() -> dict:
     from xplogent.providers.registry import build_provider
 
     spec = _backup_target()[0]
+    if not spec:
+        return {"ok": False, "error": "choose a backup model first"}
     provider = build_provider(spec, fallback=False)
     started = time.monotonic()
     try:
@@ -377,7 +382,7 @@ async def test_model(body: dict) -> dict:
 
 @router.post("/providers/ollama/pull")
 async def ollama_pull(body: dict) -> dict:
-    """Pull a local Ollama model (used by onboarding). Best-effort, blocking."""
+    """Pull a model on your Ollama server (used by onboarding). Best-effort, blocking."""
     import httpx
 
     from xplogent.providers.ollama import ollama_headers, ollama_settings

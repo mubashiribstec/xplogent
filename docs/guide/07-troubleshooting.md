@@ -16,14 +16,15 @@ blocked by default. Either lower the risk policy for that tier in **Settings
 → Safety**, or use a role whose policy is `auto` for it.
 
 ## Ollama errors / no response
-Make sure Ollama is running and the models are pulled:
+Xplogent doesn't run Ollama; it talks to your Ollama server. Make sure it is running and
+reachable from Xplogent (Settings → Ollama servers → Test), and that the model is pulled on
+that machine:
 
 ```bash
 ollama pull llama3.1
-ollama pull nomic-embed-text
 ```
 
-Check `OLLAMA_HOST` if it isn't on the default `http://localhost:11434`.
+Or switch to a hosted model in Settings → Models.
 
 ## Something's off but you're not sure what
 Run `xplogent doctor`. It checks your config files, saved API keys, whether

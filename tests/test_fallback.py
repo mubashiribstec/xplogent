@@ -44,7 +44,7 @@ def _ask():
 
 async def test_backup_answers_when_primary_fails_before_output():
     backup = Scripted(reply="backup")
-    fb = FallbackProvider(Scripted(fail_after=0), lambda: backup, backup_spec="ollama-local:x")
+    fb = FallbackProvider(Scripted(fail_after=0), lambda: backup, backup_spec="gemini:gemini-3.6-flash")
     msg = await fb.complete(_ask())
     assert msg.content == "backup" and fb.used_backup and backup.calls == 1
 
@@ -69,28 +69,35 @@ async def test_primary_ok_never_builds_backup_and_embeddings_stay_on_primary():
 
 
 def test_build_provider_wraps_only_when_enabled():
-    plain = registry.build_provider("ollama:llama3.1")
+    plain = registry.build_provider("openai:gpt-4o-mini")
     assert not isinstance(plain, FallbackProvider)
-    cfgmod.save_user_config({"fallback": {"enabled": True, "model": "llama3.2:3b"}})
-    assert registry.backup_spec() == "ollama-local:llama3.2:3b"
+    assert registry.backup_spec() == ""                          # off and empty by default
+    cfgmod.save_user_config({"fallback": {"enabled": True, "model": "gemini:gemini-3.6-flash"}})
+    assert registry.backup_spec() == "gemini:gemini-3.6-flash"
     wrapped = registry.build_provider("openai:gpt-4o-mini")
-    assert isinstance(wrapped, FallbackProvider) and wrapped.backup_spec == "ollama-local:llama3.2:3b"
+    assert isinstance(wrapped, FallbackProvider) and wrapped.backup_spec == "gemini:gemini-3.6-flash"
     assert not isinstance(registry.build_provider("openai:gpt-4o-mini", fallback=False), FallbackProvider)
     # The backup itself is never wrapped in itself.
-    assert not isinstance(registry.build_provider("ollama-local:llama3.2:3b"), FallbackProvider)
-    cfgmod.save_user_config({"fallback": {"model": "openai:gpt-4o-mini"}})
-    assert registry.backup_spec() == "openai:gpt-4o-mini"      # any provider can be the backup
+    assert not isinstance(registry.build_provider("gemini:gemini-3.6-flash"), FallbackProvider)
 
 
-def test_local_provider_uses_the_docker_host_without_token(monkeypatch):
-    from xplogent.providers.ollama import LocalOllamaProvider
+def test_nothing_points_at_a_local_ollama_any_more():
+    """Ollama is no longer bundled: an older bare backup name means your own Ollama server."""
+    assert "ollama-local" not in registry.available_providers()
+    cfgmod.save_user_config({"fallback": {"enabled": True, "model": "llama3.2:3b"}})
+    assert registry.backup_spec() == "ollama:llama3.2:3b"
+    cfgmod.save_user_config({"fallback": {"server": "gpu"}})
+    assert registry.backup_spec() == "ollama:llama3.2:3b@gpu"
 
-    monkeypatch.setenv("OLLAMA_API_KEY", "remote-secret")
-    p = LocalOllamaProvider("llama3.2:3b")
-    assert p.host == "http://ollama:11434"
-    assert "authorization" not in p._client.headers
-    cfgmod.save_user_config({"fallback": {"host": "http://10.0.0.5:11434"}})
-    assert LocalOllamaProvider("x").host == "http://10.0.0.5:11434"
+
+async def test_an_empty_model_setting_explains_itself_and_switches_embeddings_off():
+    from xplogent.memory.vector import Embedder
+
+    none = registry.build_provider("", fallback=False)
+    with pytest.raises(RuntimeError, match="Settings → Models"):
+        await none.complete(_ask())
+    emb = Embedder(none)
+    assert await emb.embed(["a", "b"]) == [[], []] and emb.available is False
 
 
 # ── routes ───────────────────────────────────────────────────────────────────
@@ -103,39 +110,22 @@ def _client():
     return TestClient(create_app())
 
 
-@pytest.fixture
-def local_ollama(monkeypatch):
-    seen: list[httpx.Request] = []
-    real = httpx.AsyncClient
-
-    def handler(request):
-        seen.append(request)
-        if request.url.host != "ollama":
-            return httpx.Response(404)
-        if request.url.path == "/api/tags":
-            return httpx.Response(200, json={"models": [{"name": "llama3.2:3b"}]})
-        if request.url.path == "/api/pull":
-            return httpx.Response(200, json={"status": "success"})
-        return httpx.Response(404)
-
-    class _Client(real):
-        def __init__(self, *a, **k):
-            k["transport"] = httpx.MockTransport(handler)
-            super().__init__(*a, **k)
-
-    monkeypatch.setattr(httpx, "AsyncClient", _Client)
-    return seen
-
-
-def test_backup_routes(local_ollama, monkeypatch):
+def test_backup_routes(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     c = _client()
     st = c.get("/providers/backup").json()
-    assert st["reachable"] and st["installed"] and st["enabled"] is False
-    assert c.post("/providers/backup", json={"enabled": True, "model": "llama3.2:3b"}).json()["ok"]
-    assert c.get("/providers/backup").json()["enabled"] is True
-    assert c.post("/providers/backup", json={"host": "ftp://x"}).json()["ok"] is False
-    assert c.post("/providers/backup/pull", json={}).json() == {"ok": True, "model": "llama3.2:3b"}
-    assert any(r.url.path == "/api/pull" for r in local_ollama)
+    assert st == {"enabled": False, "model": "", "server": "", "ready": False,
+                  "problem": "choose a backup model first"}
+    assert not c.post("/providers/backup", json={"enabled": True}).json()["ok"]      # nothing chosen
+    assert not c.post("/providers/backup", json={"model": "llama3.2"}).json()["ok"]  # not provider:model
+    assert c.post("/providers/backup", json={"enabled": True, "model": "gemini:gemini-3.6-flash"}).json()["ok"]
+    st = c.get("/providers/backup").json()
+    assert st["enabled"] and st["model"] == "gemini:gemini-3.6-flash"
+    assert not st["ready"] and "GEMINI_API_KEY" in st["problem"]
+    monkeypatch.setenv("GEMINI_API_KEY", "g-test")
+    assert c.get("/providers/backup").json()["ready"]
+    assert c.post("/providers/backup/pull", json={}).status_code in (404, 405)   # nothing to download here
 
     made = []
 
@@ -146,7 +136,7 @@ def test_backup_routes(local_ollama, monkeypatch):
     monkeypatch.setattr(registry, "build_provider", fake_build)
     res = c.post("/providers/backup/test").json()
     assert res["ok"] and res["reply"] == "Hello there!"
-    assert made == [("ollama-local:llama3.2:3b", False)]
+    assert made == [("gemini:gemini-3.6-flash", False)]
 
 
 async def test_openrouter_free_model_rate_limit_hands_the_turn_to_the_backup(monkeypatch):

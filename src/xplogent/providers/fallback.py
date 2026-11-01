@@ -1,8 +1,8 @@
-"""Automatic backup model: if the main model can't answer, a local one does.
+"""Automatic backup model: if the main model can't answer, another one does.
 
 ``FallbackProvider`` streams from the primary provider; if that fails *before any
 output* (server down, timeout, bad/missing key, rate limit…) the same request is sent
-to the backup (by default a small model on the local Ollama in Docker). Once the
+to the backup (any model; best on another provider, see config `fallback`). Once the
 primary has started answering, its errors are not retried elsewhere: the user would
 see a half answer followed by a different one.
 """

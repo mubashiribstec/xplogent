@@ -3,24 +3,26 @@
 # user config at ~/.xplogent/config.yaml.
 
 # Active model in "provider:model" form. Overridden by XPLOGENT_MODEL.
-model: "ollama:llama3.1"
+# No language model runs on this server: pick a hosted model, or a model on your own
+# Ollama server elsewhere (Settings → Ollama servers), e.g. "ollama:qwen2.5:14b@gpu".
+model: "openai:gpt-4o-mini"
 
 # Saved model presets shown in the GUI (Settings → Models, Chat switcher).
 # effort: off|low|medium|high  ·  thinking: true|false
 models:
-  - { label: "Llama 3.1 (local)", model: "ollama:llama3.1", temperature: 0.7, effort: "off", thinking: false }
   - { label: "GPT-4o", model: "openai:gpt-4o", temperature: 0.7, effort: "off", thinking: false }
   - { label: "Claude Sonnet", model: "anthropic:claude-sonnet-4-6", temperature: 0.7, effort: "medium", thinking: true }
   - { label: "Gemini 3.6 Flash", model: "gemini:gemini-3.6-flash", temperature: 0.7, effort: "off", thinking: false }
   - { label: "Gemma 4 31B (free)", model: "openrouter:google/gemma-4-31b-it:free", temperature: 0.7, effort: "off", thinking: false }
   - { label: "Nemotron 3 Ultra (free)", model: "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free", temperature: 0.7, effort: "off", thinking: false }
-  - { label: "LLaVA (local vision)", model: "ollama:llava", temperature: 0.7, effort: "off", thinking: false, vision: true }
 
-# Optional separate (usually cheaper/local) model for reflection & summaries.
-reflection_model: "ollama:llama3.1"
+# Optional separate (usually cheaper) model for reflection & summaries. "" = the main model.
+reflection_model: ""
 
-# Embedding model used by the memory subsystem (local by default).
-embedding_model: "ollama:nomic-embed-text"
+# Embedding model for memory and the knowledge base. "" = none: search uses full-text
+# matching only. Options: "openai:text-embedding-3-small", or a model on your own Ollama
+# server, e.g. "ollama:nomic-embed-text@gpu".
+embedding_model: ""
 
 # Vision model for image turns in chat (attached pictures/screenshots).
 # Empty = reuse `model` if it's vision-capable. Examples: openai:gpt-4o,
@@ -50,11 +52,11 @@ server:
 # is one of: "warn" (notify, keep going), "downgrade" (switch to downgrade_model),
 # or "pause" (stop the run). Estimates use the same per-model pricing as Analytics.
 # Backup model: answers when the main model/server can't (down, no key, rate limit).
-# Default: a small model on the local Ollama in Docker (xplogent-docker backup-model on).
+# Any model spec; best on a different provider than the main one, e.g.
+# "gemini:gemini-3.6-flash", "openrouter:google/gemma-4-31b-it:free" or "ollama:llama3.2:3b@gpu".
 fallback:
   enabled: false
-  model: llama3.2:3b               # on the local Ollama; or a full spec like openai:gpt-4o-mini
-  host: ""                         # local Ollama URL; blank = http://ollama:11434 (Docker)
+  model: ""
 
 budget:
   daily_usd: 0

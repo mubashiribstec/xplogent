@@ -12,8 +12,9 @@ Three supported ways. All of them **refuse to run without an access token**.
 
 ## Before you start
 
-- A Linux server (x86_64 or arm64; Debian/Ubuntu tested) with at least 2 GB RAM
-  (8 GB+ if you run local models with Ollama).
+- A Linux server (x86_64 or arm64; Debian/Ubuntu tested) with at least 2 GB RAM. No language
+  model runs on it: Xplogent uses hosted models (OpenAI, Anthropic, Gemini, OpenRouter, ...)
+  or your own Ollama server on another machine, so a small CPU-only server is enough.
 - **With a domain (recommended for anything reachable from the internet):** a DNS **A record**
   for your hostname (for example `agent.example.com`) pointing at the server, and ports
   **80 and 443** open. Caddy uses them to get the HTTPS certificate.
@@ -32,9 +33,8 @@ The installer:
 
 1. installs Docker Engine + the Compose plugin if they are missing (official get.docker.com script);
 2. downloads only the deploy files into `/opt/xplogent-docker` (no git, no build);
-3. asks: **domain** (empty = no-domain mode, then whether to allow your LAN), **local Ollama**
-   (GPU used automatically when the NVIDIA Container Toolkit is installed), **model** and its
-   **API key** (optional; can be set later in Settings);
+3. asks: **domain** (empty = no-domain mode, then whether to allow your LAN), **local voices**
+   for the phone agent, **model** and its **API key** (optional; can be set later in Settings);
 4. writes `/opt/xplogent-docker/deploy/docker/.env` (readable by root only) with a random
    access token, pulls the prebuilt image `ghcr.io/mubashiribstec/xplogent`, starts it and waits
    until it is healthy;
@@ -48,14 +48,20 @@ Without questions (scripts, cloud-init):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mubashiribstec/xplogent/main/get.sh \
   | sudo OPENAI_API_KEY=sk-... bash -s -- --yes --domain agent.example.com --model openai:gpt-4o-mini
-# no domain, reachable on the LAN, local models:
-curl -fsSL https://raw.githubusercontent.com/mubashiribstec/xplogent/main/get.sh | sudo bash -s -- --yes --mode local --lan --ollama
+# no domain, reachable on the LAN, a free OpenRouter model:
+curl -fsSL https://raw.githubusercontent.com/mubashiribstec/xplogent/main/get.sh \
+  | sudo OPENROUTER_API_KEY=sk-or-... bash -s -- --yes --mode local --lan --model openrouter:nvidia/nemotron-3-ultra-550b-a55b:free
 ```
 
-Options: `--mode https|local`, `--domain NAME`, `--lan`, `--ollama` / `--no-ollama`,
-`--model SPEC`, `--speech` / `--no-speech`, `--backup-model [MODEL]` (local Ollama that answers
-when the main model can't; default `llama3.2:3b`, fine on a CPU with 8 GB RAM), `--reconfigure`,
-`--dir PATH`, `--ref BRANCH_OR_TAG`, `--no-docker-install`, `--dry-run`.
+Options: `--mode https|local`, `--domain NAME`, `--lan`, `--model SPEC`, `--speech` /
+`--no-speech`, `--reconfigure`, `--dir PATH`, `--ref BRANCH_OR_TAG`, `--no-docker-install`,
+`--dry-run`.
+
+**Ollama is no longer part of the install** (it took disk space and CPU on the server). An
+older install that ran it is tidied up by `xplogent-docker update` (or re-running the
+installer): the Ollama container and its downloaded models are removed. Use a hosted model, or
+your own Ollama server on another machine (see "Your own Ollama server" below); the backup
+model is set in Settings → Backup model.
 
 ### Managing it: `xplogent-docker`
 
@@ -70,9 +76,7 @@ when the main model can't; default `llama3.2:3b`, fine on a CPU with 8 GB RAM), 
 | `xplogent-docker config` | edit `.env` in your editor, then apply |
 | `xplogent-docker https DOMAIN [--force]` | switch to HTTPS with a free Let's Encrypt certificate: checks DNS and ports first, waits for the certificate, says why if it fails, and sets the phone agent's public address |
 | `xplogent-docker local [--lan]` | switch to no-domain mode |
-| `xplogent-docker ollama on [--gpu] \| off` | run local models (then `pull-model llama3.1`) |
 | `xplogent-docker speech on [--gpu] \| off` | local voices for the phone agent (Kokoro) |
-| `xplogent-docker backup-model on [model] \| off` | small local model that answers when the main one can't (default `llama3.2:3b`) |
 | `xplogent-docker sip on [--ip ADDR] \| off` | open UDP 5060 + 10000-10100 for the built-in SIP trunk client |
 | `xplogent-docker restart \| stop \| start` | |
 | `xplogent-docker uninstall [--purge]` | remove containers; `--purge` also deletes all data |
@@ -113,26 +117,15 @@ reached, and `COMPOSE_PROFILES` adds extras (docker compose reads both from `.en
 |---|---|
 | `COMPOSE_FILE=docker-compose.yml:compose.https.yml` | Caddy on 80/443 with automatic HTTPS for `DOMAIN` |
 | `COMPOSE_FILE=docker-compose.yml:compose.local.yml` | port `XPLOGENT_PORT` (8765) on `XPLOGENT_BIND` (127.0.0.1, or 0.0.0.0 for LAN) |
-| `COMPOSE_PROFILES=ollama` / `ollama-gpu` | local models; set `OLLAMA_HOST=http://ollama:11434` |
 | `COMPOSE_PROFILES=gpu-speech` | Whisper + Kokoro speech servers for the phone agent |
 
 Compose pulls the prebuilt image; `docker compose build` (or `up --build`) builds it from your
 checkout instead. Compose refuses to start without `XPLOGENT_AUTH_TOKEN` (and, in https mode, `DOMAIN`).
 
-### Local models (Ollama)
-
-```bash
-xplogent-docker ollama on            # or: on --gpu   (needs the NVIDIA Container Toolkit)
-xplogent-docker pull-model llama3.1
-xplogent-docker pull-model nomic-embed-text   # embeddings for memory/knowledge search
-```
-
-Then choose `ollama:llama3.1` as the model in Settings (or `XPLOGENT_MODEL` in `.env`).
-
 ### GPU speech for the phone agent
 
 ```bash
-# in .env: COMPOSE_PROFILES=gpu-speech   (comma-separate to combine, e.g. ollama-gpu,gpu-speech)
+# in .env: COMPOSE_PROFILES=gpu-speech
 xplogent-docker restart
 ```
 
@@ -203,10 +196,13 @@ calls, cost notes and safety defaults.
 
 ## Your own Ollama server
 
-Settings → **Ollama server**: enter its URL (for example `https://ai.example.com`) and, if it is
-behind a proxy that requires one, the bearer token (stored encrypted). **Test connection** lists
-its models; use the buttons to pick the chat, embedding, reflection and call models. Settings
-made in the dashboard take precedence over `XPLOGENT_MODEL` / `OLLAMA_HOST` in `.env`.
+Ollama doesn't run inside Xplogent; if you have it on another machine (for example a GPU box),
+connect it in Settings → **Ollama servers**: enter its URL (for example `https://ai.example.com`)
+and, if it is behind a proxy that requires one, the bearer token (stored encrypted). Add as many
+named servers as you like, each with its own token. **Test connection** lists its models; use the
+buttons to pick the chat, embedding, reflection and call models (a model on a named server is
+written `ollama:qwen2.5:14b@gpu`). Settings made in the dashboard take precedence over
+`XPLOGENT_MODEL` / `OLLAMA_HOST` in `.env`.
 
 Caddy forwards WebSockets automatically, which the call audio stream needs.
 

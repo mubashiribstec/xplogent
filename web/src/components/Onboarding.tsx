@@ -4,12 +4,12 @@ import { ollamaPull, patchConfig, putSecrets, saveOllama, testOllama } from "../
 import { useToast } from "./Toast";
 
 const PROVIDERS = [
-  { id: "ollama", label: "Ollama", note: "Your own Ollama server (or this machine)", model: "ollama:llama3.1", keyEnv: "" },
   { id: "openai", label: "OpenAI", note: "GPT-4o and o-series", model: "openai:gpt-4o", keyEnv: "OPENAI_API_KEY" },
   { id: "anthropic", label: "Anthropic", note: "Claude via API key", model: "anthropic:claude-sonnet-4-6", keyEnv: "ANTHROPIC_API_KEY" },
   { id: "gemini", label: "Google Gemini", note: "Gemini 3.6 Flash and newer", model: "gemini:gemini-3.6-flash", keyEnv: "GEMINI_API_KEY" },
   { id: "vercel", label: "Vercel AI Gateway", note: "many providers' models, one key", model: "vercel:google/gemini-3.6-flash", keyEnv: "AI_GATEWAY_API_KEY" },
   { id: "openrouter", label: "OpenRouter", note: "200+ models, one key (free ones too)", model: "openrouter:google/gemma-4-31b-it:free", keyEnv: "OPENROUTER_API_KEY" },
+  { id: "ollama", label: "Ollama", note: "Your own Ollama server on another machine", model: "ollama:llama3.1", keyEnv: "" },
 ];
 
 export function Onboarding({ onDone }: { onDone: () => void }) {
@@ -29,10 +29,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     try {
       if (provider.keyEnv && key.trim()) await putSecrets({ [provider.keyEnv]: key.trim() });
       if (provider.id === "ollama") {
-        if (ollamaUrl.trim()) {
-          const saved = await saveOllama(ollamaUrl.trim(), ollamaToken.trim());
-          if (!saved.ok) { toast(saved.error || "Could not save the Ollama server", "error"); return; }
-        }
+        if (!ollamaUrl.trim()) { toast("Enter your Ollama server's address (no Ollama runs inside Xplogent)", "error"); return; }
+        const saved = await saveOllama(ollamaUrl.trim(), ollamaToken.trim());
+        if (!saved.ok) { toast(saved.error || "Could not save the Ollama server", "error"); return; }
         const probe = await testOllama(ollamaUrl.trim(), ollamaToken.trim());
         if (!probe.ok) { toast(`Ollama: ${probe.error}`, "error"); return; }
         const name = model.split(":")[1];
@@ -84,7 +83,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 </label>
               ) : (
                 <>
-                  <label className="field-l">Ollama server URL <span className="dim">(blank = this machine)</span>
+                  <label className="field-l">Ollama server URL <span className="dim">(the machine running Ollama)</span>
                     <input value={ollamaUrl} placeholder="https://ai.example.com" onChange={(e) => setOllamaUrl(e.target.value)} />
                   </label>
                   <label className="field-l">Bearer token <span className="dim">(only if your server needs one)</span>

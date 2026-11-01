@@ -121,7 +121,7 @@ def _env(tmp_path) -> dict[str, str]:
 
 @_bash
 def test_installer_local_mode_writes_private_env_with_token(tmp_path):
-    res = _get_sh(tmp_path, "--mode", "local", "--no-ollama", "--model", "openai:gpt-4o-mini")
+    res = _get_sh(tmp_path, "--mode", "local", "--model", "openai:gpt-4o-mini")
     assert res.returncode == 0, res.stderr
     env = _env(tmp_path)
     assert re.fullmatch(r"[0-9a-f]{64}", env["XPLOGENT_AUTH_TOKEN"])
@@ -137,23 +137,21 @@ def test_installer_local_mode_writes_private_env_with_token(tmp_path):
 
 @_bash
 def test_installer_rerun_keeps_token_and_reconfigure_switches_to_https(tmp_path):
-    assert _get_sh(tmp_path, "--mode", "local", "--no-ollama").returncode == 0
+    assert _get_sh(tmp_path, "--mode", "local").returncode == 0
     token = _env(tmp_path)["XPLOGENT_AUTH_TOKEN"]
     assert _get_sh(tmp_path).returncode == 0
     assert _env(tmp_path)["XPLOGENT_AUTH_TOKEN"] == token
-    res = _get_sh(tmp_path, "--reconfigure", "--domain", "agent.example.com", "--ollama")
+    res = _get_sh(tmp_path, "--reconfigure", "--domain", "agent.example.com")
     assert res.returncode == 0, res.stderr
     env = _env(tmp_path)
     assert env["XPLOGENT_AUTH_TOKEN"] == token
     assert env["COMPOSE_FILE"] == "docker-compose.yml:compose.https.yml"
     assert env["DOMAIN"] == "agent.example.com"
-    assert env["COMPOSE_PROFILES"] in ("ollama", "ollama-gpu")
-    assert env["OLLAMA_HOST"] == "http://ollama:11434"
 
 
 @_bash
 def test_installer_takes_the_api_key_from_the_environment(tmp_path):
-    res = _get_sh(tmp_path, "--mode", "local", "--no-ollama", "--model", "anthropic:claude-x",
+    res = _get_sh(tmp_path, "--mode", "local", "--model", "anthropic:claude-x",
                   env={"ANTHROPIC_API_KEY": "sk-ant-test"})
     assert res.returncode == 0, res.stderr
     assert _env(tmp_path)["ANTHROPIC_API_KEY"] == "sk-ant-test"
@@ -183,8 +181,7 @@ def test_compose_layout():
     base = yaml.safe_load((d / "docker-compose.yml").read_text())["services"]
     assert base["xplogent"]["image"].startswith("${XPLOGENT_IMAGE:-ghcr.io/mubashiribstec/xplogent")
     assert "ports" not in base["xplogent"]                 # only the mode files publish anything
-    assert base["ollama"]["profiles"] == ["ollama"]
-    assert base["ollama-gpu"]["networks"]["default"]["aliases"] == ["ollama"]
+    assert not {"ollama", "ollama-gpu"} & set(base)          # no language model runs on the server
     https = yaml.safe_load((d / "compose.https.yml").read_text())["services"]
     assert set(https) == {"caddy"} and "80:80" in https["caddy"]["ports"]
     local = yaml.safe_load((d / "compose.local.yml").read_text())["services"]
@@ -193,34 +190,47 @@ def test_compose_layout():
 
 @_bash
 def test_installer_flags_apply_to_an_existing_install(tmp_path):
-    """Re-running with --no-ollama used to be ignored ("keeping its settings")."""
-    assert _get_sh(tmp_path, "--mode", "local", "--ollama").returncode == 0
+    assert _get_sh(tmp_path, "--mode", "local", "--model", "openai:gpt-4o-mini").returncode == 0
     before = _env(tmp_path)
-    assert before["COMPOSE_PROFILES"].startswith("ollama")
-    res = _get_sh(tmp_path, "--no-ollama", "--model", "openai:gpt-4o-mini")
+    res = _get_sh(tmp_path, "--model", "gemini:gemini-3.6-flash")
     assert res.returncode == 0, res.stderr
     after = _env(tmp_path)
-    assert after["COMPOSE_PROFILES"] == "" and after["OLLAMA_HOST"] == ""
-    assert after["XPLOGENT_MODEL"] == "openai:gpt-4o-mini"
+    assert after["XPLOGENT_MODEL"] == "gemini:gemini-3.6-flash"
     assert after["XPLOGENT_AUTH_TOKEN"] == before["XPLOGENT_AUTH_TOKEN"]
     assert after["COMPOSE_FILE"] == before["COMPOSE_FILE"]          # untouched
     # Only --lan: everything else (model, profiles) stays as it was.
     assert _get_sh(tmp_path, "--lan").returncode == 0
     lan = _env(tmp_path)
     assert lan["XPLOGENT_BIND"] == "0.0.0.0"
-    assert lan["XPLOGENT_MODEL"] == "openai:gpt-4o-mini" and lan["COMPOSE_PROFILES"] == ""
+    assert lan["XPLOGENT_MODEL"] == "gemini:gemini-3.6-flash" and lan["COMPOSE_PROFILES"] == ""
     # No flags at all: nothing changes.
     assert _get_sh(tmp_path).returncode == 0
     assert _env(tmp_path) == lan
 
 
 @_bash
-def test_installer_backup_model_runs_local_ollama_without_redirecting_main(tmp_path):
-    res = _get_sh(tmp_path, "--mode", "local", "--no-ollama", "--backup-model")
+def test_installer_tidies_up_an_old_local_ollama(tmp_path):
+    """Ollama is no longer bundled: a re-run (even without options) removes what an older
+    install set up, and the old flags explain where to go instead."""
+    assert _get_sh(tmp_path, "--mode", "local", "--model", "ollama:llama3.1").returncode == 0
+    env_file = tmp_path / "x" / "deploy" / "docker" / ".env"
+    text = env_file.read_text().replace("COMPOSE_PROFILES=\n", "COMPOSE_PROFILES=ollama,speech\n")
+    env_file.write_text(text.replace("OLLAMA_HOST=\n", "OLLAMA_HOST=http://ollama:11434\n"))
+    res = _get_sh(tmp_path)
     assert res.returncode == 0, res.stderr
     env = _env(tmp_path)
-    assert env["COMPOSE_PROFILES"] in ("ollama", "ollama-gpu")
-    assert env.get("OLLAMA_HOST", "") == ""                # main model stays where it was
+    assert env["COMPOSE_PROFILES"] == "speech" and env["OLLAMA_HOST"] == ""
+    assert "Settings -> Models" in res.stderr                       # the default model was local
+    for flag in ("--ollama", "--backup-model"):
+        bad = _get_sh(tmp_path, flag)
+        assert bad.returncode == 2 and "no longer part of Xplogent" in bad.stderr
+    assert _get_sh(tmp_path, "--no-ollama").returncode == 0           # old scripts keep working
+
+
+def test_helper_tidies_up_and_refuses_the_old_ollama_commands():
+    helper = (REPO / "deploy" / "docker" / "xplogent-docker").read_text()
+    assert "drop_bundled_ollama" in helper and "_ollama-models" in helper
+    assert "ollama|backup-model|pull-model)" in helper and "no longer part of Xplogent" in helper
 
 
 def test_sip_compose_file_publishes_udp_and_passes_settings():
@@ -236,11 +246,11 @@ def test_sip_compose_file_publishes_udp_and_passes_settings():
 
 @_bash
 def test_installer_keeps_sip_ports_when_switching_mode(tmp_path):
-    assert _get_sh(tmp_path, "--mode", "local", "--no-ollama").returncode == 0
+    assert _get_sh(tmp_path, "--mode", "local").returncode == 0
     assert (tmp_path / "x" / "deploy" / "docker" / "compose.sip.yml").exists()
     env_file = tmp_path / "x" / "deploy" / "docker" / ".env"
     env_file.write_text(env_file.read_text() + "XPLOGENT_SIP=1\n")
-    res = _get_sh(tmp_path, "--reconfigure", "--domain", "agent.example.com", "--no-ollama")
+    res = _get_sh(tmp_path, "--reconfigure", "--domain", "agent.example.com")
     assert res.returncode == 0, res.stderr
     assert _env(tmp_path)["COMPOSE_FILE"] == "docker-compose.yml:compose.https.yml:compose.sip.yml"
 

@@ -13,21 +13,24 @@ def _by_name(checks, prefix):
     return [c for c in checks if c.name.startswith(prefix)]
 
 
+OLLAMA = {"model": "ollama:llama3.1", "embedding_model": "ollama:nomic-embed-text"}   # your own server
+
+
 def test_ollama_down_is_a_failure_with_fix(monkeypatch):
     def boom(host):
         raise OSError("connection refused")
 
     monkeypatch.setattr(doctor, "_ollama_tags", boom)
-    checks = doctor.run_checks(load_config())
+    checks = doctor.run_checks(load_config(OLLAMA))
     model = _by_name(checks, "Model (Ollama)")
     assert model and model[0].status == "fail"
-    assert "ollama serve" in model[0].fix
+    assert "ollama serve" in model[0].fix and "Settings → Ollama servers" in model[0].fix
 
 
 def test_ollama_up_but_model_missing(monkeypatch):
     monkeypatch.setattr(doctor, "_ollama_tags",
                         lambda host: ["some-other-model:latest"])
-    checks = doctor.run_checks(load_config())
+    checks = doctor.run_checks(load_config(OLLAMA))
     model = _by_name(checks, "Model (Ollama)")[0]
     assert model.status == "fail"
     assert "ollama pull llama3.1" in model.fix
@@ -40,9 +43,15 @@ def test_ollama_ready(monkeypatch):
     monkeypatch.setattr(
         doctor, "_ollama_tags",
         lambda host: ["llama3.1:latest", "nomic-embed-text:latest"])
-    checks = doctor.run_checks(load_config())
+    checks = doctor.run_checks(load_config(OLLAMA))
     assert _by_name(checks, "Model (Ollama)")[0].status == "ok"
     assert not _by_name(checks, "Embedding model")  # present → no warning
+
+
+def test_defaults_need_no_local_ollama():
+    cfg = load_config()
+    assert not cfg.model.startswith("ollama:") and cfg.embedding_model == ""
+    assert cfg.reflection_model == cfg.model
 
 
 def test_hosted_provider_needs_a_key(monkeypatch):
@@ -69,7 +78,10 @@ def test_broken_config_short_circuits(monkeypatch, tmp_path):
 
 
 def test_cli_doctor_exit_codes(monkeypatch):
+    from xplogent.core.config import save_user_config
     from xplogent.interfaces.cli.app import app
+
+    save_user_config(OLLAMA)
 
     monkeypatch.setattr(doctor, "_ollama_tags",
                         lambda host: ["llama3.1:latest", "nomic-embed-text:latest"])

@@ -1,6 +1,6 @@
 """Provider abstraction.
 
-Every LLM provider — local Ollama, OpenAI, Anthropic, OpenRouter — implements
+Every LLM provider (OpenAI, Anthropic, Gemini, OpenRouter, Ollama servers) implements
 the same small interface so the agent loop is provider-agnostic. Messages and
 tool calls are normalized to an OpenAI-style shape internally; each provider
 translates to/from its native wire format.

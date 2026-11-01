@@ -208,13 +208,13 @@ model elsewhere:
   models (*Gemma 4 31B (free)*, *Nemotron 3 Ultra (free)*; both support the agent's tools, and
   you need an OpenRouter key), or a model on your stronger Ollama server (Settings → Ollama servers
   → Add server; with its bearer token, it shows up in the list as `model@server`).
-- **Backup model**: keep a small model as backup (Settings → Backup model, on this server or on
-  a named Ollama server). Free OpenRouter models are rate-limited and sometimes refuse with
+- **Backup model**: keep a backup on another provider (Settings → Backup model: a hosted model,
+  or one on a named Ollama server). Free OpenRouter models are rate-limited and sometimes refuse with
   "temporarily rate-limited upstream" (HTTP 429); the backup then answers that turn, so the
   caller isn't left waiting.
 
 The Go-live checklist shows a "Call model speed" warning when the call model is an Ollama model
-on this server and no GPU is found.
+on this same machine and no GPU is found.
 
 ## Call recording
 
@@ -434,9 +434,11 @@ long as recordings (`voip.recording.retention_days`).
 
 ## Backup model
 
-If the call model's server is down or rate-limited, a small model answers instead
-(`xplogent-docker backup-model on`, Settings → Backup model), so calls aren't dropped. The
-backup runs on this server's Docker Ollama or on any named Ollama server (**Runs on**).
+If the call model's server is down or rate-limited, the backup model answers instead
+(Settings → Backup model), so calls aren't dropped. It can be any model: best one on a
+different provider (for example a Gemini or free OpenRouter model when calls run on your Ollama
+server, or a model on your Ollama server when calls run on OpenRouter). Nothing runs on the
+Xplogent server itself.
 
 ## Cost control
 

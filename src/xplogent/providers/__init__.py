@@ -1,4 +1,4 @@
-"""LLM providers — Ollama (local), OpenAI, Anthropic, OpenRouter."""
+"""LLM providers: OpenAI, Anthropic, Gemini, OpenRouter, Vercel AI Gateway, and Ollama servers."""
 
 from xplogent.providers.base import (
     Message,

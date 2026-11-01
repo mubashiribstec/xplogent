@@ -11,11 +11,8 @@
 #   xplogent-docker restart | stop | start
 #   xplogent-docker https DOMAIN [--force]   switch to HTTPS (Let's Encrypt; needs ports 80/443)
 #   xplogent-docker local [--lan]       switch to no-domain mode (port 8765)
-#   xplogent-docker ollama on [--gpu] | off
 #   xplogent-docker speech on [--gpu] | off   local voices for the phone agent
-#   xplogent-docker backup-model on [model] | off   local Ollama answers if the main model can't
 #   xplogent-docker sip on [--ip ADDR] | off   open UDP ports for the built-in SIP trunk client
-#   xplogent-docker pull-model NAME     download an Ollama model (e.g. llama3.1)
 #   xplogent-docker cli ARGS...         run an xplogent command inside the container
 #                                       (e.g. cli voip status · cli dial +1555… --test)
 #   xplogent-docker uninstall [--purge] remove containers (--purge: also all data!)
@@ -92,7 +89,35 @@ url() {
   esac
 }
 
-apply() { dc up -d --remove-orphans; wait_healthy; }
+apply() {
+  drop_bundled_ollama
+  dc up -d --remove-orphans    # also removes an old install's Ollama container
+  drop_ollama_models
+  wait_healthy
+}
+
+# Ollama is no longer part of the install (it took disk space and CPU): tidy up what an
+# older install left behind. Hosted models or your own Ollama server elsewhere are used.
+drop_bundled_ollama() {
+  case ",$(get_env COMPOSE_PROFILES)," in
+    *,ollama,*|*,ollama-gpu,*)
+      add_profile -ollama; add_profile -ollama-gpu
+      say "Local Ollama is no longer part of Xplogent: its container is removed." ;;
+  esac
+  if [ "$(get_env OLLAMA_HOST)" = "http://ollama:11434" ]; then
+    set_env "$ENV_FILE" OLLAMA_HOST ""
+    case "$(get_env XPLOGENT_MODEL)" in
+      ollama:*) warn "The default model was on the local Ollama: pick a hosted model or your own Ollama server in Settings -> Models." ;;
+    esac
+  fi
+}
+drop_ollama_models() {
+  local vol="${COMPOSE_PROJECT_NAME:-xplogent}_ollama-models"
+  if docker volume inspect "$vol" >/dev/null 2>&1 && docker volume rm "$vol" >/dev/null 2>&1; then
+    ok "Removed the old local Ollama models (volume $vol): disk space freed."
+  fi
+  return 0
+}
 
 # COMPOSE_FILE for a mode, keeping the SIP ports file when SIP is on.
 compose_files() {
@@ -104,8 +129,6 @@ add_profile() {  # add_profile NAME / remove with "-NAME"
   local cur new="" p want="$1"
   cur="$(get_env COMPOSE_PROFILES)"
   for p in ${cur//,/ }; do
-    # ollama and ollama-gpu are alternatives: setting or removing one drops both.
-    case "$p:${want#-}" in ollama*:ollama*) continue ;; esac
     [ "$p" = "${want#-}" ] && continue
     new="${new:+$new,}$p"
   done
@@ -343,43 +366,8 @@ case "$cmd" in
     set_env "$ENV_FILE" COMPOSE_FILE "$(compose_files compose.local.yml)"
     apply
     ok "No-domain mode: $(url)" ;;
-  ollama)
-    case "${1:-}" in
-      on)
-        if [ "${2:-}" = "--gpu" ]; then add_profile ollama-gpu; else add_profile ollama; fi
-        set_env "$ENV_FILE" OLLAMA_HOST "http://ollama:11434"
-        apply
-        ok "Ollama is on. Download a model: xplogent-docker pull-model llama3.1" ;;
-      off)
-        # A container whose profile is switched off is otherwise left running.
-        COMPOSE_PROFILES=ollama,ollama-gpu dc rm -sf ollama ollama-gpu >/dev/null 2>&1 || true
-        add_profile -ollama
-        set_env "$ENV_FILE" OLLAMA_HOST ""
-        apply ;;
-      *) die "usage: xplogent-docker ollama on [--gpu] | off" ;;
-    esac ;;
-  backup-model)
-    # Local Ollama as the automatic backup when the main model/server is unavailable.
-    case "${1:-}" in
-      on)
-        model="${2:-llama3.2:3b}"
-        [ "${2:-}" = "--gpu" ] && model="llama3.2:3b"
-        if [ "${2:-}" = "--gpu" ] || [ "${3:-}" = "--gpu" ]; then add_profile ollama-gpu; else add_profile ollama; fi
-        apply
-        say "Downloading $model on the local Ollama (first time only; ~2 GB for llama3.2:3b)…"
-        dc exec -T ollama ollama pull "$model"
-        dc exec -T -e XPL_FB_MODEL="$model" xplogent python -c \
-          "import os; from xplogent.core.config import save_user_config; save_user_config({'fallback': {'enabled': True, 'model': os.environ['XPL_FB_MODEL']}})"
-        ok "Backup model on: $model answers when the main model is unavailable." ;;
-      off)
-        dc exec -T xplogent python -c \
-          "from xplogent.core.config import save_user_config; save_user_config({'fallback': {'enabled': False}})" || true
-        COMPOSE_PROFILES=ollama,ollama-gpu dc rm -sf ollama ollama-gpu >/dev/null 2>&1 || true
-        add_profile -ollama
-        apply
-        ok "Backup model off (downloaded models are kept in the ollama-models volume)." ;;
-      *) die "usage: xplogent-docker backup-model on [model] [--gpu] | off" ;;
-    esac ;;
+  ollama|backup-model|pull-model)
+    die "Ollama is no longer part of Xplogent (it took disk space and CPU). Use a hosted model, or your own Ollama server on another machine: dashboard -> Settings -> Ollama servers; the backup model is set in Settings -> Backup model." ;;
   speech)
     case "${1:-}" in
       on)
@@ -425,13 +413,10 @@ case "$cmd" in
   cli)
     running || die "Xplogent is not running (xplogent-docker start)"
     dc exec xplogent xplogent "$@" ;;
-  pull-model)
-    [ -n "${1:-}" ] || die "usage: xplogent-docker pull-model <name>"
-    dc exec ollama ollama pull "$1" ;;
   uninstall)
     # Address every service, whatever mode/profiles are currently enabled.
     export COMPOSE_FILE="docker-compose.yml:compose.https.yml:compose.local.yml"
-    export COMPOSE_PROFILES="ollama,ollama-gpu,speech,gpu-speech"
+    export COMPOSE_PROFILES="speech,gpu-speech"
     if [ "${1:-}" = "--purge" ]; then
       printf 'This deletes ALL Xplogent data (memory, chats, keys) and backups in %s. Type "delete" to confirm: ' "$DIR"
       read -r confirm

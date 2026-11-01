@@ -101,8 +101,11 @@ def test_ollama_settings_saved_encrypted_and_used(fake_http):
     assert full["secrets"]["OLLAMA_API_KEY"] is True
     # The test button works with the saved token without sending it again.
     assert c.post("/providers/ollama/test", json={}).json()["ok"] is True
+    st = c.get("/status").json()                    # no setting uses Ollama: not even asked
+    assert st["ollama"]["in_use"] is False and st["ollama"]["reachable"] is False
+    cfgmod.save_user_config({"model": "ollama:llama3.1"})
     st = c.get("/status").json()
-    assert st["ollama"]["reachable"] is True and st["ollama"]["auth"] is True
+    assert st["ollama"]["in_use"] and st["ollama"]["reachable"] is True and st["ollama"]["auth"] is True
 
 
 def test_ollama_pull_goes_through_the_server_api(fake_http):

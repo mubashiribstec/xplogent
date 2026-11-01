@@ -14,14 +14,20 @@ editing files under `~/.xplogent/`.
 
 ## Common settings
 
-- **Model** — `provider:model`, e.g. `ollama:llama3.1`, `openai:gpt-4o`,
+- **Model** — `provider:model`, e.g. `openai:gpt-4o`,
   `anthropic:claude-sonnet-4-6`, `gemini:gemini-3.6-flash`,
   `openrouter:google/gemma-4-31b-it:free`, or through the **Vercel AI Gateway**
   `vercel:<creator>/<model>` (e.g. `vercel:anthropic/claude-opus-5`; key
   `AI_GATEWAY_API_KEY`). Settings → Browse provider models → *vercel* lists every model the
-  gateway offers (about 500), and **Test key** tries a cheap one.
-- **Reflection / embedding models** — usually a small/local model; embeddings
-  default to `ollama:nomic-embed-text` so memory works offline.
+  gateway offers (about 500), and **Test key** tries a cheap one. A model on your own
+  Ollama server (Settings → Ollama servers) is `ollama:<model>@<server>`, e.g.
+  `ollama:qwen2.5:14b@gpu`; Xplogent doesn't run Ollama itself.
+- **Reflection / embedding models** — reflection uses the main model unless you set a
+  cheaper one. Embeddings are off by default: memory and knowledge search use full-text
+  matching. For semantic search set `openai:text-embedding-3-small` or a model on your
+  Ollama server (`ollama:nomic-embed-text@gpu`).
+- **Backup model** — Settings → Backup model: any model that answers when the main one
+  can't (down, no key, rate limit). Best on a different provider.
 - **Memory** — enable/disable, short-term token budget, retrieval depth.
 - **Safety policy** — per risk tier (`low`/`medium`/`high`/`critical`) choose
   `auto`, `confirm`, or `deny`.
@@ -31,4 +37,5 @@ editing files under `~/.xplogent/`.
 ## API keys
 
 Set them in **Settings → Providers** (stored masked in `~/.xplogent/.env`) or via
-the environment. Ollama needs no key.
+the environment. An Ollama server needs no key (only a bearer token if it sits behind
+an authenticating proxy).

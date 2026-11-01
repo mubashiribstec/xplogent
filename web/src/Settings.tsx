@@ -7,7 +7,7 @@ import {
   getProviderModels, getRoles, getSkills, getStatus, getTools, importKnowledge, patchConfig, putRole,
   putSecrets, restoreBackup, saveOllama, StatusInfo, testOllama, listOllamaServers, saveOllamaServer,
   deleteOllamaServer, type OllamaServer,
-  BackupStatus, getBackupModel, pullBackupModel, saveBackupModel, testBackupModel,
+  BackupStatus, getBackupModel, saveBackupModel, testBackupModel,
 } from "./api";
 
 const RISK_TIERS = ["low", "medium", "high", "critical"];
@@ -337,11 +337,12 @@ function OllamaServerRow({ server, onUse, flash, onChange, onCancel }: {
   );
 }
 
+// Good backups sit on a different provider than the main model, so one outage can't take both.
 const BACKUP_SUGGESTIONS = [
-  { model: "llama3.2:3b", note: "~2 GB, good default for 8-16 GB RAM" },
-  { model: "qwen2.5:3b", note: "~2 GB, strong at following instructions" },
-  { model: "llama3.2:1b", note: "~1.3 GB, fastest, weakest" },
-  { model: "llama3.1:8b", note: "~4.7 GB, needs 16 GB+ RAM or a GPU" },
+  ...FREE_MODELS.map((m) => ({ model: m.model, note: `${m.label}: free, rate-limited` })),
+  { model: "gemini:gemini-3.6-flash", note: "Gemini Flash: fast, cheap" },
+  { model: "openai:gpt-4o-mini", note: "GPT-4o mini" },
+  { model: "anthropic:claude-haiku-4-5", note: "Claude Haiku" },
 ];
 
 function BackupModelCard({ flash }: { flash: (m: string) => void }) {
@@ -353,55 +354,50 @@ function BackupModelCard({ flash }: { flash: (m: string) => void }) {
   const load = () => getBackupModel().then((s) => { setSt(s); setModel((m) => m || s.model); }).catch(() => {});
   useEffect(() => { load(); listOllamaServers().then((r) => setServers(r.servers)).catch(() => {}); }, []);
   if (!st) return null;
-  const where = st.server ? `Ollama "${st.server}"` : "local Ollama";
 
   const run = async (label: string, fn: () => Promise<void>) => {
     setBusy(label); setResult("");
     try { await fn(); } catch (e) { setResult(`✗ ${String(e)}`); } finally { setBusy(""); load(); }
   };
+  const changed = model.trim() !== st.model;
   return (
     <div className="card">
       <h3>Backup model</h3>
       <p className="dim">If your main model or server can't answer (down, no key, a free model's rate limit), the
-        backup answers instead, for chat and phone calls. It can run on this server's own Ollama
-        (<code>xplogent-docker backup-model on</code> once) or on one of your other Ollama servers.</p>
-      <label>Runs on
-        <select value={st.server ?? ""} onChange={(e) => run("server", async () => {
-          await saveBackupModel({ server: e.target.value }); flash("backup server saved");
-        })}>
-          <option value="">this server's Docker Ollama</option>
-          {servers.map((s) => <option key={s.name} value={s.name}>Ollama server "{s.name}" ({s.host})</option>)}
-        </select>
-      </label>
-      <div className="row wrap" style={{ gap: 8 }}>
-        <span className={`badge ${st.reachable ? "ok" : "bad"}`} title={st.error || st.host}>
-          {where} {st.reachable ? "reachable" : "not reachable"}</span>
-        <span className={`badge ${st.installed ? "ok" : "warn"}`}>{st.model} {st.installed ? "downloaded" : "not downloaded"}</span>
-        <span className={`badge ${st.enabled ? "ok" : ""}`}>{st.enabled ? "backup on" : "backup off"}</span>
-      </div>
+        backup answers instead, for chat and phone calls. Pick one on a different provider than your main model:
+        a hosted model, or a model on one of your Ollama servers (<code>ollama:llama3.2:3b@gpu</code>).
+        Nothing runs on this server itself.</p>
       <label>Backup model
-        <input list="backup-models" value={model} onChange={(e) => setModel(e.target.value)} />
+        <input list="backup-models" value={model} placeholder="provider:model, e.g. gemini:gemini-3.6-flash"
+          onChange={(e) => setModel(e.target.value)} />
         <datalist id="backup-models">
           {BACKUP_SUGGESTIONS.map((b) => <option key={b.model} value={b.model}>{b.note}</option>)}
+          {servers.map((s) => <option key={s.name} value={`ollama:llama3.2:3b@${s.name}`}>on your Ollama server "{s.name}"</option>)}
         </datalist>
       </label>
       <div className="row wrap" style={{ gap: 8 }}>
-        <button disabled={!!busy || !st.reachable} onClick={() => run("pull", async () => {
-          const r = await pullBackupModel(model.trim());
-          setResult(r.ok ? `✓ ${r.model} downloaded` : `✗ ${r.error}`);
-          if (r.ok) await saveBackupModel({ model: model.trim() });
-        })}>{busy === "pull" ? "Downloading… (a few minutes)" : "Download model"}</button>
-        <button className="primary" disabled={!!busy} onClick={() => run("save", async () => {
-          await saveBackupModel({ model: model.trim(), enabled: !st.enabled });
-          flash(st.enabled ? "backup model off" : "backup model on");
-        })}>{st.enabled ? "Turn backup off" : "Turn backup on"}</button>
-        <button disabled={!!busy || !st.reachable} onClick={() => run("test", async () => {
-          const r = await testBackupModel();
-          setResult(r.ok ? `✓ ${r.model} answered in ${r.seconds}s: "${r.reply}"` : `✗ ${r.error}`);
-        })}>{busy === "test" ? "Testing…" : "Test backup"}</button>
+        <span className={`badge ${st.enabled ? "ok" : ""}`}>{st.enabled ? "backup on" : "backup off"}</span>
+        {st.model && <span className={`badge ${st.ready ? "ok" : "warn"}`} title={st.problem}>
+          {st.model} {st.ready ? "ready" : `· ${st.problem}`}</span>}
+      </div>
+      <div className="row wrap" style={{ gap: 8 }}>
+        {changed && <button disabled={!!busy || !model.trim()} onClick={() => run("model", async () => {
+          const r = await saveBackupModel({ model: model.trim() });
+          if (r.ok) flash("backup model saved"); else setResult(`✗ ${r.error}`);
+        })}>Save model</button>}
+        <button className="primary" disabled={!!busy || (!st.enabled && !(changed ? model.trim() : st.model))}
+          onClick={() => run("save", async () => {
+            const r = await saveBackupModel({ ...(changed ? { model: model.trim() } : {}), enabled: !st.enabled });
+            if (r.ok) flash(st.enabled ? "backup model off" : "backup model on"); else setResult(`✗ ${r.error}`);
+          })}>{st.enabled ? "Turn backup off" : "Turn backup on"}</button>
+        <button disabled={!!busy || !st.model || changed} title={changed ? "save the model first" : ""}
+          onClick={() => run("test", async () => {
+            const r = await testBackupModel();
+            setResult(r.ok ? `✓ ${r.model} answered in ${r.seconds}s: "${r.reply}"` : `✗ ${r.error}`);
+          })}>{busy === "test" ? "Testing…" : "Test backup"}</button>
       </div>
       {result && <p className={result.startsWith("✓") ? "ok" : "warn"}>{result}</p>}
-      {st.reachable && st.models.length > 0 && <p className="dim">On the {where}: {st.models.join(", ")}</p>}
+      {st.models && st.models.length > 0 && <p className="dim">On that Ollama server: {st.models.join(", ")}</p>}
     </div>
   );
 }
@@ -417,9 +413,9 @@ function HealthCard() {
         <>
           <div className="row wrap" style={{ gap: 8 }}>
             <span className="badge ok">backend online</span>
-            <span className={`badge ${st.ollama.reachable ? "ok" : "bad"}`}
+            {st.ollama.in_use && <span className={`badge ${st.ollama.reachable ? "ok" : "bad"}`}
                   title={st.ollama.error || st.ollama.host}>
-              Ollama {st.ollama.reachable ? "reachable" : "down"}</span>
+              Ollama {st.ollama.reachable ? "reachable" : "down"}</span>}
             <span className="badge">active model: {st.model}</span>
             <span className="badge" title="the running build: compare with the newest on GitHub; update with xplogent-docker update">
               build {st.version}{st.revision ? ` · ${st.revision}` : ""}</span>

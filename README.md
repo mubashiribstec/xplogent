@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 
 Xplogent is a personal AI agent you fully own and run yourself. It works with **any
-LLM provider** (including **local Ollama**, fully offline), keeps **its own
+LLM provider** (hosted, or your own Ollama server), keeps **its own
 persistent memory**, and **improves itself** by reflecting on tasks and writing
 reusable skills — all behind a configurable **safety/approval layer**.
 
@@ -19,7 +19,7 @@ required data missing), and a signed post-call webhook to your CRM.
 > chats, remembers, and improves itself the rest of the time.
 >
 > New here? **[SETUP.md](SETUP.md)** walks every install path, the first-run
-> wizard, connecting an LLM (including free local Ollama) and telephony, and
+> wizard, connecting an LLM (free OpenRouter models included) and telephony, and
 > troubleshooting.
 
 It's inspired by [Hermes](https://github.com/NousResearch/hermes-agent) and the
@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/mubashiribstec/xplogent/main/get.sh
 ```
 
 It installs Docker if needed, asks a few questions (your domain for automatic HTTPS, or
-no-domain mode; local models with Ollama; your model and API key), generates an access
+no-domain mode; local voices for calls; your model and API key), generates an access
 token, starts Xplogent and prints the address and token. Then manage it with:
 
 ```bash
@@ -43,18 +43,19 @@ xplogent-docker status        # health + address
 xplogent-docker update        # backup, pull the new image, restart
 xplogent-docker backup        # backup to /opt/xplogent-docker/backups
 xplogent-docker token         # show the token (--rotate for a new one)
-xplogent-docker help          # logs, restore, https <domain>, local, ollama on|off, ...
+xplogent-docker help          # logs, restore, https <domain>, local, speech on|off, ...
 ```
 
 Non-interactive: `... | sudo bash -s -- --yes --domain agent.example.com` (or `--mode local --lan`,
-`--ollama`, `--model openai:gpt-4o-mini`). Details: [docs/deploy-linux.md](docs/deploy-linux.md).
+`--model openai:gpt-4o-mini`). No language model runs on the server, so a small CPU-only machine is
+enough. Details: [docs/deploy-linux.md](docs/deploy-linux.md).
 
 ### Desktop (Windows, macOS, Linux)
 
 ```bash
 git clone https://github.com/mubashiribstec/xplogent.git && cd xplogent
 bash install.sh               # Windows (PowerShell): ./install.ps1
-xplogent setup                # one time: pick provider/model, enter a key (or use local Ollama)
+xplogent setup                # one time: pick provider/model, enter a key (or your Ollama server)
 xplogent up                   # opens the dashboard in your browser
 ```
 

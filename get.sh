@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/mubashiribstec/xplogent/main/get.sh | sudo bash
 #
 # Installs Docker if needed, downloads the deploy files (no git, no build), asks a few
-# questions (domain or no-domain mode, local Ollama, model + API key), writes a private
+# questions (domain or no-domain mode, model + API key, local voices), writes a private
 # .env with a generated access token, starts Xplogent and installs the `xplogent-docker`
 # helper (update, backup, logs, token, ...).
 #
@@ -15,17 +15,17 @@
 #   --mode https|local     https = your domain + automatic HTTPS; local = no domain   [XPL_MODE]
 #   --domain NAME          public hostname (implies --mode https)                    [XPL_DOMAIN]
 #   --lan                  local mode: listen on all interfaces (default: this machine only)
-#   --ollama | --no-ollama run local models with Ollama (GPU used when available)    [XPL_OLLAMA]
 #   --model SPEC           default model, e.g. openai:gpt-4o-mini                   [XPL_MODEL]
 #   --speech | --no-speech local voices for the phone agent (Kokoro; GPU if present) [XPL_SPEECH]
-#   --backup-model [MODEL] local Ollama backup used when the main model can't answer
-#                          (default llama3.2:3b)                                   [XPL_BACKUP_MODEL]
 #   --reconfigure          ask the questions again for an existing install (token kept)
 #   --dir PATH             install directory (default /opt/xplogent-docker)          [XPL_DIR]
 #   --ref REF              git branch/tag to take the deploy files from (default main) [XPL_REF]
 #   --no-docker-install    fail instead of installing Docker
 #   --dry-run              write files only; no Docker commands (for testing)
 # Testing: XPL_SRC=/path/to/checkout copies the files from a local checkout instead.
+#
+# No language model runs on this server: use a hosted model (OpenAI, Anthropic, Gemini,
+# OpenRouter, ...) or your own Ollama server elsewhere (dashboard -> Settings -> Ollama servers).
 
 set -euo pipefail
 
@@ -35,15 +35,13 @@ DIR="${XPL_DIR:-/opt/xplogent-docker}"
 SRC="${XPL_SRC:-}"
 MODE="${XPL_MODE:-}"
 DOMAIN="${XPL_DOMAIN:-}"
-OLLAMA="${XPL_OLLAMA:-}"
 MODEL="${XPL_MODEL:-}"
 SPEECH="${XPL_SPEECH:-}"
-BACKUP_MODEL="${XPL_BACKUP_MODEL:-}"
 BIND=""
 YES=0; DRY=0; INSTALL_DOCKER=1; RECONFIGURE=0
 # Settings given explicitly (flags or XPL_* env) are applied even to an existing install.
 EXPLICIT=0
-[ -z "$MODE$DOMAIN$OLLAMA$MODEL$SPEECH$BACKUP_MODEL" ] || EXPLICIT=1
+[ -z "$MODE$DOMAIN$MODEL$SPEECH" ] || EXPLICIT=1
 BIN_DIR="${XPL_BIN_DIR:-/usr/local/bin}"
 
 while [ $# -gt 0 ]; do
@@ -52,13 +50,13 @@ while [ $# -gt 0 ]; do
     --mode) MODE="${2:?--mode needs https or local}"; EXPLICIT=1; shift ;;
     --domain) DOMAIN="${2:?--domain needs a hostname}"; MODE=https; EXPLICIT=1; shift ;;
     --lan) BIND=0.0.0.0; MODE="${MODE:-local}"; EXPLICIT=1 ;;  # LAN access = no-domain mode
-    --ollama) OLLAMA=1; EXPLICIT=1 ;;
-    --no-ollama) OLLAMA=0; EXPLICIT=1 ;;
+    --ollama|--backup-model)
+      echo "$1: Ollama is no longer part of Xplogent (it took disk space and CPU). Use a hosted model," >&2
+      echo "or your own Ollama server elsewhere: dashboard -> Settings -> Ollama servers / Backup model." >&2
+      exit 2 ;;
+    --no-ollama) ;;   # accepted for old scripts: nothing to switch off any more
     --model) MODEL="${2:?--model needs a value}"; EXPLICIT=1; shift ;;
     --speech) SPEECH=1; EXPLICIT=1 ;;
-    --backup-model)
-      BACKUP_MODEL="llama3.2:3b"; EXPLICIT=1
-      case "${2:-}" in ""|-*) ;; *) BACKUP_MODEL="$2"; shift ;; esac ;;
     --no-speech) SPEECH=0; EXPLICIT=1 ;;
     --reconfigure) RECONFIGURE=1 ;;
     --dir) DIR="${2:?--dir needs a path}"; shift ;;
@@ -122,7 +120,7 @@ set_env() {
   mv "$tmp" "$file"
 }
 # set_profile FILE NAME on|off: add/remove one entry of COMPOSE_PROFILES, keeping the rest.
-# Alternatives (ollama/ollama-gpu, speech/gpu-speech) replace each other.
+# Alternatives (speech/gpu-speech; ollama/ollama-gpu from older installs) replace each other.
 set_profile() {
   local file="$1" name="$2" state="$3" cur new="" p
   cur="$(get_env "$file" COMPOSE_PROFILES)"
@@ -257,27 +255,6 @@ if [ "$FRESH" -eq 1 ] || [ "$RECONFIGURE" -eq 1 ] || [ "$PARTIAL" -eq 1 ]; then
     *) die "--mode must be https or local" ;;
   esac
 
-  if [ -z "$OLLAMA" ] && [ "$PARTIAL" -eq 1 ]; then
-    OLLAMA=keep
-  elif [ -z "$OLLAMA" ]; then
-    if yes_no "Run local models with Ollama on this server (needs ~8 GB RAM; GPU used if present)? [y/N]" n; then OLLAMA=1; else OLLAMA=0; fi
-  fi
-  profile=""
-  if [ "$OLLAMA" = 1 ]; then
-    profile=ollama
-    if command -v nvidia-smi >/dev/null 2>&1 && { [ "$DRY" -eq 1 ] || docker info 2>/dev/null | grep -qi nvidia; }; then
-      profile=ollama-gpu; say "NVIDIA GPU + container toolkit found: Ollama will use the GPU"
-    elif command -v nvidia-smi >/dev/null 2>&1; then
-      warn "NVIDIA GPU found but not the NVIDIA Container Toolkit; Ollama will use the CPU. Install the toolkit and run: xplogent-docker ollama on --gpu"
-    fi
-    set_profile "$ENV_FILE" "$profile" on
-    set_env "$ENV_FILE" OLLAMA_HOST "http://ollama:11434"
-    [ -n "$MODEL" ] || [ "$PARTIAL" -eq 1 ] || MODEL="ollama:llama3.1"
-  elif [ "$OLLAMA" != keep ]; then
-    set_profile "$ENV_FILE" ollama off
-    set_env "$ENV_FILE" OLLAMA_HOST ""
-  fi
-
   # Local voices for the phone agent (asked only on a fresh install / --reconfigure).
   if [ -z "$SPEECH" ] && [ "$PARTIAL" -eq 0 ]; then
     if yes_no "Run local voices for the phone agent (Kokoro text-to-speech, ~2 GB)? [y/N]" n; then SPEECH=1; else SPEECH=0; fi
@@ -292,13 +269,10 @@ if [ "$FRESH" -eq 1 ] || [ "$RECONFIGURE" -eq 1 ] || [ "$PARTIAL" -eq 1 ]; then
     set_profile "$ENV_FILE" speech off
   fi
 
-  # Backup model: the local Ollama container must run even when the main model is remote.
-  [ -z "$BACKUP_MODEL" ] || set_profile "$ENV_FILE" ollama on
-
   if [ -z "$MODEL" ] && [ "$PARTIAL" -eq 1 ]; then
     :  # keep the current model
   elif [ -z "$MODEL" ]; then
-    MODEL="$(ask "Default model (e.g. openai:gpt-4o-mini, anthropic:claude-sonnet-4-6, gemini:gemini-2.5-flash, openrouter:...):" "openai:gpt-4o-mini")"
+    MODEL="$(ask "Default model (e.g. openai:gpt-4o-mini, anthropic:claude-sonnet-4-6, gemini:gemini-3.6-flash, openrouter:...):" "openai:gpt-4o-mini")"
   fi
   [ -z "$MODEL" ] || set_env "$ENV_FILE" XPLOGENT_MODEL "$MODEL"
   case "${MODEL%%:*}" in
@@ -317,6 +291,17 @@ if [ "$FRESH" -eq 1 ] || [ "$RECONFIGURE" -eq 1 ] || [ "$PARTIAL" -eq 1 ]; then
   if [ -z "$(get_env "$ENV_FILE" XPLOGENT_AUTH_TOKEN)" ]; then
     set_env "$ENV_FILE" XPLOGENT_AUTH_TOKEN "$(gen_token)"
   fi
+fi
+# Ollama used to be an optional container here; tidy up what an older install left
+# (every run, also a plain re-run that keeps the settings).
+case ",$(get_env "$ENV_FILE" COMPOSE_PROFILES)," in
+  *,ollama*) set_profile "$ENV_FILE" ollama off ;;
+esac
+if [ "$(get_env "$ENV_FILE" OLLAMA_HOST)" = "http://ollama:11434" ]; then
+  set_env "$ENV_FILE" OLLAMA_HOST ""
+  case "$(get_env "$ENV_FILE" XPLOGENT_MODEL)" in
+    ollama:*) warn "The default model was on the local Ollama, which is no longer part of Xplogent: pick a hosted model or your own Ollama server in Settings -> Models" ;;
+  esac
 fi
 chmod 600 "$ENV_FILE"
 
@@ -353,13 +338,12 @@ case ",$(get_env "$ENV_FILE" COMPOSE_PROFILES)," in
   *,speech,*|*,gpu-speech,*) ;;
   *) [ "$DRY" -eq 1 ] || COMPOSE_PROFILES=speech,gpu-speech docker compose rm -sf kokoro-cpu kokoro whisper >/dev/null 2>&1 || true ;;
 esac
-case ",$(get_env "$ENV_FILE" COMPOSE_PROFILES)," in
-  *,ollama*) ;;
-  *)  # Ollama switched off: a container from an earlier install would otherwise keep running.
-    [ "$DRY" -eq 1 ] || COMPOSE_PROFILES=ollama,ollama-gpu docker compose rm -sf ollama ollama-gpu >/dev/null 2>&1 || true ;;
-esac
 say "Starting Xplogent…"
-run docker compose up -d --remove-orphans
+run docker compose up -d --remove-orphans     # also removes an older install's Ollama container
+if [ "$DRY" -eq 0 ] && docker volume inspect xplogent_ollama-models >/dev/null 2>&1 \
+    && docker volume rm xplogent_ollama-models >/dev/null 2>&1; then
+  ok "Removed the old local Ollama models: disk space freed"
+fi
 if [ "$DRY" -eq 0 ]; then
   healthy=0
   for _ in $(seq 1 60); do
@@ -371,26 +355,6 @@ if [ "$DRY" -eq 0 ]; then
   done
   [ "$healthy" -eq 1 ] || die "Xplogent did not become healthy; see: xplogent-docker logs"
   ok "Xplogent is running"
-  profiles="$(get_env "$ENV_FILE" COMPOSE_PROFILES)"
-  if [ -n "$BACKUP_MODEL" ]; then
-    say "Downloading the backup model $BACKUP_MODEL (first time only; ~2 GB for llama3.2:3b)…"
-    if docker compose exec -T ollama ollama pull "$BACKUP_MODEL"; then
-      docker compose exec -T -e XPL_FB_MODEL="$BACKUP_MODEL" xplogent python -c \
-        "import os; from xplogent.core.config import save_user_config; save_user_config({'fallback': {'enabled': True, 'model': os.environ['XPL_FB_MODEL']}})" \
-        && ok "Backup model on: $BACKUP_MODEL answers when the main model is unavailable"
-    else
-      warn "could not download $BACKUP_MODEL; later: xplogent-docker backup-model on $BACKUP_MODEL"
-    fi
-  fi
-  # Local Ollama as the *main* model (--ollama): fetch the chat + embedding models.
-  [ "$(get_env "$ENV_FILE" OLLAMA_HOST)" = "http://ollama:11434" ] || profiles=""
-  case ",$profiles," in
-    *,ollama*)
-      say "Downloading the local models (first time only; this can take a while)…"
-      for m in "$(get_env "$ENV_FILE" XPLOGENT_MODEL | sed 's/^ollama://')" nomic-embed-text; do
-        docker compose exec -T ollama ollama pull "$m" || warn "could not pull $m; later: xplogent-docker pull-model $m"
-      done ;;
-  esac
 fi
 
 # ── summary ───────────────────────────────────────────────────────────────────

@@ -340,7 +340,7 @@ export interface StatusInfo {
   model: string;
   providers: string[];
   secrets: Record<string, boolean>;
-  ollama: { host: string; reachable: boolean; auth?: boolean; error?: string };
+  ollama: { host: string; reachable: boolean; auth?: boolean; error?: string; in_use?: boolean };
   capabilities?: { display: boolean; docker: boolean; git: boolean };
   version?: string;
   revision?: string;
@@ -368,15 +368,14 @@ export async function deleteOllamaServer(name: string): Promise<{ ok: boolean; s
 export const saveOllama = (host: string, token: string) =>
   postJSON<{ ok: boolean; host?: string; error?: string }>("/providers/ollama/settings", { host, token });
 
-// ── Backup model (local Ollama in Docker) ─────────────────────────────────────
+// ── Backup model (any model; nothing runs locally) ──────────────────────────────
+/** The backup model: any provider:model spec (hosted, or on one of your Ollama servers). */
 export interface BackupStatus {
-  enabled: boolean; model: string; host: string; reachable: boolean; models: string[];
-  installed: boolean; error?: string; server?: string;
+  enabled: boolean; model: string; ready: boolean; problem: string; server?: string; models?: string[];
 }
 export async function getBackupModel(): Promise<BackupStatus> { return (await fetch("/providers/backup")).json(); }
-export const saveBackupModel = (u: { enabled?: boolean; model?: string; host?: string; server?: string }) =>
+export const saveBackupModel = (u: { enabled?: boolean; model?: string }) =>
   postJSON<Record<string, any>>("/providers/backup", u);
-export const pullBackupModel = (model: string) => postJSON<Record<string, any>>("/providers/backup/pull", { model });
 export const testBackupModel = () => postJSON<Record<string, any>>("/providers/backup/test");
 
 // ── Phone agent setup ─────────────────────────────────────────────────────────

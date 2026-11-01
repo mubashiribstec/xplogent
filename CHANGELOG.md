@@ -5,6 +5,20 @@ All notable changes to Xplogent. Format follows
 
 ## [Unreleased]
 
+### Removed
+- **The bundled local Ollama.** It took disk space and CPU on the server, so no language
+  model runs next to Xplogent any more:
+  - gone: the Docker `ollama` / `ollama-gpu` services, the installer's local-models question
+    and `--ollama` / `--backup-model`, and `xplogent-docker ollama | backup-model | pull-model`;
+  - `xplogent-docker update` (or re-running the installer) tidies up an older install: it
+    removes the Ollama container and its downloaded models, and clears `OLLAMA_HOST`;
+  - defaults: `openai:gpt-4o-mini` as the model; reflection uses the main model; no
+    embedding model (memory and knowledge use full-text search until you set one);
+  - the backup model is any `provider:model` (Settings → Backup model), best on another
+    provider;
+  - your own Ollama servers elsewhere (Settings → Ollama servers, `model@server`) work as
+    before.
+
 ### Added
 - **Queue context (FreePBX)**: on calls from the PBX, the caller's number comes from
   P-Asserted-Identity / Remote-Party-ID, and the number they dialled from the oldest

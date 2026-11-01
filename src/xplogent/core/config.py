@@ -103,9 +103,9 @@ def _deep_merge(base: dict, override: dict) -> dict:
 class Config:
     """Resolved runtime configuration."""
 
-    model: str = "ollama:llama3.1"
-    reflection_model: str = "ollama:llama3.1"
-    embedding_model: str = "ollama:nomic-embed-text"
+    model: str = "openai:gpt-4o-mini"
+    reflection_model: str = ""       # empty → the main model
+    embedding_model: str = ""        # empty → no embeddings: memory/knowledge use full-text search
     vision_model: str = ""  # empty → use `model`; set to a vision-capable model
     agent: dict[str, Any] = field(default_factory=dict)
     memory: dict[str, Any] = field(default_factory=dict)
@@ -363,9 +363,9 @@ def load_config(overrides: dict[str, Any] | None = None) -> Config:
         data = _deep_merge(data, overrides)
 
     return Config(
-        model=data.get("model", "ollama:llama3.1"),
-        reflection_model=data.get("reflection_model", data.get("model", "ollama:llama3.1")),
-        embedding_model=data.get("embedding_model", "ollama:nomic-embed-text"),
+        model=data.get("model") or "openai:gpt-4o-mini",
+        reflection_model=data.get("reflection_model") or data.get("model") or "openai:gpt-4o-mini",
+        embedding_model=data.get("embedding_model") or "",
         vision_model=data.get("vision_model", ""),
         agent=data.get("agent", {}),
         memory=data.get("memory", {}),

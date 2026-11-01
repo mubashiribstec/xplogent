@@ -10,8 +10,8 @@ optional and can be done from the dashboard's Settings page.
 |---|---|---|
 | Python | 3.11+ (3.12/3.13 fine) | Not needed for the Docker path |
 | Node.js | 18+ | Only to build the dashboard from source; the Docker image and pipx installs via `install.sh` handle it for you |
-| RAM | 2 GB for the app itself | Local models need more, per model |
-| An LLM | Any of: local **Ollama** (free, offline), OpenAI, Anthropic, Google Gemini, OpenRouter | Ollama is the default |
+| RAM | 2 GB for the app itself | No language model runs on the server |
+| An LLM | Any of: OpenAI, Anthropic, Google Gemini, OpenRouter (free models too), Vercel AI Gateway, or your own **Ollama** server | `openai:gpt-4o-mini` is the default |
 
 ## Path 1 — Linux server, one command (Docker)
 
@@ -20,8 +20,9 @@ curl -fsSL https://raw.githubusercontent.com/mubashiribstec/xplogent/main/get.sh
 ```
 
 It installs Docker if needed, asks about a domain (automatic HTTPS) or
-no-domain mode, sets up Ollama if you want local models, generates an access
-token, and prints the dashboard address + token. Manage it afterwards with
+no-domain mode, your model and its key, generates an access token, and prints
+the dashboard address + token. Ollama is not part of the install any more (it
+took disk space and CPU); `xplogent-docker update` removes it from older installs. Manage it afterwards with
 `xplogent-docker` (`status`, `logs`, `update`, `backup`, `token`). Full
 deployment detail: [docs/deploy-linux.md](docs/deploy-linux.md).
 
@@ -55,20 +56,21 @@ xplogent up
 
 The wizard asks four things and saves them under `~/.xplogent/`:
 
-1. **Provider** — `ollama` (local, free), `openai`, `anthropic`, `gemini`,
-   `openrouter`. Typing an unknown name warns instead of saving nonsense.
-2. **Model** — a sensible default per provider (e.g. `ollama:llama3.1`,
-   `gemini:gemini-2.0-flash`); type your own to override.
+1. **Provider** — `openai` (default), `anthropic`, `gemini`, `openrouter`,
+   `vercel`, or `ollama` for your own Ollama server. Typing an unknown name
+   warns instead of saving nonsense.
+2. **Model** — a sensible default per provider (e.g. `openai:gpt-4o`,
+   `gemini:gemini-3.6-flash`); type your own to override.
 3. **API key** — only for hosted providers. Skipping is allowed, but the
    wizard warns you chats will fail until a key is added in Settings.
-4. **Ollama check** — if you picked Ollama, the wizard verifies the server
-   answers and prints the exact `ollama pull …` commands for any model that
-   isn't downloaded yet.
+4. **Ollama check** — if you picked your Ollama server, the wizard verifies it
+   answers and prints the exact `ollama pull …` commands to run there for any
+   model that isn't downloaded yet.
 
 Prefer clicking? Skip the wizard: `xplogent up` opens the dashboard, and a
 fresh install shows the same setup as a welcome dialog (it appears whenever
-no key is set, or when the local Ollama model can't answer, and there are no
-chats yet). In Chat, a warning banner tells you if your local model is down
+no key is set, or when your Ollama model can't answer, and there are no
+chats yet). In Chat, a warning banner tells you if your Ollama server is down
 and how to fix it.
 
 **Verify any install at any time:**
@@ -84,12 +86,15 @@ plain-English fix, and it exits non-zero if anything essential is broken.
 
 ## Connecting an LLM
 
-- **Ollama (free, offline):** install from [ollama.com](https://ollama.com),
-  then `ollama pull llama3.1` and `ollama pull nomic-embed-text` (the second
-  powers semantic memory; without it memory uses keyword search). Remote or
-  authenticated Ollama servers are supported — set the URL/token in
-  Settings → Ollama server, or `OLLAMA_HOST` / `OLLAMA_API_KEY` in
-  `~/.xplogent/.env`.
+- **Your own Ollama server** (another machine, e.g. a GPU box): run
+  `ollama pull llama3.1` there, then add it in Settings → Ollama servers
+  (URL and, if needed, a bearer token; several named servers are supported),
+  or set `OLLAMA_HOST` / `OLLAMA_API_KEY` in `~/.xplogent/.env`. Xplogent
+  doesn't run Ollama itself.
+- **Memory search:** without an embedding model, memory and the knowledge base
+  use full-text search. For semantic search set `embedding_model` to
+  `openai:text-embedding-3-small` or a model on your Ollama server
+  (`ollama:nomic-embed-text@gpu`).
 - **Hosted:** paste the key in the wizard, in Settings → API keys, or via the
   environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` or
   `GEMINI_API_KEY`, `OPENROUTER_API_KEY`). Keys are stored encrypted at rest.
@@ -120,12 +125,12 @@ do-not-call list and calling-hours window; every greeting discloses the AI.
 
 | Symptom | Likely cause → fix |
 |---|---|
-| Chat fails / "local model isn't answering" banner | Ollama isn't running or the model isn't pulled → start Ollama, `ollama pull <model>`, or switch provider in Settings. `xplogent doctor` pinpoints it. |
+| Chat fails / "local model isn't answering" banner | Your Ollama server isn't reachable or the model isn't pulled there → check it in Settings → Ollama servers, `ollama pull <model>` on that machine, or switch provider in Settings. `xplogent doctor` pinpoints it. |
 | Dashboard says "Backend unreachable" or the status dot stays red | The server isn't running, or (older installs) a malformed Ollama URL made `/status` fail → check the address in Settings → Ollama server is a valid `http://host:port`. |
 | "Dashboard not built yet" (API works) | The web build is missing → `cd web && npm install && npm run build`. pipx installs: re-run `install.sh` (it copies the build into the pipx env). Docker: set `XPLOGENT_WEB_DIR` or rebuild the image. |
 | 401 / login loop | Access token mismatch → the token is in `~/.xplogent/.env` (`XPLOGENT_AUTH_TOKEN`); `xplogent-docker token` on Docker installs. |
 | Port 8765 already in use | Something else (or an old Xplogent) holds it → `xplogent status`, `xplogent stop`, or serve on another port: `xplogent serve --port 8766`. |
-| Chats work but memory feels dumb | The embedding model isn't pulled → `ollama pull nomic-embed-text` (memory falls back to keyword search without embeddings). |
+| Chats work but memory feels dumb | No embedding model is set, so memory uses keyword search → set `embedding_model` (e.g. `openai:text-embedding-3-small`, or `ollama:nomic-embed-text@<your server>`). |
 | Calls: no audio / one-way audio | NAT: the PBX extension needs `rtp_symmetric`, `force_rport`, `rewrite_contact` on; check the readiness list in the Calls view and [docs/voip.md](docs/voip.md). |
 | `xplogent` command not found after install.sh | pipx path not in your shell yet → open a new terminal, or run `pipx ensurepath`. |
 | Windows: service won't register | The scheduled task needs an elevated PowerShell — the CLI prints the exact command to run. |

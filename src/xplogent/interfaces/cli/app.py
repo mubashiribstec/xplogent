@@ -303,8 +303,8 @@ def setup() -> None:
     """Interactive first-run wizard: pick a provider/model and save settings."""
     console.print(Panel("Let's set up Xplogent.", title="⚙ setup", border_style="cyan"))
     provider = console.input(
-        "Provider [bold]\\[ollama][/] / openai / anthropic / gemini / openrouter / vercel: "
-    ).strip().lower() or "ollama"
+        "Provider [bold]\\[openai][/] / anthropic / gemini / openrouter / vercel / ollama (your own server): "
+    ).strip().lower() or "openai"
     defaults = {
         "ollama": "llama3.1", "openai": "gpt-4o",
         "anthropic": "claude-sonnet-4-6", "gemini": "gemini-3.6-flash",

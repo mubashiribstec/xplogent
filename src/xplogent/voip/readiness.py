@@ -52,7 +52,7 @@ def slow_model_problem(call_model: str, *, gpu: bool | None = None, ollama_host:
     Ollama model on this very server when it has no GPU (a 4-core CPU needs several
     seconds per reply; callers hang up)."""
     provider, _, model = call_model.partition(":")
-    if provider not in ("ollama", "ollama-local"):
+    if provider != "ollama":
         return ""                                        # a hosted model
     if provider == "ollama":
         if ollama_host is None:
@@ -69,7 +69,7 @@ def slow_model_problem(call_model: str, *, gpu: bool | None = None, ollama_host:
     cores = os.cpu_count() or 0
     return (f"{call_model} runs on this server's CPU{f' ({cores} cores)' if cores else ''} with no GPU: "
             "replies will be slow on calls. Pick a free OpenRouter model or your GPU Ollama server "
-            "under Calls → Model for calls (keep the local model as backup)")
+            "under Calls → Model for calls (and set a backup model in Settings)")
 
 
 # Models the provider has shut down: every request 404s.

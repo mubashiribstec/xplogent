@@ -10,9 +10,11 @@
 #   HTTPS with a domain : COMPOSE_FILE=docker-compose.yml:compose.https.yml   (Caddy, ports 80/443)
 #   No domain / LAN     : COMPOSE_FILE=docker-compose.yml:compose.local.yml   (port 8765, no TLS)
 # Optional profiles (COMPOSE_PROFILES in .env, comma separated):
-#   ollama      local models on CPU          ollama-gpu  local models on an NVIDIA GPU
 #   speech      Kokoro text-to-speech on CPU for the phone agent
 #   gpu-speech  Whisper + Kokoro speech servers for the phone agent (NVIDIA GPU)
+#
+# No language model runs here: Xplogent uses hosted models (OpenAI, Anthropic, Gemini,
+# OpenRouter, ...) or your own Ollama server elsewhere (Settings -> Ollama servers).
 #
 # The app refuses to start without an access token, in every mode.
 
@@ -44,39 +46,6 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
-
-  # --- optional: local models with Ollama ------------------------------------------------
-  # Set OLLAMA_HOST=http://ollama:11434 in .env and pull a model once:
-  #   docker compose exec ollama ollama pull llama3.1
-  #   docker compose exec ollama ollama pull nomic-embed-text
-  ollama:
-    profiles: ["ollama"]
-    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
-    restart: unless-stopped
-    volumes:
-      - ollama-models:/root/.ollama
-    expose:
-      - "11434"
-
-  ollama-gpu:
-    profiles: ["ollama-gpu"]
-    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
-    restart: unless-stopped
-    # Same address as the CPU service, so OLLAMA_HOST=http://ollama:11434 works for both.
-    networks:
-      default:
-        aliases: [ollama]
-    volumes:
-      - ollama-models:/root/.ollama
-    expose:
-      - "11434"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
 
   # --- optional: local text-to-speech on CPU for the phone agent (profile "speech") ----
   # Speech-to-text runs inside the xplogent container (faster-whisper, CPU). In the Calls
@@ -133,5 +102,4 @@ services:
 
 volumes:
   xplogent-data:
-  ollama-models:
   hf-cache:

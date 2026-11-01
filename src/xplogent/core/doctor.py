@@ -93,30 +93,34 @@ def _check_dashboard_build() -> Check:
 def _check_model(cfg: Config) -> list[Check]:
     provider, model = cfg.provider_name, cfg.model_name
     if provider == "ollama":
-        from xplogent.providers.ollama import ollama_settings
+        from xplogent.providers.ollama import ollama_server, split_server
 
-        host, _token = ollama_settings()
+        model, server = split_server(model)
+        try:
+            host, _token = ollama_server(server)
+        except ValueError as exc:
+            return [Check("Model (Ollama)", FAIL, str(exc), "Add it under Settings → Ollama servers.")]
         try:
             tags = _ollama_tags(host)
         except Exception:  # noqa: BLE001 - unreachable is the finding
-            return [Check("Model (Ollama)", FAIL, f"no answer from Ollama at {host}",
-                          "Start Ollama (run `ollama serve`, or launch the app), or set "
-                          "OLLAMA_HOST if it runs elsewhere. No Ollama? Pick a hosted "
-                          "model in Settings instead.")]
+            return [Check("Model (Ollama)", FAIL, f"no answer from your Ollama server at {host}",
+                          "Check that it is running and reachable from here (`ollama serve` on that "
+                          "machine; address and token under Settings → Ollama servers), or pick a "
+                          "hosted model in Settings. Xplogent doesn't run Ollama itself.")]
         checks = []
         if _model_present(tags, model):
             checks.append(Check("Model (Ollama)", OK, f"{model} is pulled and Ollama answers"))
         else:
             checks.append(Check("Model (Ollama)", FAIL,
-                                f"Ollama is up but model '{model}' is not pulled",
-                                f"Run: ollama pull {model}"))
+                                f"your Ollama server is up but model '{model}' is not pulled",
+                                f"On that machine run: ollama pull {model}"))
         embed = cfg.embedding_model
         if embed.startswith("ollama:"):
             name = embed.split(":", 1)[1]
             if not _model_present(tags, name):
                 checks.append(Check("Embedding model", WARN,
                                     f"'{name}' not pulled (memory search will be limited)",
-                                    f"Run: ollama pull {name}"))
+                                    f"On your Ollama server run: ollama pull {name}"))
         return checks
     keys = _PROVIDER_KEYS.get(provider)
     if keys is None:
