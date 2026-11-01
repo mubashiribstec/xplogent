@@ -351,6 +351,16 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
     (`XPLOGENT_TPS_API_KEY`) as a bearer token, and answers
     `{"results": {"+447…": {"tps": false, "ctps": false}}}`. A provider with another format
     needs a small proxy in front of it.
+- **Media and signalling are bound to the call** (`voip.sip.rtp_source`,
+  `voip.sip_extension.rtp_source`):
+  - **Audio:** call audio and keypad tones are only accepted from the address in the call's
+    SDP or from its SIP peer (any port, so NAT keeps working). The port is learnt once; after
+    that, packets from anywhere else are dropped and counted in the call's debug view. A
+    re-INVITE with new SDP moves the audio. `sdp` is stricter (exact address and port);
+    `any` restores the old first-packet-wins behaviour, for unusual NAT set-ups.
+  - **Signalling:** BYE, CANCEL, ACK, re-INVITE, NOTIFY and other in-dialog requests must come
+    from the call's peer (or a trusted trunk address) and carry the dialog's tags. Anything
+    else gets `481` and the call carries on.
 - **Alerts** (Setup → Alerts): paste a Slack or Teams incoming-webhook address (it's stored
   as the secret `XPLOGENT_ALERT_WEBHOOK_URL`). You're told when:
   - 5 calls in a row fail (a busy line or no answer doesn't count);

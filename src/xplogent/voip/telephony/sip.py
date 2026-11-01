@@ -93,6 +93,7 @@ class SipSettings:
     max_calls: int = 4
     ring_timeout: float = 45.0
     strict_source: bool = False          # accept calls only from the server / allow_from addresses
+    rtp_source: str = "dialog"           # media only from the call's SDP / SIP peer (dialog | sdp | any)
     enabled: bool = False                # only the extension line uses this: off = fully inert
     queue_numbers: list[str] = field(default_factory=list)   # PBX queues that overflow to this line
     # Extensions still answered while the phone agent is switched off (marked test calls),
@@ -139,6 +140,8 @@ class SipSettings:
                    register=bool(s.get("register", True)), expires=int(s.get("expires") or 300),
                    allow_from=list(allow), max_calls=int(s.get("max_calls") or 4),
                    strict_source=bool(s.get("strict_source", False)),
+                   rtp_source=str(s.get("rtp_source") or "dialog") if str(s.get("rtp_source") or "dialog")
+                   in ("dialog", "sdp", "any") else "dialog",
                    ring_timeout=float(s.get("ring_timeout") or 45),
                    enabled=bool(s.get("enabled", False)),
                    queue_numbers=[str(q) for q in queues], test_callers=[str(t) for t in testers])
@@ -179,6 +182,7 @@ class SipCall:
     bye_sent: bool = False
     remote_ended: bool = False
     supervisor: asyncio.Task | None = None
+    peer: tuple[str, int] | None = None  # where this call's SIP signalling comes from
 
 
 SessionFactory = Callable[..., Any]
@@ -577,10 +581,22 @@ class SipTrunk(asyncio.DatagramProtocol):
             return
         method = req.method
         call = self.calls.get(req.call_id)
+        if call is not None and method != "OPTIONS" and not self._dialog_matches(call, req, addr):
+            # A known Call-ID alone proves nothing: a spoofed BYE / re-INVITE must not
+            # hang up or redirect a live call.
+            _log.warning("SIP %s for call %s from %s refused: not this call's dialog", method,
+                         req.call_id[:12], addr[0])
+            self._reply(req, addr, 481, "Call/Transaction Does Not Exist")
+            return
         if method == "OPTIONS":
             self._reply(req, addr, 200, "OK")
         elif method == "INVITE":
             if call is not None:                              # re-INVITE (hold, codec refresh…)
+                if req.body and call.rtp is not None:
+                    with contextlib.suppress(ValueError):
+                        offer = parse_sdp(req.body)
+                        if offer.get("ip") and offer.get("port"):
+                            call.rtp.renegotiate(offer["ip"], int(offer["port"]))
                 self._reply(req, addr, 200, "OK", to_tag=call.local_tag,
                             body=build_sdp(self.contact_ip, call.rtp.port if call.rtp else 0,
                                            (call.rtp.pt,) if call.rtp else (PCMU,),
@@ -609,6 +625,20 @@ class SipTrunk(asyncio.DatagramProtocol):
             self._reply(req, addr, 200, "OK")
         else:
             self._reply(req, addr, 405, "Method Not Allowed", extra=[("Allow", ALLOW)])
+
+    def _dialog_matches(self, call: SipCall, req: SipMessage, addr) -> bool:
+        """An in-dialog request must come from the call's signalling peer (or a trusted
+        trunk address) and carry this dialog's tags."""
+        if call.peer and addr[0] != call.peer[0] and addr[0] not in self.trusted:
+            return False
+        from_tag = header_param(req.get("From"), "tag")
+        to_tag = header_param(req.get("To"), "tag")
+        if call.remote_tag and from_tag != call.remote_tag:
+            return False
+        if req.method == "CANCEL":                    # matches the INVITE: same branch, no To tag
+            invite_branch = header_param(call.invite.get("Via"), "branch") if call.invite is not None else ""
+            return not invite_branch or header_param(req.get("Via"), "branch") == invite_branch
+        return not to_tag or to_tag == call.local_tag
 
     async def _inbound_invite(self, req: SipMessage, addr) -> None:
         if not self._allowed(addr, req):
@@ -648,9 +678,9 @@ class SipTrunk(asyncio.DatagramProtocol):
                        remote_tag=header_param(req.get("From"), "tag"),
                        remote_target=uri_of(req.get("Contact") or req.get("From")),
                        route_set=record_routes(req), invite=req,
-                       number=ident["caller"])
+                       number=ident["caller"], peer=(addr[0], addr[1]))
         try:
-            call.rtp = await self._open_rtp(codec, sdp)
+            call.rtp = await self._open_rtp(codec, sdp, call.peer)
         except Exception as exc:  # noqa: BLE001
             self.last_error = f"RTP: {exc}"
             self._reply(req, addr, 503, "Service Unavailable")
@@ -692,8 +722,10 @@ class SipTrunk(asyncio.DatagramProtocol):
 
         return bool((load_config().voip or {}).get("enabled"))
 
-    async def _open_rtp(self, codec: int, sdp: dict[str, Any]) -> RtpStream:
+    async def _open_rtp(self, codec: int, sdp: dict[str, Any], peer: tuple[str, int] | None = None) -> RtpStream:
         rtp = RtpStream(codec)
+        rtp.policy = self.s.rtp_source
+        rtp.allowed_hosts = {h for h in (sdp.get("ip"), peer[0] if peer else None) if h}
         last: Exception | None = None
         for _ in range(8):
             port = self.ports.take()
@@ -719,9 +751,10 @@ class SipTrunk(asyncio.DatagramProtocol):
         caller = self.s.caller_id or self.s.username
         call = SipCall(call_id=f"{secrets.token_hex(10)}@xplogent", local_tag=new_tag(), outbound=True,
                        local_uri=f'"{caller}" <sip:{self.s.username}@{self.domain}>',
-                       remote_uri=f"<sip:{target}@{self.domain}>", number=target, meta=dict(meta or {}))
+                       remote_uri=f"<sip:{target}@{self.domain}>", number=target, meta=dict(meta or {}),
+                       peer=self.server_addr)
         try:
-            call.rtp = await self._open_rtp(PCMU, {})
+            call.rtp = await self._open_rtp(PCMU, {}, self.server_addr)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"RTP: {exc}"}
         self.calls[call.call_id] = call
@@ -819,6 +852,7 @@ class SipTrunk(asyncio.DatagramProtocol):
         call.rtp.dtmf_pt = answer.get("dtmf_pt")
         if answer.get("ip") and answer.get("port"):
             call.rtp.remote = (answer["ip"], int(answer["port"]))
+            call.rtp.allowed_hosts.add(answer["ip"])
         settle({"ok": True, "via": self.via_name, "call": {"sip_call_id": call.call_id},
                 "state": "answered"})
         info = {"direction": "outbound", "from": self.s.caller_id or self.s.username, "to": call.number,

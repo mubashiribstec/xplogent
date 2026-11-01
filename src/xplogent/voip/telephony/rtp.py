@@ -59,6 +59,12 @@ class RtpStream(asyncio.DatagramProtocol):
         self._dtmf_out: deque[tuple[int, bool, int, bytes]] = deque()   # (pt, marker, ts, payload)
         self.remote: tuple[str, int] | None = None
         self.latched = False
+        # Who may send us media (voip.sip.rtp_source): "dialog" = the SDP address or the SIP
+        # peer of this call, any port (NAT); "sdp" = exactly the SDP address and port;
+        # "any" = the first packet from anywhere (the old behaviour, for odd NAT setups).
+        self.policy = "dialog"
+        self.allowed_hosts: set[str] = set()
+        self.rejected = 0                         # packets dropped: wrong source
         self.transport: asyncio.DatagramTransport | None = None
         self.port = 0
         self.out: deque[bytes] = deque()
@@ -92,11 +98,31 @@ class RtpStream(asyncio.DatagramProtocol):
     def start(self) -> None:
         self._tasks = [asyncio.create_task(self._send_loop()), asyncio.create_task(self._recv_loop())]
 
+    def renegotiate(self, ip: str, port: int) -> None:
+        """New SDP from the dialog (a re-INVITE): send there, and learn the source again."""
+        self.remote, self.latched = (ip, int(port)), False
+        self.allowed_hosts.add(ip)
+
+    def _source_ok(self, src: tuple[str, int]) -> bool:
+        """Symmetric RTP, but only from a source the call's signalling vouches for: a
+        stranger's packets are never treated as the caller, and can't steer our audio."""
+        if self.latched:
+            return self.policy == "any" or src == self.remote
+        if self.policy == "sdp" and self.remote is not None and src != self.remote:
+            return False
+        if self.policy == "dialog" and self.allowed_hosts and src[0] not in self.allowed_hosts:
+            return False
+        self.remote, self.latched = src, True
+        return True
+
     def datagram_received(self, data: bytes, addr) -> None:
         if len(data) < 12 or data[0] >> 6 != 2:
             return
-        if not self.latched:                     # symmetric RTP: answer where it comes from
-            self.remote, self.latched = (addr[0], addr[1]), True
+        if not self._source_ok((addr[0], addr[1])):
+            self.rejected += 1
+            if self.rejected in (1, 100):
+                _log.warning("RTP from %s:%s dropped: not this call's media source", addr[0], addr[1])
+            return
         pt = data[1] & 0x7F
         if self.dtmf_pt is not None and pt == self.dtmf_pt:
             self._telephone_event(data)
@@ -144,7 +170,7 @@ class RtpStream(asyncio.DatagramProtocol):
                 "late": self.late, "duplicates": self.duplicates,
                 "jitter_ms": round(self.jitter / 8, 1), "gap_fill_ms": self.gap_fill_ms,
                 "dtmf_in": self.dtmf_in, "dtmf_out": self.dtmf_out,
-                "keypad_events": self.dtmf_pt is not None}
+                "keypad_events": self.dtmf_pt is not None, "rejected_wrong_source": self.rejected}
 
     def _telephone_event(self, data: bytes) -> None:
         """RFC 4733: report each key once, when its end packet arrives (sent 3x)."""
