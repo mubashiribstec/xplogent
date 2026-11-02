@@ -841,8 +841,10 @@ async def voip_crm_queue(body: dict) -> dict:
         return {"ok": False, "error": "sale_id is required"}
     res = await crm.campaign_queue(load_config(), sale_id, radius_km=float(body.get("radius_km") or 15),
                                    limit=int(body.get("limit") or 50))
+    # A 409 is the CRM saying why this vacancy can't be called: its own message says it best.
     return {"ok": res["ok"], "sale": res["sale"], "candidates": res["candidates"], "skipped": res["skipped"],
-            "error": res["error"], "message": res["message"]}
+            "error": res["error"], "message": res["message"],
+            **({} if res["ok"] or res["status"] == 409 else crm.explain_failure(res))}
 
 
 @router.post("/voip/playbook/build")

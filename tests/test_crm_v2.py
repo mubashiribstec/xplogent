@@ -261,3 +261,19 @@ def test_test_connection_reports_v2(mock):
     with TestClient(app()) as client:
         r = client.post("/voip/crm/test").json()
         assert not r["v2"]["ok"] and "endpoints" in r["v2"]["reason"]
+
+
+def test_queue_preview_explains_a_crm_without_its_ai_user_but_keeps_a_409s_reason(mock):
+    from xplogent.interfaces.api.server import create_app as app
+
+    answers = {"ai": (503, {"ok": False, "error": "ai_user_missing", "message": "XPLOGENT_AI_USER_ID is not set"}),
+               "closed": (409, {"ok": False, "error": "sale_not_callable", "message": "the vacancy is closed"})}
+    for case, (status, body) in answers.items():
+        crm.set_transport(httpx.MockTransport(lambda r, s=status, b=body: httpx.Response(s, json=b)))
+        with TestClient(app()) as client:
+            q = client.post("/voip/crm/queue", json={"sale_id": 45}).json()
+        assert not q["ok"]
+        if case == "ai":
+            assert "xplogent:make-ai-user" in q["fix"] and "AI user" in q["reason"]
+        else:
+            assert q["message"] == "the vacancy is closed" and "reason" not in q

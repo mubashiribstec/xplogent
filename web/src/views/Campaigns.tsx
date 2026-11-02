@@ -71,7 +71,8 @@ function NewCampaign({ onMade, toast }: { onMade: () => void; toast: (m: string,
   const choose = async (s: CrmSale) => {
     setPick(s); setPreview(null);
     const q = await crmQueue(s.sale_id, radius);
-    setPreview({ n: q.candidates?.length ?? 0, skipped: q.skipped ?? {}, error: q.ok ? "" : (q.message || q.error) });
+    setPreview({ n: q.candidates?.length ?? 0, skipped: q.skipped ?? {},
+                 error: q.ok ? "" : q.reason ? `${q.reason} ${q.fix ?? ""}` : (q.message || q.error) });
   };
   return (
     <div className="card">

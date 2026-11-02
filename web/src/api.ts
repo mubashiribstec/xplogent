@@ -445,7 +445,8 @@ export const stopAllCampaigns = (stop: boolean) => postJSON<{ ok: boolean; stop_
 export const crmSales = (search: string) =>
   postJSON<{ ok: boolean; sales: CrmSale[]; error?: string; reason?: string; fix?: string }>("/voip/crm/sales", { search, limit: 50 });
 export const crmQueue = (sale_id: number, radius_km: number) =>
-  postJSON<{ ok: boolean; candidates: any[]; skipped: Record<string, number>; error?: string; message?: string }>(
+  postJSON<{ ok: boolean; candidates: any[]; skipped: Record<string, number>; error?: string; message?: string;
+             reason?: string; fix?: string }>(
     "/voip/crm/queue", { sale_id, radius_km, limit: 50 });
 
 export interface ReadinessItem { id: string; label: string; ok: boolean; detail: string; required: boolean }
