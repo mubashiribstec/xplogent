@@ -263,6 +263,8 @@ The full contract is in
 
 `mubashiribstec/crm_laravel_sass` implements it on its `xplogent` branch, with its own
 `docs/xplogent-api.md` (set-up, `php artisan xplogent:make-ai-user`, a `curl` example).
+Networking between the two servers (LAN, same server, https, firewall) is in
+[`deploy-linux.md` → Connecting the CRM](deploy-linux.md#connecting-the-crm-crm_laravel_sass).
 
 What changes on the Xplogent side:
 - **`call-summary` now also carries `api_version: 2`**, plus:
@@ -313,6 +315,9 @@ X-Xplogent-Signature-V2: sha256=<HMAC-SHA256 of "<timestamp>.<body>" with the to
 - **The call:** it goes through the same path as **Call now**: the do-not-call lists (local and
   CRM), calling hours, cost caps and the agent's on/off switch all apply, and Xplogent takes
   the CRM dial lock itself. The brief is reduced to the expected fields, typed and capped.
+- **Test mode:** `{"test": true}` (signed the same way) dials nothing and answers
+  `{"ok": true, "test": true, "agent_enabled": …, "telephony": …}`. The CRM's
+  `php artisan xplogent:check` uses it to prove the address, firewall, token and clocks.
 - **The answer:**
   - `{"ok": true, "call": {"state": "dialling", "via": "sip", "sip_call_id": "…"}}`;
   - `{"ok": false, "error": "…"}` for a refusal (outside hours, do-not-call…);

@@ -628,11 +628,13 @@ async def dial_unlock(cfg: Config, phone: str, lock_token: str = "", *, transpor
     return await post(cfg, "dial-unlock", {"phone": phone, "lock_token": lock_token}, transport=transport)
 
 
-def explain_failure(res: dict[str, Any]) -> dict[str, str]:
+def explain_failure(res: dict[str, Any], base_url: str = "") -> dict[str, str]:
     """Settings → CRM → Test connection: what went wrong and what to do, in plain words."""
     status, error = int(res.get("status") or 0), str(res.get("error") or "")
     if res.get("ok"):
         return {"reason": "", "fix": ""}
+    if status == 0 and error and (loop := loopback_problem(base_url)):
+        return {"reason": f"Could not reach the CRM: {error}. {loop[0]}", "fix": loop[1]}
     if error == "not configured":
         return {"reason": "CRM link is off or has no address.",
                 "fix": "Switch it on and enter the CRM address (e.g. https://crm.example.com)."}
@@ -721,3 +723,67 @@ def clean_crm_brief(raw: Any, applicant_id: int, sale_id: int, requested_by: str
         brief["candidate"] = {k: v for k, v in cand.items() if v not in ("", None, {})}
         brief["candidate"]["applicant_id"] = applicant_id
     return brief
+
+
+# ── where the two servers find each other (Docker / LAN) ──────────────────────────────
+def loopback_problem(base_url: str) -> tuple[str, str] | None:
+    """In Docker, a CRM address on 127.0.0.1 / localhost points at this container, never at
+    the CRM: ``(reason, fix)``, else ``None``."""
+    from urllib.parse import urlsplit
+
+    from xplogent.core.repo_info import in_docker
+
+    if not base_url or not in_docker():
+        return None
+    try:
+        host = (urlsplit(base_url.strip()).hostname or "").lower()
+    except ValueError:
+        return None
+    if host == "localhost" or host.startswith("127.") or host in ("::1", "0.0.0.0"):
+        return (f"Xplogent runs in Docker, where {host} is the container itself, not the CRM.",
+                "Use the CRM machine's LAN address (e.g. http://192.168.1.20:8000), or "
+                "http://host.docker.internal:<port> if the CRM runs on this same server.")
+    return None
+
+
+def callback_address(voip: dict[str, Any]) -> dict[str, str]:
+    """The address the CRM should use to reach Xplogent (its ``XPLOGENT_BASE_URL``, for
+    POST /voip/crm/dial), worked out from how this server is published.
+
+    ``{"url", "mode", "warning", "note"}``: ``warning`` is set when a CRM on another machine
+    can't reach it as published."""
+    from xplogent.core.repo_info import in_docker
+
+    env = os.environ
+    lan_host = (env.get("XPLOGENT_LAN_ADDRESS", "").strip() or env.get("XPLOGENT_HOST_IP", "").strip()
+                or "<this server's LAN IP>")       # written by `xplogent-docker local --lan` / get.sh --lan
+    if in_docker():
+        domain = env.get("DOMAIN", "").strip()
+        if "https" in env.get("COMPOSE_FILE", "") and domain:
+            return {"url": f"https://{domain}", "mode": "https", "warning": "",
+                    "note": "The CRM machine must resolve this name to this server (public DNS, or a local "
+                            "DNS entry if the router doesn't loop back)."}
+        port = env.get("XPLOGENT_PORT", "").strip() or "8765"
+        bind = env.get("XPLOGENT_BIND", "").strip() or "127.0.0.1"
+        if bind in ("127.0.0.1", "localhost", "::1"):
+            return {"url": f"http://127.0.0.1:{port}", "mode": "this server only",
+                    "warning": "Xplogent's port is open to this server only, so a CRM on another machine "
+                               "can't reach it (Call with AI in the CRM would fail).",
+                    "note": f"On this server run: sudo xplogent-docker local --lan, then allow port {port} "
+                            "from the CRM machine in the firewall. A CRM on this same server can use "
+                            f"http://127.0.0.1:{port} as it is."}
+        host = lan_host if bind in ("0.0.0.0", "::") else bind
+        return {"url": f"http://{host}:{port}", "mode": "local network", "warning": "",
+                "note": f"Allow port {port} from the CRM machine in this server's firewall."}
+    public = str((voip or {}).get("public_url") or "").strip().rstrip("/")
+    if public:
+        return {"url": public, "mode": "public address", "warning": "", "note": ""}
+    host = env.get("XPLOGENT_API_HOST", "").strip() or "127.0.0.1"
+    port = env.get("XPLOGENT_API_PORT", "").strip() or "8765"
+    if host in ("127.0.0.1", "localhost", "::1"):
+        return {"url": f"http://127.0.0.1:{port}", "mode": "this server only",
+                "warning": "Xplogent listens on this server only, so a CRM on another machine can't reach it.",
+                "note": "Start it with --host 0.0.0.0 (and a firewall rule for the CRM machine), or run it "
+                        "with Docker in local --lan mode."}
+    return {"url": f"http://{lan_host if host in ('0.0.0.0', '::') else host}:{port}", "mode": "local network",
+            "warning": "", "note": f"Allow port {port} from the CRM machine in the firewall."}

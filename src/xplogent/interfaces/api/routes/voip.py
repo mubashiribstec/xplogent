@@ -766,7 +766,10 @@ async def voip_agent() -> dict:
         "template": str((cfg.voip or {}).get("template") or ""),
         "crm": {"enabled": bool(c.get("enabled")), "base_url": str(c.get("base_url") or ""),
                 "token_env": crm.token_env(cfg), "token_set": bool(os.environ.get(crm.token_env(cfg))),
-                "deliveries": crm.recent_deliveries(20)},
+                "deliveries": crm.recent_deliveries(20),
+                # How the CRM reaches us (its XPLOGENT_BASE_URL), and a CRM address that can't work here.
+                "callback": crm.callback_address(cfg.voip or {}),
+                "address_problem": " ".join(crm.loopback_problem(str(c.get("base_url") or "")) or ())},
         "knowledge_gaps": top_knowledge_gaps(20),
     }
 
@@ -810,7 +813,7 @@ async def voip_crm_test() -> dict:
     v2 = await crm.sales_open(cfg, limit=1)
     v2_out = {"ok": v2["ok"], "status": v2["status"], "ms": v2["ms"], "error": v2["error"],
               "api_version": v2["data"].get("api_version"), "open_vacancies_seen": len(v2["sales"]),
-              **crm.explain_failure(v2)}
+              **crm.explain_failure(v2, base_url=str(crm.crm_config(cfg).get("base_url") or ""))}
     deps.audit_event("voip_crm_test", target=f"{out['status']}; v2 {'ok' if v2['ok'] else v2['error']}",
                      risk="low")
     return {"ok": out["status"] == "sent", "status": out["status"], "detail": out["detail"], "v2": v2_out}
@@ -1016,6 +1019,19 @@ async def voip_crm_dial(request: Request):
                             status_code=429)
     try:
         data = json.loads(body or b"{}")
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "the body is not JSON"}, status_code=400)
+    if isinstance(data, dict) and data.get("test") is True:
+        # The CRM checking the way back (php artisan xplogent:check): address, firewall, token
+        # and clocks are all proven by getting this far. Nothing is dialled.
+        _CRM_DIAL_TIMES.append(now)
+        v = cfg.voip or {}
+        _crm_audit("crm_dial_test", str(data.get("requested_by") or "CRM")[:100], True)
+        from xplogent.core.repo_info import build_info
+
+        return {"ok": True, "test": True, "agent_enabled": bool(v.get("enabled")),
+                "telephony": str(v.get("telephony") or "telnyx"), "revision": build_info().get("revision", "")}
+    try:
         applicant_id, sale_id = int(data["applicant_id"]), int(data["sale_id"])
         phone = str(data["phone"])[:40]
     except (ValueError, TypeError, KeyError):

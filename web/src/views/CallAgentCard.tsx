@@ -84,11 +84,21 @@ export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: (
         <button className="btn" onClick={test} disabled={busy || !info.crm.enabled || !info.crm.base_url || !info.crm.token_set}>
           {busy ? "Testing…" : "Test connection"}</button>
       </div>
+      {info.crm.address_problem && <p className="warn">✗ {info.crm.address_problem}</p>}
       <p className="dim" style={{ fontSize: 12 }}>Signed with the token (HMAC-SHA256); nothing is sent until it is set.
         Test connection checks both the call-summary push and the CRM's v2 endpoints (vacancies, candidates, dial
-        locks). The CRM side is described in docs/crm-integration-prompt.md; to try everything before it's deployed,
+        locks). The CRM side is described in docs/crm-laravel.md; to try everything before it's deployed,
         run <span className="mono">xplogent voip mock-crm</span> and use http://127.0.0.1:8089 as the address.
-        Plain http:// is fine when the CRM is on your local network (e.g. http://192.168.1.20); across the internet use https://.</p>
+        Plain http:// is fine when the CRM is on your local network (e.g. http://192.168.1.20:8000); across the internet use https://.</p>
+      {info.crm.callback && (
+        <div className={info.crm.callback.warning ? "warn" : "dim"} style={{ fontSize: 12, margin: "6px 0" }}>
+          <b>The other way (the CRM's "Call with AI"):</b> in the CRM's .env set{" "}
+          <span className="mono">XPLOGENT_BASE_URL={info.crm.callback.url}</span> and the same token as
+          {" "}<span className="mono">XPLOGENT_API_TOKEN</span>, then check it with
+          {" "}<span className="mono">php artisan xplogent:check</span>.
+          {info.crm.callback.warning && <> ✗ {info.crm.callback.warning}</>}
+          {info.crm.callback.note && <span className="dim"> {info.crm.callback.note}</span>}
+        </div>)}
       {msg && <p className={msg.ok ? "ok" : "warn"}>{msg.ok ? "✓" : "✗"} {msg.text}</p>}
       {v2 && (v2.ok
         ? <p className="ok">✓ CRM API v2: vacancies, candidates and dial locks reachable ({Math.round(v2.ms)} ms,

@@ -111,6 +111,22 @@ def test_unsigned_or_wrongly_signed_requests_are_refused(env, case):
     assert res.status_code == 401
 
 
+def test_the_crm_can_check_the_way_back_without_dialling(env):
+    """php artisan xplogent:check: a signed {"test": true} proves address, firewall, token and
+    clocks, and never places a call."""
+    client, svc, _ = env
+    raw, headers = _signed({"test": True, "requested_by": "xplogent:check"})
+    res = client.post("/voip/crm/dial", content=raw, headers=headers)
+    assert res.status_code == 200, res.text
+    out = res.json()
+    assert out["ok"] and out["test"] and out["agent_enabled"] is True and out["telephony"] == "sip"
+    assert not svc.metas
+    raw, headers = _signed({"test": True}, token="another-token-0123456789abcdef")
+    assert client.post("/voip/crm/dial", content=raw, headers=headers).status_code == 401
+    with Store(load_config().db_path) as s:
+        assert s.conn.execute("SELECT COUNT(*) FROM audit WHERE action='crm_dial_test'").fetchone()[0] == 1
+
+
 def test_off_unless_the_crm_link_is_on(env):
     client, svc, _ = env
     save_user_config({"voip": {"crm": {"enabled": False}}})

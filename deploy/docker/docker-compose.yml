@@ -37,10 +37,11 @@ services:
       # Only Caddy (https mode) or the published port reach us; trust forwarded headers.
       XPLOGENT_FORWARDED_ALLOW_IPS: "*"
     extra_hosts:
-      # The CRM (and an Ollama server) run on this host, not in a container. On Linux
-      # host.docker.internal does not resolve by default, so map it to the host gateway:
-      # then voip.crm.base_url can be http://host.docker.internal:<crm-port> and the
-      # container reaches the CRM over your LAN.
+      # For services on THIS server outside Docker (a CRM, an Ollama server): inside the
+      # container 127.0.0.1 is the container itself. On Linux host.docker.internal doesn't
+      # resolve by default, so map it to the host: the CRM address can then be
+      # http://host.docker.internal:<crm-port> (the CRM must listen on 0.0.0.0).
+      # A CRM on another machine needs nothing here: use its LAN IP.
       - "host.docker.internal:host-gateway"
     volumes:
       - xplogent-data:/data

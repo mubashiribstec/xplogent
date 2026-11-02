@@ -250,6 +250,11 @@ if [ "$FRESH" -eq 1 ] || [ "$RECONFIGURE" -eq 1 ] || [ "$PARTIAL" -eq 1 ]; then
       fi
       set_env "$ENV_FILE" COMPOSE_FILE "docker-compose.yml:compose.local.yml$(sip_suffix)"
       set_env "$ENV_FILE" XPLOGENT_BIND "$BIND"
+      # Shown in the dashboard as the address a CRM on another machine should use.
+      if [ "$BIND" = "0.0.0.0" ]; then
+        lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+        [ -n "$lan_ip" ] && set_env "$ENV_FILE" XPLOGENT_LAN_ADDRESS "$lan_ip"
+      fi
       ;;
     keep) ;;
     *) die "--mode must be https or local" ;;

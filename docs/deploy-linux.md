@@ -194,6 +194,44 @@ model; switch the phone agent on. Use **Test call in the browser** before going 
 See [voip.md](voip.md) for both phone lines, training uploads, live call control, manual and test
 calls, cost notes and safety defaults.
 
+## Connecting the CRM (crm_laravel_sass)
+The CRM and Xplogent call each other, so **both directions** must work. Both use one shared
+token: `XPLOGENT_API_TOKEN` in the CRM's `.env`, and the same value in Xplogent (Calls → Call
+agent → CRM, or `XPLOGENT_CRM_API_TOKEN` in `.env`). Plain `http://` is fine inside your office
+network.
+
+**The CRM on another machine on your LAN (the usual setup):**
+
+| Direction | What to set | Needs |
+|---|---|---|
+| Xplogent → CRM (summaries, vacancies, dial locks) | Calls → Call agent → CRM address: `http://<CRM machine's LAN IP>:8000` | the CRM's port open to this server |
+| CRM → Xplogent (**Call with AI** on the CRM's Agent call page) | the CRM's `.env`: `XPLOGENT_BASE_URL=http://<this server's LAN IP>:8765` | Xplogent open to the LAN: `sudo xplogent-docker local --lan`, and port 8765 allowed from the CRM machine |
+
+```bash
+# On the Xplogent server: open the port to the LAN, then allow only the CRM machine.
+sudo xplogent-docker local --lan
+sudo ufw allow from 192.168.1.20 to any port 8765 proto tcp      # the CRM machine's IP
+```
+
+In https mode (`xplogent-docker https your.domain`), the CRM uses `XPLOGENT_BASE_URL=https://your.domain`
+instead. The CRM machine must resolve that name to this server; if your router doesn't loop
+public addresses back, add a local DNS entry.
+
+**The CRM on this same server, outside Docker:** Xplogent reaches it at
+`http://host.docker.internal:8000`. `docker-compose.yml` maps that name to the host; the CRM
+must listen on `0.0.0.0`, not only `127.0.0.1`. The CRM reaches Xplogent at
+`http://127.0.0.1:8765` (local mode) or your https address. Inside the container,
+`127.0.0.1` / `localhost` is the container itself, never the CRM: Test connection says so.
+
+**Checking both directions:**
+- Xplogent → CRM: Calls → Call agent → **Test connection**.
+- CRM → Xplogent: `php artisan xplogent:check` on the CRM, or **Test connection to Xplogent** on
+  its Agent call page.
+
+The Call agent card shows the exact `XPLOGENT_BASE_URL` to give the CRM. It warns when the port
+is open to this server only. Go live → All checks lists the same as "The CRM can reach
+Xplogent".
+
 ## Your own Ollama server
 
 Ollama doesn't run inside Xplogent; if you have it on another machine (for example a GPU box),

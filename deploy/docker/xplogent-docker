@@ -363,6 +363,11 @@ case "$cmd" in
   local)
     bind=127.0.0.1; [ "${1:-}" = "--lan" ] && bind=0.0.0.0
     set_env "$ENV_FILE" XPLOGENT_BIND "$bind"
+    # Shown in the dashboard as the address a CRM on another machine should use.
+    if [ "$bind" = "0.0.0.0" ]; then
+      lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+      [ -n "$lan_ip" ] && set_env "$ENV_FILE" XPLOGENT_LAN_ADDRESS "$lan_ip"
+    fi
     set_env "$ENV_FILE" COMPOSE_FILE "$(compose_files compose.local.yml)"
     apply
     ok "No-domain mode: $(url)" ;;

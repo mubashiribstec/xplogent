@@ -186,6 +186,15 @@ def test_compose_layout():
     assert set(https) == {"caddy"} and "80:80" in https["caddy"]["ports"]
     local = yaml.safe_load((d / "compose.local.yml").read_text())["services"]
     assert local["xplogent"]["ports"] == ["${XPLOGENT_BIND:-127.0.0.1}:${XPLOGENT_PORT:-8765}:8765"]
+    # A CRM (or Ollama) on this same host, outside Docker: 127.0.0.1 in the container is the container.
+    assert base["xplogent"]["extra_hosts"] == ["host.docker.internal:host-gateway"]
+
+
+def test_env_example_documents_the_crm_link():
+    env = (REPO / "deploy" / "docker" / ".env.example").read_text(encoding="utf-8")
+    assert "# XPLOGENT_CRM_API_TOKEN=" in env                  # commented: the dashboard is the easy way
+    assert "XPLOGENT_BASE_URL=http://<this server's LAN IP>:8765" in env
+    assert "xplogent-docker local --lan" in env and "host.docker.internal" in env
 
 
 @_bash
@@ -203,6 +212,9 @@ def test_installer_flags_apply_to_an_existing_install(tmp_path):
     lan = _env(tmp_path)
     assert lan["XPLOGENT_BIND"] == "0.0.0.0"
     assert lan["XPLOGENT_MODEL"] == "gemini:gemini-3.6-flash" and lan["COMPOSE_PROFILES"] == ""
+    # The LAN address is recorded for the dashboard (the CRM's XPLOGENT_BASE_URL), when known.
+    if "XPLOGENT_LAN_ADDRESS" in lan:
+        assert re.fullmatch(r"[0-9a-fA-F:.]+", lan["XPLOGENT_LAN_ADDRESS"])
     # No flags at all: nothing changes.
     assert _get_sh(tmp_path).returncode == 0
     assert _env(tmp_path) == lan

@@ -239,6 +239,14 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
             problem or (f"{crm['base_url']}: plain http on your local network (fine while the CRM and "
                         "Xplogent share a private network)" if plain else str(crm["base_url"])),
             required=False)
+        from xplogent.voip.crm import callback_address, loopback_problem
+
+        if loop := loopback_problem(str(crm["base_url"])):
+            add("crm_address", "CRM address works from here", False, f"{loop[0]} {loop[1]}", required=False)
+        back = callback_address(v)
+        add("crm_callback", "The CRM can reach Xplogent (Call with AI from the CRM)", not back["warning"],
+            f"{back['warning']} {back['note']}" if back["warning"]
+            else f"give the CRM XPLOGENT_BASE_URL={back['url']}", required=False)
     from xplogent.voip.config_check import check_voip
 
     bad = check_voip(v)

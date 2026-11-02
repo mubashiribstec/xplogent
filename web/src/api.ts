@@ -456,7 +456,11 @@ export interface CallAgentInfo {
   templates: { name: string; direction: string; fields: string[] }[];
   template: string;
   crm: { enabled: boolean; base_url: string; token_env: string; token_set: boolean;
-         deliveries: { ts: number; call_id: number; attempt: number; status: string; detail: string }[] };
+         deliveries: { ts: number; call_id: number; attempt: number; status: string; detail: string }[];
+         /** How the CRM reaches Xplogent (its XPLOGENT_BASE_URL) and whether another machine can. */
+         callback?: { url: string; mode: string; warning: string; note: string };
+         /** A CRM address that can't work from here (e.g. 127.0.0.1 inside Docker). */
+         address_problem?: string };
   knowledge_gaps: { query: string; count: number; last_ts: number }[];
 }
 export async function getCallAgent(): Promise<CallAgentInfo> {

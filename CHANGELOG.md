@@ -20,6 +20,15 @@ All notable changes to Xplogent. Format follows
     before.
 
 ### Added
+- **CRM and Xplogent on different machines (or the same one):**
+  - Docker maps `host.docker.internal` to the host, for a CRM on the same server (muse);
+  - the Call agent card and Go live show the exact `XPLOGENT_BASE_URL` the CRM should use, and
+    warn when Xplogent's port is open to this server only (`xplogent-docker local --lan`);
+  - Test connection explains a `127.0.0.1` / `localhost` CRM address inside Docker (that's the
+    container);
+  - `POST /voip/crm/dial` takes `{"test": true}`, which dials nothing, so the CRM can check the way
+    back (`php artisan xplogent:check`);
+  - docs: deploy-linux.md → Connecting the CRM.
 - **The CRM can ask the AI to call** (`POST /voip/crm/dial`): the Agent call page in
   `crm_laravel_sass` sends a candidate and a vacancy. The request is signed with the same CRM
   token and accepted once; the call follows every Call now rule and takes the CRM dial lock.
