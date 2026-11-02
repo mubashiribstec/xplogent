@@ -374,7 +374,12 @@ async def test_rtp_gaps_are_filled_with_silence():
     rtp.start()
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
         peer.sendto(struct.pack("!BBHII", 0x80, 0, 1, 160, 9) + b"\x10" * 160, ("127.0.0.1", rtp.port))
-        await asyncio.sleep(0.45)
+        # Wait for ≥ 300 ms of filled silence rather than a fixed sleep: timers on the
+        # Windows runner are coarse enough that 0.45 s sometimes yielded only 280 ms.
+        for _ in range(60):
+            await asyncio.sleep(0.05)
+            if b"".join(got)[160:].count(b"\xff") >= 160 * 15:
+                break
     await rtp.close()
     audio = b"".join(got)
     assert audio.startswith(b"\x10" * 160)
