@@ -710,10 +710,14 @@ class VoipService:
                     return {"ok": False, "error": "the CRM marks this number do-not-call"}
                 meta["crm_lookup"] = found
                 person = found.get("contact") or {}
-                if found.get("found") and person.get("applicant_id") and not (brief or {}).get("campaign_item_id"):
+                # Who the CRM says this is; a call the CRM asked for (or a campaign preview) names the
+                # applicant itself, so a slow lookup never means calling without the lock.
+                applicant_id = (person.get("applicant_id") if found.get("found") else None) \
+                    or (brief or {}).get("applicant_id")
+                if applicant_id and not (brief or {}).get("campaign_item_id"):
                     # A manual call to a CRM candidate takes the dial lock too (campaigns take their own),
                     # so a recruiter and the AI never ring the same person at once.
-                    lock = await crm.dial_lock(cfg, number, int(person["applicant_id"]),
+                    lock = await crm.dial_lock(cfg, number, int(applicant_id),
                                                ttl_seconds=int(v.get("max_call_seconds") or 900) + 300)
                     if lock["status"] == 409:
                         return {"ok": False, "locked": True, "locked_by": lock["locked_by"] or "a recruiter",

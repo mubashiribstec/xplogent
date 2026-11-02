@@ -133,6 +133,20 @@ def test_every_dialling_rule_still_applies(env):
     assert res.status_code == 409 and res.json()["locked_by"] == "Tom Recruiter" and not svc.metas
 
 
+def test_the_lock_is_taken_even_when_the_lookup_is_slow(env, monkeypatch):
+    """Found on the rig: the CRM was busy, the 1.5 s lookup timed out, and the call went out
+    without the dial lock. The request names the applicant, so the lock no longer waits on it."""
+    client, svc, mock = env
+
+    async def slow_lookup(cfg, phone, **kw):
+        return {"ok": False, "found": False, "contact": None, "error": "timed out after 1.5 s", "ms": 1500.0,
+                "cached": False}
+    monkeypatch.setattr(crm, "lookup", slow_lookup)
+    raw, headers = _signed(BODY)
+    assert client.post("/voip/crm/dial", content=raw, headers=headers).json()["ok"]
+    assert mock._locked("07700900123") and svc.metas[0][1]["brief"]["manual_lock"]
+
+
 def test_bad_input_and_rate_limit(env, monkeypatch):
     client, svc, _ = env
     raw, headers = _signed({"phone": "+447700900123"})
