@@ -5,6 +5,14 @@ All notable changes to Xplogent. Format follows
 
 ## [Unreleased]
 
+### Changed
+- **CRM link: clearer when the CRM has no Xplogent AI user.** The CRM now refuses its candidate
+  queue as well as call summaries without that user (503 `ai_user_missing`). Settings → CRM and
+  the campaign preview now say to run `php artisan xplogent:make-ai-user` and set
+  `XPLOGENT_AI_USER_ID`, instead of "the CRM's API is switched off".
+- **Mock CRM** follows the CRM's current replies: `ok: true` on every success, and `dial-unlock`
+  answers released / nothing left to release / 409 `not_your_lock`.
+
 ### Removed
 - **The bundled local Ollama.** It took disk space and CPU on the server, so no language
   model runs next to Xplogent any more:

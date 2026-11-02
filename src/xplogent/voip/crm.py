@@ -654,6 +654,10 @@ def explain_failure(res: dict[str, Any], base_url: str = "") -> dict[str, str]:
                     "fix": "Turn on automatic time (NTP) on both servers (timedatectl set-ntp true)."}
         return {"reason": "The CRM refused the token or signature.",
                 "fix": "Use exactly the same token here and as XPLOGENT_API_TOKEN in the CRM's .env."}
+    if status == 503 and error == "ai_user_missing":
+        return {"reason": "The CRM has no Xplogent AI user, so it can't save call results or build a queue.",
+                "fix": "On the CRM server run php artisan xplogent:make-ai-user, put the id it prints in "
+                       "XPLOGENT_AI_USER_ID in the CRM's .env, then run php artisan config:clear."}
     if status == 503:
         return {"reason": "The CRM's Xplogent API is switched off (no token on the CRM side).",
                 "fix": "Set XPLOGENT_API_TOKEN in the CRM's .env and clear its config cache."}

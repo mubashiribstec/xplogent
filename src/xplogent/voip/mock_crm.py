@@ -116,7 +116,7 @@ class MockCRM:
                        for w in words)]
         keep = ("sale_id", "job_title", "job_category", "postcode", "postcode_district", "office_name",
                 "unit_name", "position_type", "salary", "cvs_sent", "cv_limit", "created_at")
-        return 200, {"sales": [{k: s[k] for k in keep} for s in rows[: int(body.get("limit") or 50)]]}
+        return 200, {"ok": True, "sales": [{k: s[k] for k in keep} for s in rows[: int(body.get("limit") or 50)]]}
 
     def queue(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         sale = self._sale(body.get("sale_id"))
@@ -150,13 +150,13 @@ class MockCRM:
                                       "timing", "salary", "experience", "qualification", "benefits",
                                       "description", "postcode_district", "cvs_sent", "cv_limit")}
         brief.update(client_name=None, site_name=None)
-        return 200, {"sale": brief, "candidates": out[: int(body.get("limit") or 50)], "skipped": skipped}
+        return 200, {"ok": True, "sale": brief, "candidates": out[: int(body.get("limit") or 50)], "skipped": skipped}
 
     def lookup(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         c = self._cand(str(body.get("phone") or ""))
         if not c:
             return 404, {"ok": True, "found": False}
-        return 200, {"found": True, "contact": {
+        return 200, {"ok": True, "found": True, "contact": {
             "applicant_id": c["applicant_id"], "name": c["name"], "first_name": c["name"].split()[0],
             "company": "", "phone_kind": "mobile", "postcode_district": c["postcode_district"],
             "job_title": c["job_title"], "do_not_call": c["blocked"],
@@ -218,20 +218,23 @@ class MockCRM:
     def lock(self, body: dict[str, Any], by: str = "Xplogent AI") -> tuple[int, dict[str, Any]]:
         current = self._locked(str(body.get("phone") or ""))
         if current and current["by"] != by:
-            return 409, {"locked": False, "locked_by": current["by"], "expires_at": current["expires"]}
+            return 409, {"ok": False, "locked": False, "locked_by": current["by"], "expires_at": current["expires"]}
         if current and current.get("token") and body.get("lock_token") != current["token"]:
-            return 409, {"locked": False, "locked_by": f"{by} (another call)", "expires_at": current["expires"]}
+            return 409, {"ok": False, "locked": False, "locked_by": f"{by} (another call)", "expires_at": current["expires"]}
         expires = time.time() + int(body.get("ttl_seconds") or 900)
         self.locks[tail(str(body.get("phone") or ""))] = {"by": by, "expires": expires,
                                                           "token": str(body.get("lock_token") or "")}
-        return 200, {"locked": True, "expires_at": expires}
+        return 200, {"ok": True, "locked": True, "expires_at": expires}
 
     def unlock(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        """As the CRM answers: released, nothing left to release (idempotent), or someone else's."""
         key = tail(str(body.get("phone") or ""))
-        lock = self.locks.get(key) or {}
-        if lock.get("by") == "Xplogent AI" and (not lock.get("token") or lock["token"] == body.get("lock_token")):
+        lock = self._locked(str(body.get("phone") or ""))
+        if lock and lock.get("by") == "Xplogent AI" and (not lock.get("token") or lock["token"] == body.get("lock_token")):
             self.locks.pop(key, None)
-            return 200, {"ok": True}
+            return 200, {"ok": True, "released": True}
+        if lock:
+            return 409, {"ok": False, "error": "not_your_lock", "released": False, "locked_by": lock["by"]}
         return 200, {"ok": True, "released": False}
 
 

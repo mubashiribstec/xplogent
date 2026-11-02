@@ -112,12 +112,30 @@ async def test_dial_locks(mock):
     q = await crm.campaign_queue(cfg, 45)
     assert [c["applicant_id"] for c in q["candidates"]] == []                 # both locked
     assert q["skipped"]["locked"] == 2
-    await crm.dial_unlock(cfg, "+447700900123", "not-the-token")             # can't free it
-    assert mock._locked("07700900123")
-    await crm.dial_unlock(cfg, "+447700900123", first["lock_token"])
+    wrong = await crm.dial_unlock(cfg, "+447700900123", "not-the-token")     # can't free it
+    assert wrong["status"] == 409 and wrong["error"] == "not_your_lock" and mock._locked("07700900123")
+    freed = await crm.dial_unlock(cfg, "+447700900123", first["lock_token"])
+    assert freed["ok"] and freed["data"]["released"] is True
+    again = await crm.dial_unlock(cfg, "+447700900123", first["lock_token"])  # twice is harmless
+    assert again["ok"] and again["data"]["released"] is False
     await crm.dial_unlock(cfg, "+447700900124", first["lock_token"])         # Jane's: stays
     q = await crm.campaign_queue(cfg, 45)
     assert [c["applicant_id"] for c in q["candidates"]] == [123]
+
+
+def test_a_crm_without_its_ai_user_is_explained():
+    """The CRM answers 503 ai_user_missing (queue, summaries) when its AI user isn't set up."""
+    why = crm.explain_failure({"ok": False, "status": 503, "error": "ai_user_missing"})
+    assert "AI user" in why["reason"] and "xplogent:make-ai-user" in why["fix"]
+    off = crm.explain_failure({"ok": False, "status": 503, "error": "disabled"})
+    assert "switched off" in off["reason"]
+
+
+async def test_success_replies_carry_ok(mock):
+    cfg = load_config()
+    for res in (await crm.sales_open(cfg), await crm.campaign_queue(cfg, 45),
+                await crm.dial_lock(cfg, "+447700900125", 125)):
+        assert res["ok"] and res["data"]["ok"] is True
 
 
 async def test_send_job_details(mock):
