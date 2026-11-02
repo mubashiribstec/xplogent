@@ -201,7 +201,9 @@ async def test_payload_v2_reaches_the_crm_once(mock):
     first = await crm.deliver(cfg, sent[0], backoff_s=0)
     again = await crm.deliver(cfg, sent[0], backoff_s=0)
     assert first["status"] == again["status"] == "sent"
-    assert len(mock.events) == 1 and mock.candidates[0]["temp_not_interested"] is True
+    assert len(mock.events) == 1
+    sarah = mock.candidates[0]                       # not interested in THIS vacancy (as the real CRM records it)
+    assert sarah["not_interested_sales"] == [45] and sarah["temp_not_interested"] is False
     q = await crm.campaign_queue(cfg, 45)
     assert 123 not in [c["applicant_id"] for c in q["candidates"]]                # not called again
     store.close()

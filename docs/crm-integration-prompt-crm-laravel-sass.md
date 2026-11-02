@@ -52,9 +52,12 @@ candidate. The API must let Xplogent:
 | Phone match on primary, secondary and landline, using the indexed `*_normalized` columns when present | `Applicant::scopePhoneMatches` |
 | **Dial lock**: one `dial_locks` row per `phone_key` (`full_number`, `user_id`, `user_name`, `applicant_id`, `call_count`, `locked_at`, `expires_at`), plus settings `dialing_lock_enabled`, `dialing_lock_other_user_minutes`, `dialing_lock_same_user_minutes` and a daily cap through `DialCallLog`. Other agents see "This number is being called by {user_name}" | `DialLockController::acquire`, `Horsefly\DialLock::keyFor`, `DIAL_LOCK.md` |
 | `call_logs`: `user_id, caller_number, caller_name, direction, duration_seconds, sip_call_id, applicant_id, sale_id, source, called_at`. **The repo has no migration for it**: the table only exists in production | `Horsefly\CallLog` (`dev` only) |
-| Stage history `history` (`applicant_id, sale_id, user_id, stage, sub_stage, status`), `interviews` (`schedule_date`, `schedule_time`, `status`), `cv_notes` (`status 1` = CV sent), `applicants_pivot_sales` (`is_interested`) | the `database/migrations/2025_*` files |
+| Stage history `history` (`applicant_id, sale_id, user_id, stage, sub_stage, status`), `interviews` (`schedule_date`, `schedule_time`, `status`), `cv_notes` (`status 1` = CV sent) | the `database/migrations/2025_*` files |
+| **"Not interested in this vacancy"**: an `applicants_pivot_sales` row (applicant, sale) plus a `NotesForRangeApplicant` reason; reverting deletes the row and clears `is_temp_not_interested` when no rows remain. A row means *not* interested, whatever its name suggests | `ResourceController::markApplicantNotInterestedOnSale`, `revertNotInterestedApplicant` |
+| Sales, offices and units can be blacklisted (`is_blacklist`) | `Sale`, `Office`, `Unit` |
+| Model observers audit every change as `Auth::id() ?? 1`: with nobody signed in, writes are attributed to user 1 (the admin) | `app/Observers/*Observer.php` |
 | Applicant flags: `is_blocked`, `is_temp_not_interested`, `is_no_job`, `is_callback_enable`, `is_no_response`, `is_circuit_busy`, `is_in_nurse_home`, `paid_status` | `Horsefly\Applicant` |
-| CV files: `applicants.applicant_cv` / `updated_cv` (paths under `storage/`). `phpoffice/phpword` and `spatie/pdf-to-text` are already in `composer.json` | `Applicant`, `composer.json` |
+| CV files: `applicants.applicant_cv` / `updated_cv`: newer uploads under `public/uploads/resume/…`, older ones under `storage/`. `phpoffice/phpword` and `spatie/pdf-to-text` are already in `composer.json` | `Applicant`, `composer.json` |
 
 ## 2. Settings, migrations and the AI user
 `config/xplogent.php`:
@@ -95,6 +98,10 @@ Content-Type: application/json
 
 This is exactly how Xplogent already signs (`docs/crm-laravel.md` in the Xplogent repo).
 
+After a valid signature, make the AI user the request's authenticated user (`Auth::setUser`,
+in memory only: no session or login). Otherwise the observers audit every API write as
+user 1.
+
 **Responses** are always JSON with `"api_version": 2`. Errors look like
 `{"ok": false, "error": "<code>", "message": "<text>"}`. Never return stack traces.
 
@@ -121,8 +128,9 @@ Returns open vacancies (`status = 1`, `is_on_hold = 0`, not deleted), newest fir
 ### 4.2 `POST /api/xplogent/campaigns/queue`
 Request: `{"sale_id": 45, "radius_km": 15, "limit": 50, "exclude_called_within_days": 14}`.
 
-**409 `sale_not_callable`** when the sale is closed, on hold, deleted, has no coordinates, or
-has reached `cv_limit`.
+**409 `sale_not_callable`** when the sale is closed, on hold, deleted, blacklisted (the sale,
+its office or its unit), has no coordinates, or has reached `cv_limit`. `sales/open` leaves
+the same sales out.
 
 **Extract** the base query of `getApplicantsBySaleRadius` into
 `App\Services\Xplogent\CandidateQueueService::radiusQuery(Sale $sale, float $radiusKm)` and
@@ -140,11 +148,10 @@ haversine expression as a selected column) and then **excludes and counts** in `
 | reason | rule |
 |---|---|
 | `blocked` | `is_blocked = 1` |
-| `not_interested` | `is_temp_not_interested = 1` |
+| `not_interested` | `is_temp_not_interested = 1`, or an `applicants_pivot_sales` row for this sale |
 | `no_job` | `is_no_job = 1` |
 | `closed` | `paid_status = 'close'` |
 | `already_sent` | any `cv_notes` row for this sale |
-| `already_interested` | `applicants_pivot_sales.is_interested = 1` for this sale |
 | `locked` | an unexpired `dial_locks` row for any of the applicant's numbers (by `phone_key`) |
 | `recently_called` | a `call_logs` row by the AI user for this sale within `exclude_called_within_days` |
 | `no_phone` | no number that can be converted |
@@ -163,7 +170,7 @@ Order by distance, then never-called before called, and return up to `limit`:
    "flags": {"callback": false, "no_response": false, "circuit_busy": false},
    "last_note": "<≤ 300 chars>", "last_note_at": "…", "last_called_at": null}],
  "skipped": {"blocked": 4, "not_interested": 2, "no_job": 1, "closed": 0, "already_sent": 3,
-             "already_interested": 0, "locked": 1, "recently_called": 6, "no_phone": 0}}
+             "locked": 1, "recently_called": 6, "no_phone": 0}}
 ```
 Never include the CV, date of birth, gender, emails or the full postcode.
 
@@ -223,14 +230,17 @@ applicant by phone (`to` on outbound, `from` on inbound).
 4. **Outcome write:** extract the reason switch, the notes, the module notes and the audit of
    `storeShortNotes` into **`App\Services\Xplogent\ApplicantStatusService::apply(Applicant
    $applicant, string $reason, string $details, User $by)`**, make `storeShortNotes` call it
-   unchanged in behaviour, and use it here:
+   unchanged in behaviour, and use it here. Likewise extract the two "not interested in this
+   vacancy" actions of `ResourceController` into **`App\Services\Xplogent\SaleInterestService`**
+   (`markNotInterested`, `revertNotInterested`) and make the controller call them:
 
 | `outcome` | write |
 |---|---|
-| `interested` | `applicants_pivot_sales` updateOrCreate(applicant, sale) with `is_interested = 1`; reason **`casual`** with the summary note. **Never** create `cv_notes` or move a stage. |
+| `interested` | reason **`casual`** with the summary note; with a `sale_id`, also revert a "not interested in this vacancy" (`SaleInterestService::revertNotInterested`). **Never** create `cv_notes` or move a stage. |
 | `callback` | reason **`callback`**; the note includes `callback_at` in Europe/London ("Callback Wed 29 Oct 17:30") |
 | `recruiter_callback` | as `callback`, with the note starting `RECRUITER CALLBACK:` (a person must call back) |
-| `not_interested` | reason **`not_interested`** |
+| `not_interested` with a `sale_id` | not interested in **that vacancy** only: `SaleInterestService::markNotInterested` (the pivot row and `NotesForRangeApplicant`, as Resources → mark not interested), plus the note. The global flag stays as it was |
+| `not_interested` without a `sale_id` | reason **`not_interested`** (the global flag) |
 | `no_job` | reason **`no_job`** |
 | `do_not_call` | reason **`blocked`** |
 | `no_answer`, `voicemail`, `busy` | call log only; if `final_attempt: true`, reason **`no_response`** with a note listing the attempt |

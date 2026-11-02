@@ -978,6 +978,70 @@ async def voip_dial(body: dict):
     return res
 
 
+_CRM_DIAL_TIMES: list[float] = []
+CRM_DIAL_PER_MINUTE = 20
+
+
+def _crm_audit(action: str, target: str, allowed: bool, detail: str = "") -> None:
+    try:
+        with Store(load_config().db_path) as store:
+            store.add_audit("crm", action, target[:200], "medium", allowed, detail[:200])
+    except Exception:  # noqa: BLE001 - auditing must never break a request
+        pass
+
+
+@router.post("/voip/crm/dial")
+async def voip_crm_dial(request: Request):
+    """The CRM's Agent call page asks the AI to call one candidate about one vacancy.
+
+    Server to server: no dashboard token, but the request must be signed with the CRM
+    token (the same scheme Xplogent uses towards the CRM) and is accepted once. The call
+    goes through ``service.dial`` like any other, so the do-not-call lists, calling
+    hours, cost caps and the CRM dial lock all apply."""
+    from xplogent.voip import crm
+    from xplogent.voip.service import get_service
+
+    cfg = load_config()
+    body = await request.body()
+    if len(body) > 32_000:
+        return JSONResponse({"ok": False, "error": "request too large"}, status_code=413)
+    status, problem = crm.verify_inbound(cfg, body, request.headers)
+    if status:
+        _crm_audit("crm_dial_rejected", problem, False)
+        return JSONResponse({"ok": False, "error": problem}, status_code=status)
+    now = time.monotonic()
+    _CRM_DIAL_TIMES[:] = [t for t in _CRM_DIAL_TIMES if now - t < 60]
+    if len(_CRM_DIAL_TIMES) >= CRM_DIAL_PER_MINUTE:
+        return JSONResponse({"ok": False, "error": f"at most {CRM_DIAL_PER_MINUTE} CRM calls a minute"},
+                            status_code=429)
+    try:
+        data = json.loads(body or b"{}")
+        applicant_id, sale_id = int(data["applicant_id"]), int(data["sale_id"])
+        phone = str(data["phone"])[:40]
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "error": "phone, applicant_id and sale_id are required"},
+                            status_code=400)
+    if not isinstance(data, dict) or applicant_id <= 0 or sale_id <= 0:
+        return JSONResponse({"ok": False, "error": "applicant_id and sale_id must be positive"}, status_code=400)
+    requested_by = str(data.get("requested_by") or "CRM")[:100]
+    brief = crm.clean_crm_brief(data.get("brief"), applicant_id, sale_id, requested_by)
+    _CRM_DIAL_TIMES.append(now)
+    mode = (cfg.voip or {}).get("telephony")
+    via = {"sip": "sip", "extension": "extension"}.get(str(mode), "telnyx")
+    res = await get_service().dial(phone, cfg, via=via, brief=brief)
+    _crm_audit("crm_dial", f"applicant {applicant_id}, sale {sale_id} via {via}, asked by {requested_by}",
+               bool(res.get("ok")), str(res.get("error", "")))
+    out = {"ok": bool(res.get("ok")), "error": res.get("error") or None,
+           "locked_by": res.get("locked_by") if res.get("locked") else None,
+           "warning": res.get("warning") or None,
+           "call": None}
+    if res.get("ok"):
+        line = res.get("call") if isinstance(res.get("call"), dict) else {}
+        out["call"] = {"state": "dialling", "via": via,
+                       **{k: str(line[k])[:120] for k in ("sip_call_id", "call_control_id") if line.get(k)}}
+    return JSONResponse(out, status_code=409 if res.get("locked") else 200)
+
+
 @router.get("/voip/test-numbers")
 async def voip_test_numbers() -> dict:
     v = load_config().voip or {}

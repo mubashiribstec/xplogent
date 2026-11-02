@@ -429,7 +429,7 @@ def enqueue_delivery(cfg: Config, payload: dict[str, Any], on_status=None) -> No
     task.add_done_callback(_TASKS.discard)
 
 
-# ── API v2: the calls Xplogent makes to the CRM (docs/crm-integration-prompt.md) ──────
+# ── API v2: the calls Xplogent makes to the CRM (docs/crm-laravel.md) ────────────────
 API_VERSION = 2
 # The outcome values the CRM understands (contract 4.4); anything else goes as "other".
 OUTCOMES_V2 = ("interested", "callback", "recruiter_callback", "not_interested", "no_job",
@@ -540,6 +540,8 @@ def _pick(data: Any, spec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# A redacted CV excerpt the CRM may send (opt-in on the CRM side, XPLOGENT_SHARE_CV_EXCERPT).
+CV_EXCERPT_MAX = 2000
 SALE_SPEC = {"sale_id": "int", "job_title": 100, "job_category": 60, "position_type": 60,
              "job_type": 40, "timing": 200, "salary": 120, "experience": 200, "qualification": 200,
              "benefits": 300, "description": 800, "postcode_district": 10, "client_name": 100,
@@ -548,9 +550,9 @@ SALE_SPEC = {"sale_id": "int", "job_title": 100, "job_category": 60, "position_t
 CANDIDATE_SPEC = {"applicant_id": "int", "name": 100, "first_name": 50, "phone_e164": 20,
                   "phone_kind": 20, "postcode_district": 10, "distance_km": "num",
                   "distance_miles": "num", "job_title": 100, "flags": "flags", "last_note": 300,
-                  "last_note_at": 40, "last_called_at": 40}
+                  "last_note_at": 40, "last_called_at": 40, "cv_excerpt": CV_EXCERPT_MAX}
 _LOOKUP_V2 = {"applicant_id": "int", "first_name": 50, "phone_kind": 20, "postcode_district": 10,
-              "job_title": 100, "callback_note": 300, "flags": "flags"}
+              "job_title": 100, "callback_note": 300, "flags": "flags", "cv_excerpt": CV_EXCERPT_MAX}
 _LISTS = {
     "history": {"date": 20, "sale_id": "int", "job": 120, "stage": 40, "sub_stage": 60},
     "applications": {"sale_id": "int", "job": 120, "interested": "bool", "latest_stage": 40,
@@ -665,3 +667,57 @@ def explain_failure(res: dict[str, Any]) -> dict[str, str]:
     if error:
         return {"reason": f"Could not reach the CRM: {error}", "fix": "Check the address and that this server can reach it."}
     return {"reason": f"Unexpected answer (HTTP {status}).", "fix": "Check the CRM's logs."}
+
+
+# ── requests the CRM makes to Xplogent (POST /voip/crm/dial) ──────────────────────────
+INBOUND_MAX_SKEW_S = 300
+_SEEN_SIGNATURES: dict[str, float] = {}       # signature -> when seen (replay guard)
+
+
+def verify_inbound(cfg: Config, body: bytes, headers: Any, *, now: float | None = None) -> tuple[int, str]:
+    """Check a request the CRM signed the way Xplogent signs its own (the same shared
+    token, ``Authorization: Bearer`` plus the V2 HMAC over ``"<timestamp>.<body>"``).
+
+    Returns ``(0, "")`` when it is genuine, else the HTTP status and the reason. A
+    signature is accepted once: a copied request can't start a second call."""
+    if not crm_enabled(cfg):
+        return 503, "the CRM link is switched off (Settings → CRM)"
+    token = os.environ.get(token_env(cfg), "")
+    if not token:
+        return 503, f"no CRM token set ({token_env(cfg)})"
+    auth = str(headers.get("authorization") or "")
+    if not hmac.compare_digest(auth.encode(), f"Bearer {token}".encode()):
+        return 401, "bad token"
+    ts = str(headers.get("x-xplogent-timestamp") or "")
+    if not ts.isdigit():
+        return 401, "timestamp missing"
+    now = time.time() if now is None else now
+    if abs(now - int(ts)) > INBOUND_MAX_SKEW_S:
+        return 401, "timestamp skew too large: check both clocks"
+    sig = str(headers.get("x-xplogent-signature-v2") or "")
+    if not hmac.compare_digest(sig.encode(), sign_v2(body, token, ts).encode()):
+        return 401, "bad signature"
+    for seen, at in list(_SEEN_SIGNATURES.items()):
+        if now - at > 2 * INBOUND_MAX_SKEW_S:
+            del _SEEN_SIGNATURES[seen]
+    if sig in _SEEN_SIGNATURES:
+        return 401, "this request was already used (replay)"
+    _SEEN_SIGNATURES[sig] = now
+    return 0, ""
+
+
+def clean_crm_brief(raw: Any, applicant_id: int, sale_id: int, requested_by: str) -> dict[str, Any]:
+    """The call brief the CRM's Agent call page sends, reduced to the expected fields
+    (typed and capped: CRM data is untrusted)."""
+    raw = raw if isinstance(raw, dict) else {}
+    brief: dict[str, Any] = {"applicant_id": applicant_id, "sale_id": sale_id,
+                             "requested_by": _clean(requested_by, 100), "source": "crm_agent_call"}
+    if isinstance(raw.get("sale"), dict):
+        brief["sale"] = {k: v for k, v in _pick(raw["sale"], SALE_SPEC).items() if v not in ("", None)}
+        brief["sale"]["sale_id"] = sale_id
+    if isinstance(raw.get("candidate"), dict):
+        cand = _pick(raw["candidate"], CANDIDATE_SPEC)
+        cand.pop("phone_e164", None)                 # the number travels separately
+        brief["candidate"] = {k: v for k, v in cand.items() if v not in ("", None, {})}
+        brief["candidate"]["applicant_id"] = applicant_id
+    return brief

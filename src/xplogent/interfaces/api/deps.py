@@ -47,6 +47,8 @@ def spawn(coro: Any) -> asyncio.Task:
 _STATIC_EXT = (".js", ".css", ".svg", ".png", ".ico", ".woff", ".woff2", ".map", ".webmanifest")
 # Server-to-server callbacks: no browser Origin, authenticated by the secret in the path.
 WEBHOOK_PREFIXES = ("/telephony/webhook/",)
+# Server-to-server requests the CRM signs with the shared CRM token (checked in the route).
+CRM_SIGNED_PATHS = frozenset({"/voip/crm/dial"})
 
 
 _server_cache: dict[str, Any] = {"key": None, "value": {}}
@@ -87,6 +89,8 @@ def is_public(path: str, method: str) -> bool:
     if method == "GET" and path in ("/branding", "/branding/logo"):    # shown on the login page
         return True
     if path.startswith(WEBHOOK_PREFIXES):
+        return True
+    if method == "POST" and path in CRM_SIGNED_PATHS:
         return True
     # Static files are public (the dashboard shell has to load before login),
     # but only where the dashboard actually serves them: /assets/* and

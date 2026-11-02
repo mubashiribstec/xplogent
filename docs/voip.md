@@ -504,6 +504,9 @@ live, especially before outbound calling. This is engineering documentation, not
   if a recruiter holds it, the call is refused with their name; if the CRM can't answer, the
   call goes ahead with a warning (a person chose to call; campaigns stop instead). The lock
   is freed when the call ends or doesn't connect, and only by the same lease's token.
+  **From the CRM:** the CRM's Agent call page can ask the AI to call a candidate about a
+  vacancy (`POST /voip/crm/dial`, signed with the same CRM token, each request accepted once).
+  The call follows the same rules as Call now. See `docs/crm-laravel.md`.
   **CRM address:** plain `http://` is fine when the CRM is on this machine or your local
   network (a private address such as `http://192.168.1.20`, a machine name such as
   `http://crm-server`, or a `.local`/`.lan` name). Across the internet it must be `https://`,

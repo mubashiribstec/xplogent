@@ -20,6 +20,12 @@ All notable changes to Xplogent. Format follows
     before.
 
 ### Added
+- **The CRM can ask the AI to call** (`POST /voip/crm/dial`): the Agent call page in
+  `crm_laravel_sass` sends a candidate and a vacancy. The request is signed with the same CRM
+  token and accepted once; the call follows every Call now rule and takes the CRM dial lock.
+  Audited (actor `crm`), 20 a minute at most, and off while Settings → CRM is off.
+- **CV excerpt in the call brief:** when the CRM shares a redacted excerpt (`cv_excerpt`, off
+  by default on the CRM side), the agent sees it as read-only CANDIDATE BACKGROUND.
 - **Queue context (FreePBX)**: on calls from the PBX, the caller's number comes from
   P-Asserted-Identity / Remote-Party-ID, and the number they dialled from the oldest
   Diversion (or History-Info). A call is marked "via queue" when it comes from a

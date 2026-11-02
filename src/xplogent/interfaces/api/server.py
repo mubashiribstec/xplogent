@@ -84,7 +84,7 @@ def create_app():
         path = request.url.path
         # Carrier/webhook callbacks come from servers (no browser Origin) and authenticate
         # with their own path secret, so they skip the browser checks too.
-        if not path.startswith(deps.WEBHOOK_PREFIXES):
+        if not path.startswith(deps.WEBHOOK_PREFIXES) and path not in deps.CRM_SIGNED_PATHS:
             problem = deps.browser_check(request.headers, path, token)
             if problem:
                 return JSONResponse({"error": problem}, status_code=403)

@@ -1,4 +1,4 @@
-"""A stand-in for the CRM's ``/api/xplogent/*`` API (contract v2, docs/crm-integration-prompt.md).
+"""A stand-in for the CRM's ``/api/xplogent/*`` API (contract v2, docs/crm-laravel.md).
 
 It checks requests exactly the way the real CRM must:
 - the bearer token;
@@ -48,7 +48,9 @@ SAMPLE_SALES: list[dict[str, Any]] = [
 SAMPLE_CANDIDATES: list[dict[str, Any]] = [
     {"applicant_id": 123, "name": "Sarah Jones", "phone": "07700900123", "postcode_district": "LS7",
      "distance_km": 4.2, "job_title": "Care Assistant", "blocked": False, "temp_not_interested": False,
-     "no_job": False, "callback": False, "email": "sarah.jones@example.com"},
+     "no_job": False, "callback": False, "email": "sarah.jones@example.com",
+     "cv_excerpt": "Care assistant 2019 - 2024 at a residential home: personal care, medication rounds, "
+                   "dementia care. Care Certificate, NVQ Level 2 in Health and Social Care. Full UK driving licence."},
     {"applicant_id": 124, "name": "Tom Hughes", "phone": "07700900124", "postcode_district": "LS4",
      "distance_km": 6.8, "job_title": "Care Assistant", "blocked": False, "temp_not_interested": False,
      "no_job": False, "callback": True, "email": ""},
@@ -122,11 +124,12 @@ class MockCRM:
             return 409, {"ok": False, "error": "sale_not_callable",
                          "message": "the vacancy is closed, on hold or has reached its CV limit"}
         skipped = dict.fromkeys(("blocked", "not_interested", "no_job", "closed", "already_sent",
-                                 "already_interested", "locked", "recently_called", "no_phone"), 0)
+                                 "locked", "recently_called", "no_phone"), 0)
         called = {e.get("applicant_id") for e in self.events.values() if e.get("sale_id") == sale["sale_id"]}
         out = []
         for c in sorted(self.candidates, key=lambda c: c["distance_km"]):
-            reason = ("blocked" if c["blocked"] else "not_interested" if c["temp_not_interested"]
+            not_interested = c["temp_not_interested"] or sale["sale_id"] in c.get("not_interested_sales", ())
+            reason = ("blocked" if c["blocked"] else "not_interested" if not_interested
                       else "no_job" if c["no_job"] else "locked" if self._locked(c["phone"])
                       else "recently_called" if c["applicant_id"] in called
                       else "no_phone" if not e164(c["phone"]) else "")
@@ -141,7 +144,8 @@ class MockCRM:
                         "distance_km": c["distance_km"], "distance_miles": round(c["distance_km"] / 1.609, 1),
                         "job_title": c["job_title"],
                         "flags": {"callback": c["callback"], "no_response": False, "circuit_busy": False},
-                        "last_note": "", "last_note_at": None, "last_called_at": None})
+                        "last_note": "", "last_note_at": None, "last_called_at": None,
+                        "cv_excerpt": c.get("cv_excerpt", "")})
         brief = {k: sale[k] for k in ("sale_id", "job_title", "job_category", "position_type", "job_type",
                                       "timing", "salary", "experience", "qualification", "benefits",
                                       "description", "postcode_district", "cvs_sent", "cv_limit")}
@@ -160,6 +164,7 @@ class MockCRM:
                       "callback": c["callback"], "no_response": False, "no_job": c["no_job"],
                       "circuit_busy": False},
             "notes": "", "last_outcome": "callback" if c["callback"] else "", "callback_note": "",
+            "cv_excerpt": c.get("cv_excerpt", ""),
             "history": [], "applications": [], "interviews": [],
             "calls": [{"at": "", "direction": "outbound", "duration_s": int(e.get("duration_s") or 0),
                        "by": "Xplogent AI", "sale_id": e.get("sale_id")}
@@ -176,7 +181,9 @@ class MockCRM:
             or self._cand(str(body.get("to") if body.get("direction") == "outbound" else body.get("from")))
         outcome = body.get("outcome")
         if c:
-            if outcome == "not_interested":
+            if outcome == "not_interested" and body.get("sale_id"):     # not interested in that vacancy only
+                c.setdefault("not_interested_sales", []).append(body["sale_id"])
+            elif outcome == "not_interested":
                 c["temp_not_interested"] = True
             elif outcome == "do_not_call":
                 c["blocked"] = True
@@ -186,6 +193,8 @@ class MockCRM:
                 c["callback"] = True
             elif outcome == "interested":
                 c.update(callback=False, temp_not_interested=False)
+                if body.get("sale_id") in c.get("not_interested_sales", []):
+                    c["not_interested_sales"].remove(body["sale_id"])
         return 200, {"ok": True, "call_log_id": 1000 + len(self.events)}
 
     def send_job_details(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:

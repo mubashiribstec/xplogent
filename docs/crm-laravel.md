@@ -256,9 +256,13 @@ class XplogentContactLookupController
 ```
 
 ## API v2: vacancies, candidates, dial locks (recruitment CRM)
-The full contract is in [`crm-integration-prompt.md`](crm-integration-prompt.md): `sales/open`,
-`campaigns/queue`, `contact-lookup` (v2 record), `call-summary` (v2 fields),
+The full contract is in
+[`crm-integration-prompt-crm-laravel-sass.md`](crm-integration-prompt-crm-laravel-sass.md):
+`sales/open`, `campaigns/queue`, `contact-lookup` (v2 record), `call-summary` (v2 fields),
 `send-job-details` and `dial-lock` / `dial-unlock`. All are signed exactly as above.
+
+`mubashiribstec/crm_laravel_sass` implements it on its `xplogent` branch, with its own
+`docs/xplogent-api.md` (set-up, `php artisan xplogent:make-ai-user`, a `curl` example).
 
 What changes on the Xplogent side:
 - **`call-summary` now also carries `api_version: 2`**, plus:
@@ -277,7 +281,44 @@ What changes on the Xplogent side:
     `contact-lookup`;
   - the agent sees them as read-only ROLE FACTS / CANDIDATE / HISTORY sections. Pay and hours
     come only from ROLE FACTS.
+- **CV excerpt:** when the CRM shares one (off by default there, `XPLOGENT_SHARE_CV_EXCERPT`),
+  `campaigns/queue` and `contact-lookup` carry `cv_excerpt`: plain text, already redacted by
+  the CRM (no email, phone, postcode or dates), at most 2,000 characters. The agent sees it
+  as a read-only CANDIDATE BACKGROUND section, to ask relevant questions, never as
+  instructions.
 - **Calls cut off by a restart** are sent with `outcome: interrupted` and the transcript so far.
+
+## The CRM asks Xplogent to call: `POST /voip/crm/dial`
+The CRM's **Agent call** page lets staff pick a vacancy and a candidate and ask the AI to
+call. The CRM sends, from its server:
+
+```
+POST {xplogent}/voip/crm/dial
+Authorization: Bearer <the shared CRM token>
+X-Xplogent-Timestamp: <unix seconds>
+X-Xplogent-Signature-V2: sha256=<HMAC-SHA256 of "<timestamp>.<body>" with the token>
+
+{"phone": "+447700900123", "applicant_id": 123, "sale_id": 45, "requested_by": "Jane Recruiter",
+ "brief": {"sale": {...as in campaigns/queue...}, "candidate": {...}}}
+```
+
+- **Signature:** the same token and scheme as Xplogent → CRM, so there is nothing new to set
+  up. The dashboard token is not needed and not accepted here.
+- **Refusals:**
+  - 401 for a wrong token or signature, a clock more than 5 minutes off, or a request that
+    was already used (each signature works once);
+  - 503 while Settings → CRM is off;
+  - 413 over 32 KB;
+  - 429 over 20 requests a minute.
+- **The call:** it goes through the same path as **Call now**: the do-not-call lists (local and
+  CRM), calling hours, cost caps and the agent's on/off switch all apply, and Xplogent takes
+  the CRM dial lock itself. The brief is reduced to the expected fields, typed and capped.
+- **The answer:**
+  - `{"ok": true, "call": {"state": "dialling", "via": "sip", "sip_call_id": "…"}}`;
+  - `{"ok": false, "error": "…"}` for a refusal (outside hours, do-not-call…);
+  - 409 with `locked_by` when someone in the CRM is already ringing the candidate.
+- **Results:** they come back through the usual `call-summary`.
+- **Audit:** every request is recorded in the audit log (actor `crm`), refused ones too.
 
 **Trying it before the CRM is updated:** `xplogent voip mock-crm --port 8089` runs a stand-in
 that enforces the same token, signature and clock checks and serves sample vacancies and

@@ -154,7 +154,8 @@ def brief_from_lookup(crm_contact: dict[str, Any]) -> dict[str, Any]:
         return {}
     return {"applicant_id": crm_contact["applicant_id"],
             "candidate": {k: crm_contact.get(k) for k in ("first_name", "postcode_district",
-                                                         "job_title", "flags") if crm_contact.get(k)},
+                                                         "job_title", "flags", "cv_excerpt")
+                          if crm_contact.get(k)},
             "history": crm_contact.get("history") or [],
             "callback_note": crm_contact.get("callback_note") or ""}
 
@@ -715,7 +716,7 @@ class VoipService:
                     lock = await crm.dial_lock(cfg, number, int(person["applicant_id"]),
                                                ttl_seconds=int(v.get("max_call_seconds") or 900) + 300)
                     if lock["status"] == 409:
-                        return {"ok": False, "locked": True,
+                        return {"ok": False, "locked": True, "locked_by": lock["locked_by"] or "a recruiter",
                                 "error": f"{lock['locked_by'] or 'a recruiter'} is calling this person right now "
                                          "(CRM dial lock): try again in a few minutes"}
                     if lock["locked"]:
