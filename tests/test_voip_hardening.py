@@ -237,9 +237,8 @@ async def test_barge_in_works_on_buffered_reply():
         await asyncio.sleep(0.02)
     await asyncio.sleep(0.3)               # synthesis is long done; playback is not
     assert session._speaking
-    from tests.test_voip import tone_mulaw
-
-    await session.on_audio(tone_mulaw(200))
+    await speak_utterance(session)           # caller talks over the agent, then stops:
+    # only the finished utterance (a real question here) cancels the reply
     assert cleared and not session._speaking
     await session.stop()
 

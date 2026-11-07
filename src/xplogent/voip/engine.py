@@ -5,16 +5,21 @@ reply goes out through the ``send_audio`` callback. Between the two:
 
     VAD  ->  STT  ->  CallBrain (streams sentences)  ->  TTS  ->  μ-law frames out
 
-Barge-in: if the caller starts talking while the agent is speaking, speech is cancelled
-immediately and the carrier's audio buffer is cleared, so the agent stops mid-sentence
-like a person would. All telephony specifics live in the adapter that wires the callbacks,
-so this class is provider-agnostic and fully testable with fake STT/TTS.
+Barge-in: if the caller starts talking while the agent is speaking, the engine waits
+for the utterance to finish (speech_end + STT) and only then decides: a short
+filler / backchannel ("hello?", "hmm", "yes") lets the reply finish playing, while
+a real interruption (a question, "stop", a new request) cancels the reply at once
+and is answered. The greeting's AI + recording disclosure is never cut off, but
+once those words have played the caller may talk over the rest of it. All telephony
+specifics live in the adapter that wires the callbacks, so this class is
+provider-agnostic and fully testable with fake STT/TTS.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -49,6 +54,75 @@ TRANSFER_FAILED_LINE = ("I'm sorry, I couldn't connect you to a colleague just n
 # Silence recovery (vs-Retell brief C5): at most ``idle_max_prompts`` short prompts,
 # spaced between the first-prompt delay and the hangup delay, then a polite goodbye.
 SILENCE_PROMPTS = ("Are you still there?", "I still can't hear you — are you there?")
+
+# -- filler vs real interruption (latency / cancellation-loop fix, 2026-11-07) --------
+# The 28 Oct call was 27 s of silence because every "Hello?" while the agent was
+# replying cancelled the reply and started a fresh turn. A mid-reply utterance is
+# therefore classified only once it is finished (speech_end + STT text), never on
+# speech_start. The rule is deliberately asymmetric: swallowing a real question is
+# worse than one restart, so anything that is not clearly a backchannel counts as
+# a real interruption (the old behaviour).
+FILLER_MAX_SPEECH_S = 1.0   # a slow 3-word utterance is a real turn, not a blip
+_FILLER_WORDS = frozenset({
+    # backchannels / acknowledgements / greetings — no content of their own
+    "hello", "hi", "hey", "hiya", "hmm", "hm", "mm", "mm-hm", "uh-huh", "uh", "um", "huh",
+    "yeah", "yes", "yep", "ok", "okay", "right", "sure", "sorry", "pardon",
+    "go", "on", "please", "thanks", "thank", "you",
+})
+_INTERRUPT_FIRST_WORDS = frozenset({"stop", "wait", "hold"})   # "stop", "wait a minute", "hold on"
+
+
+def _filler_words(text: str) -> list[str]:
+    """The utterance as lowercase words (punctuation stripped, "what's" -> "whats")."""
+    return [w.strip("'") for w in re.sub(r"[^a-z0-9' ]", " ", text.lower()).split()
+            if w.strip("'")]
+
+
+def is_filler_utterance(text: str, speech_s: float = 0.0) -> bool:
+    """True when ``text`` is filler / backchannel that must NOT cancel the reply.
+
+    Filler: empty or unintelligible; or every word is a backchannel word
+    ("hello?", "hmm", "uh-huh", "yeah, go on"). Real interruption: starts with
+    stop / wait / hold; 4+ words ("Sorry — what's the hourly pay?"); or 3+ words
+    spoken slowly (>= ``FILLER_MAX_SPEECH_S``). Duration alone never makes a
+    content word filler — a 0.5 s "pay?" is still a real question.
+    """
+    words = _filler_words(text)
+    if not words:
+        return True
+    if words[0] in _INTERRUPT_FIRST_WORDS:
+        return False
+    if len(words) >= 4:
+        return False
+    if all(w in _FILLER_WORDS for w in words):
+        return True
+    if len(words) >= 3 and speech_s >= FILLER_MAX_SPEECH_S:
+        return False
+    return False
+
+
+def split_greeting_disclosure(greeting: str) -> tuple[str, str]:
+    """Split a greeting into (disclosure, rest) at the end of the disclosure sentence.
+
+    The disclosure is the sentence carrying the AI disclosure ("AI assistant") and
+    the sentence carrying the recording notice ("record"): the split falls after
+    whichever of those two sentences ends later. If neither is found, or the
+    disclosure is the whole greeting, the rest is empty and the greeting stays
+    uninterruptible throughout — the safe default.
+    """
+    def _sentence_end_after(text: str, keyword: str) -> int:
+        m = re.search(keyword, text, re.IGNORECASE)
+        if not m:
+            return -1
+        end = re.search(r"[.?!](\s|$)", text[m.start():])
+        return m.start() + end.end() if end else len(text)
+
+    ends = [_sentence_end_after(greeting, r"ai assistant"), _sentence_end_after(greeting, r"record")]
+    cut = max(ends)
+    if cut <= 0:
+        return greeting, ""
+    disclosure, rest = greeting[:cut].strip(), greeting[cut:].strip()
+    return (disclosure, rest) if rest else (greeting, "")
 def closing_line(st: Any) -> str:
     """A goodbye for a call the agent ended without saying one (reads a booked time back)."""
     if getattr(st, "callback", "") and getattr(st, "callback_at", ""):
@@ -150,8 +224,18 @@ class CallSession:
         self._speech_end_at = 0.0
         self._watchdog: asyncio.Task | None = None
         # The greeting carries the AI and recording disclosure: it always plays to
-        # the end. Speech over it is answered after it, never cuts it off.
+        # the end of the disclosure. Speech over it is answered after it, never cuts
+        # the disclosure off — but once the disclosure words have played, the caller
+        # may talk over the rest of the greeting (see _greeting_disclosure_done).
         self._greeting_task: asyncio.Task | None = None
+        self._greeting_disclosure_done = False
+        # A caller utterance that started while the agent was speaking: decided at
+        # speech_end + STT, never cancelled on speech_start (the 28 Oct restart loop).
+        self._barge_in_pending = False
+        self._barge_in_started_at = 0.0
+        # Why a turn task was cancelled, by task id: "barge_in" | "superseded" |
+        # "cancelled". Read by _reply's CancelledError handler for turn_timings.
+        self._cancel_reasons: dict[int, str] = {}
 
     # -- lifecycle ---------------------------------------------------------------
     def event(self, kind: str, detail: str = "") -> None:
@@ -178,9 +262,25 @@ class CallSession:
             return
         self.event("greeting")
         self._record("agent", self.greeting)
-        self._greeting_task = self._turn_task = asyncio.create_task(self._say(self.greeting))
+        self._greeting_disclosure_done = False
+        self._greeting_task = self._turn_task = asyncio.create_task(self._greet())
         self._greeting_task.add_done_callback(
             lambda t: self.event("greeting_end", "stopped" if t.cancelled() else ""))
+
+    async def _greet(self) -> None:
+        """Speak the greeting in two parts so the disclosure is never cut off but
+        the rest is interruptible: the disclosure sentence(s) first, then the
+        remainder. ``_greeting_disclosure_done`` flips only once the disclosure
+        has actually been spoken."""
+        disclosure, rest = split_greeting_disclosure(self.greeting)
+        await self._say(disclosure)
+        self._greeting_disclosure_done = True
+        if rest:
+            await self._say(rest)
+
+    def _barge_in_blocked(self) -> bool:
+        """True while the greeting's disclosure is still playing: it is never cut off."""
+        return self._greeting_playing() and not self._greeting_disclosure_done
 
     async def _hello_timeout(self) -> None:
         """Nobody spoke: greet after ``hello_wait_s`` (or once they stop talking)."""
@@ -309,8 +409,12 @@ class CallSession:
                 self._last_activity = time.time()
                 self._idle_prompts = 0
                 self._open_stream()
-                if self._speaking:
-                    await self._barge_in()
+                if (self._speaking or self.turn_in_progress) and not self._barge_in_blocked():
+                    # Do NOT cancel yet: wait for speech_end + STT, then decide filler
+                    # vs real interruption in _decide_barge_in. Cancelling here is
+                    # the 28 Oct restart loop (every "Hello?" rebuilt the reply).
+                    self._barge_in_pending = True
+                    self._barge_in_started_at = time.time()
             elif event == "speech_end":
                 self._speech_end_at = time.time()
                 stream, self._stream = self._stream, None
@@ -320,7 +424,16 @@ class CallSession:
                         self._hello_task.cancel()
                     self._hello_task = asyncio.create_task(self._hello_heard(self.vad.take(), stream))
                     continue
-                await self._begin_turn(self.vad.take(), stream)
+                pcm8k = self.vad.take()
+                if self._barge_in_pending:
+                    self._barge_in_pending = False
+                    if not self._speaking and not self.turn_in_progress:
+                        # The reply finished while the caller spoke: a normal turn.
+                        await self._begin_turn(pcm8k, stream)
+                    else:
+                        await self._decide_barge_in(pcm8k, stream)
+                    continue
+                await self._begin_turn(pcm8k, stream)
 
     def _open_stream(self) -> None:
         """Start streaming this utterance (with the audio the VAD already holds)."""
@@ -341,11 +454,15 @@ class CallSession:
             asyncio.create_task(stream.aclose())
 
     async def _barge_in(self) -> None:
-        if self._greeting_playing():
+        """Cancel the reply in progress for a REAL interruption (never the greeting
+        disclosure — see _barge_in_blocked). Only called once the utterance has
+        been classified in _decide_barge_in, never on speech_start."""
+        if self._barge_in_blocked():
             return          # the disclosure is never cut off; the caller is answered after it
         _log.info("barge-in: caller interrupted the agent")
         self.event("barge_in")
         if self._turn_task and not self._turn_task.done():
+            self._cancel_reasons[id(self._turn_task)] = "barge_in"
             self._turn_task.cancel()
         self._speaking = False
         if self.clear_audio:
@@ -358,30 +475,43 @@ class CallSession:
     def _cancel_turn(self) -> None:
         """Stop the reply in progress (but never the greeting)."""
         if self._turn_task and not self._turn_task.done() and self._turn_task is not self._greeting_task:
+            # Keep an earlier "barge_in" reason: the reply was killed by the caller,
+            # not merely superseded by the next turn.
+            self._cancel_reasons.setdefault(id(self._turn_task), "superseded")
             self._turn_task.cancel()
 
-    async def _after_greeting(self) -> None:
-        if self._greeting_playing():
-            with contextlib.suppress(Exception):
-                await asyncio.shield(self._greeting_task)
-            self._speech_end_at = time.time()   # latency counts from when the agent may speak
-
-    async def _then(self, coro) -> None:
-        """Run a caller-triggered reply once the greeting has finished."""
+    async def _decide_barge_in(self, pcm8k: bytes, stream: Any = None) -> None:
+        """The caller spoke while the agent was replying. Transcribe the finished
+        utterance, then: filler -> let the reply finish, no new turn; real
+        interruption -> cancel the reply (as before) and answer the new utterance
+        with the text already transcribed, so STT is not run twice."""
+        speech_s = len(pcm8k) / 16000.0
         try:
-            await self._after_greeting()
-        except BaseException:
-            coro.close()
+            text, info = await self._transcribe(pcm8k, stream)
+        except asyncio.CancelledError:
             raise
-        await coro
+        except Exception:  # noqa: BLE001 - undecidable: never cancel on a guess
+            _log.warning("barge-in undecided (speech-to-text failed): letting the reply finish")
+            self.event("barge_in_undecided")
+            return
+        text = (text or "").strip()
+        if self.amd is not None and not self.amd.done and self.amd.text(text, time.time()):
+            await self._machine(self.amd.reason)
+            return
+        if is_filler_utterance(text, speech_s):
+            _log.info("filler ignored (%.2fs %r): reply keeps playing", speech_s, text)
+            self.event("filler_ignored", f"{speech_s:.2f}s {text}"[:200])
+            if text:
+                self._record("caller", text)
+            return
+        _log.info("real interruption (%.2fs %r): cancelling the reply", speech_s, text)
+        await self._barge_in()
+        await self._begin_turn(pcm8k, None, text=text, info=info)
 
-    async def _begin_turn(self, pcm8k: bytes, stream: Any = None) -> None:
-        self._cancel_turn()
-        self._turn_task = asyncio.create_task(self._turn(pcm8k, stream))
-
-    # -- one turn ----------------------------------------------------------------
-    async def _turn(self, pcm8k: bytes, stream: Any = None) -> None:
-        _t0 = time.time()
+    async def _transcribe(self, pcm8k: bytes, stream: Any = None) -> tuple[str, dict[str, Any]]:
+        """Transcribe one utterance: streaming STT first, batch STT as fallback.
+        Returns (text, info). Raises on batch failure (the caller decides how to
+        recover); a streaming failure falls back to the batch path."""
         info: dict[str, Any] = {"stt": label_of(self.stt), "fallbacks": [], "error": ""}
         text: str | None = None
         if stream is not None:
@@ -397,19 +527,7 @@ class CallSession:
                 info["error"] = f"stt stream: {exc}"[:300]
             await stream.aclose()
         if text is None:
-            try:
-                text = await self.stt.transcribe(resample(pcm8k, 8000, 16000))
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - one bad turn must not drop the call
-                _log.exception("speech-to-text failed")
-                self.turn_timings.append({"stt_ms": round((time.time() - _t0) * 1000, 1),
-                                          "stt": info["stt"], "fallbacks": info["fallbacks"],
-                                          "error": f"stt: {type(exc).__name__}: {exc}"[:300]})
-                await self._after_greeting()
-                self._record("agent", "Sorry, I had a problem. Could you say that again?")
-                await self._say("Sorry, I had a problem. Could you say that again?")
-                return
+            text = await self.stt.transcribe(resample(pcm8k, 8000, 16000))
             last = getattr(self.stt, "last", None) or {}
             if last:
                 info["stt"] = last.get("provider") or info["stt"]
@@ -417,8 +535,59 @@ class CallSession:
                     info["fallbacks"].append("stt:fallback")
                 if last.get("error") and not info["error"]:
                     info["error"] = f"stt: {last['error']}"
-        self._last_stt_ms = (time.time() - _t0) * 1000
-        self._turn_info = info
+        return text or "", info
+
+    async def _after_greeting(self) -> None:
+        if self._greeting_playing():
+            try:
+                await asyncio.shield(self._greeting_task)
+            except asyncio.CancelledError:
+                if asyncio.current_task() is not None and asyncio.current_task().cancelling():
+                    raise   # this turn itself is being cancelled: propagate
+                # The greeting was interrupted after its disclosure: proceed.
+            self._speech_end_at = time.time()   # latency counts from when the agent may speak
+
+    async def _then(self, coro) -> None:
+        """Run a caller-triggered reply once the greeting has finished."""
+        try:
+            await self._after_greeting()
+        except BaseException:
+            coro.close()
+            raise
+        await coro
+
+    async def _begin_turn(self, pcm8k: bytes, stream: Any = None, text: str | None = None,
+                          info: dict[str, Any] | None = None) -> None:
+        self._cancel_turn()
+        self._turn_task = asyncio.create_task(self._turn(pcm8k, stream, text=text, info=info))
+
+    # -- one turn ----------------------------------------------------------------
+    async def _turn(self, pcm8k: bytes, stream: Any = None, text: str | None = None,
+                    info: dict[str, Any] | None = None) -> None:
+        _t0 = time.time()
+        if text is None:
+            # Fresh utterance: transcribe it (streaming first, batch fallback).
+            try:
+                text, info = await self._transcribe(pcm8k, stream)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one bad turn must not drop the call
+                _log.exception("speech-to-text failed")
+                self.turn_timings.append({"stt_ms": round((time.time() - _t0) * 1000, 1),
+                                          "stt": label_of(self.stt), "fallbacks": [],
+                                          "error": f"stt: {type(exc).__name__}: {exc}"[:300]})
+                await self._after_greeting()
+                self._record("agent", "Sorry, I had a problem. Could you say that again?")
+                await self._say("Sorry, I had a problem. Could you say that again?")
+                return
+            self._last_stt_ms = (time.time() - _t0) * 1000
+            self._turn_info = info or {}
+        else:
+            # Already transcribed (real interruption decided in _decide_barge_in):
+            # do not run STT twice.
+            self._last_stt_ms = 0.0
+            self._turn_info = info or {"stt": "text", "fallbacks": [], "error": ""}
+        info = self._turn_info
         if self.amd is not None and not self.amd.done and self.amd.text(text or "", time.time()):
             await self._machine(self.amd.reason)
             return
@@ -454,6 +623,9 @@ class CallSession:
             first_ms = 0.0          # this turn's own first-word delay (0 = it didn't speak)
             info, self._turn_info = self._turn_info, {}
             reply_start = time.time()
+            # Snapshot: a mid-reply filler overwrites _speech_end_at while this
+            # sentence is still playing, which would corrupt total_ms below.
+            speech_end_at = self._speech_end_at
             stage = {"llm_first_sentence_ms": 0.0, "tts_first_audio_ms": 0.0, "total_ms": 0.0}
 
             async def sentences():
@@ -474,12 +646,25 @@ class CallSession:
                         await self._say(sentence)
                         if self._say_first_frame_at:
                             stage["tts_first_audio_ms"] = (self._say_first_frame_at - sentence_at) * 1000
-                            stage["total_ms"] = (self._say_first_frame_at - self._speech_end_at) * 1000
+                            stage["total_ms"] = (self._say_first_frame_at - speech_end_at) * 1000
                         continue
                     await self._say(sentence)
             except asyncio.CancelledError:
                 if reply_parts:     # interrupted: keep what the caller already heard
                     self._record("agent", " ".join(reply_parts) + " …")
+                # Record the interruption so the fix can be measured: a turn killed
+                # by a real barge-in vs one superseded by the next turn vs other.
+                reason = self._cancel_reasons.pop(id(asyncio.current_task()), "cancelled")
+                self.turn_timings.append({
+                    "stt_ms": round(self._last_stt_ms, 1),
+                    **{k: round(v, 1) for k, v in stage.items()},
+                    "llm_first_ms": round(first_ms, 1),
+                    "stt": info.get("stt", ""),
+                    "llm": llm_label(self.brain.provider),
+                    "tts": label_of(self.tts),
+                    "fallbacks": [], "error": "",
+                    "cancelled_by": reason,
+                })
                 raise
             if reply_parts:
                 self._record("agent", " ".join(reply_parts))

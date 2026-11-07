@@ -266,6 +266,9 @@ async def test_turn_timings_are_per_turn():
 
 @pytest.mark.asyncio
 async def test_engine_barge_in_cancels_speech_and_clears_buffer():
+    # A real interruption ("what are your opening hours") is only acted on once
+    # the utterance has finished (speech_end + STT) — a bare speech_start no
+    # longer cancels the reply (the 28 Oct restart loop: filler did that).
     prov = ScriptedProvider([Message(role=Role.ASSISTANT, content="This is a long reply that will be cut off.")])
     session, sent, cleared, _, _ = make_session(prov, tts=FakeTTS(delay=0.15, chunks=10))
     await speak_utterance(session)
@@ -274,9 +277,10 @@ async def test_engine_barge_in_cancels_speech_and_clears_buffer():
             break
         await asyncio.sleep(0.02)
     assert session._speaking
-    await session.on_audio(tone_mulaw(200))   # caller talks over the agent
+    await speak_utterance(session)            # caller talks over the agent, then stops
     assert cleared, "carrier audio buffer must be cleared on barge-in"
-    assert not session._speaking
+    await asyncio.sleep(0.05)                 # let the cancelled turn record itself
+    assert any(t.get("cancelled_by") == "barge_in" for t in session.turn_timings)
     await session.stop()
 
 

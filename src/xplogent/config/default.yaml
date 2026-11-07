@@ -208,7 +208,7 @@ voip:
   webhook_secret: ""               # random string; carrier webhook = {public_url}/telephony/webhook/<secret>
   api_key_env: TELNYX_API_KEY      # env var holding the carrier API key
   company: "our company"
-  greeting: "Hello, thanks for calling {company}. You're speaking with an AI assistant, and this call is transcribed so we can help you better. How can I help you?"
+  greeting: "Hello, thanks for calling {company}. You're speaking with an AI assistant, and this call is transcribed. How can I help you?"
   queue_greeting: ""               # optional greeting for callers who came through a PBX queue (blank = the greeting above); the AI/recording disclosure is still added
   disclose_ai: true                # system injects the AI disclosure into the greeting if the greeting text doesn't already contain it (UK/EU transparency); set false only where disclosure is handled another way
   model: ""                        # LLM for calls; blank = use `model`. Pick a small fast streaming model.
