@@ -6,7 +6,7 @@ import {
   addFact, deleteFact, forgetLearnedFacts, deleteSkill, exportKnowledge, getFacts, getFullConfig,
   getProviderModels, getRoles, getSkills, getStatus, getTools, importKnowledge, patchConfig, putRole,
   putSecrets, restoreBackup, saveOllama, StatusInfo, testOllama, listOllamaServers, saveOllamaServer,
-  deleteOllamaServer, type OllamaServer,
+  deleteOllamaServer, type OllamaServer, StatusError,
   BackupStatus, getBackupModel, saveBackupModel, testBackupModel,
 } from "./api";
 
@@ -406,13 +406,21 @@ function BackupModelCard({ flash }: { flash: (m: string) => void }) {
 
 function HealthCard() {
   const [st, setSt] = useState<StatusInfo | null>(null);
-  const reload = () => getStatus().then(setSt).catch(() => setSt(null));
+  const [problem, setProblem] = useState("");
+  const reload = () => getStatus().then((s) => { setSt(s); setProblem(""); })
+    .catch((e) => { setSt(null); setProblem(e instanceof StatusError ? e.message : ""); });
   useEffect(() => { reload(); const id = setInterval(reload, 10000); return () => clearInterval(id); }, []);
   return (
     <div className="card">
       <h3>Status &amp; health</h3>
-      {!st ? <p className="warn">Backend unreachable.</p> : (
+      {!st ? (problem
+        ? <p className="warn">The backend answered, but the status check failed ({problem}).
+            The server log has the details: <code>xplogent-docker logs</code>.</p>
+        : <p className="warn">Backend unreachable.</p>) : (
         <>
+          {st.errors && Object.keys(st.errors).length > 0 && (
+            <p className="warn">Part of the status failed: {Object.entries(st.errors)
+              .map(([k, v]) => `${k}: ${v}`).join("; ")}</p>)}
           <div className="row wrap" style={{ gap: 8 }}>
             <span className="badge ok">backend online</span>
             {st.ollama.in_use && <span className={`badge ${st.ollama.reachable ? "ok" : "bad"}`}

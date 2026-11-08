@@ -344,6 +344,8 @@ export interface StatusInfo {
   capabilities?: { display: boolean; docker: boolean; git: boolean };
   version?: string;
   revision?: string;
+  /** Parts of the status that failed on the server (part → error). */
+  errors?: Record<string, string>;
 }
 
 async function postJSON<T>(url: string, body: unknown = {}): Promise<T> {
@@ -522,8 +524,15 @@ export const setDemo = (on: boolean) => postJSON<{ ok: boolean; demo_calls: numb
 export const testTelnyx = () => postJSON<Record<string, any>>("/voip/telnyx/test");
 export const testSpeech = (stt = true) => postJSON<Record<string, any>>("/voip/speech/test", { stt });
 
+/** Thrown when the backend answered, but not with a usable status (so it isn't "unreachable"). */
+export class StatusError extends Error {}
+
 export async function getStatus(): Promise<StatusInfo> {
-  return (await fetch("/status")).json();
+  const res = await fetch("/status");
+  const text = await res.text();
+  if (!res.ok) throw new StatusError(`HTTP ${res.status}: ${text.slice(0, 200) || res.statusText}`);
+  try { return JSON.parse(text) as StatusInfo; }
+  catch { throw new StatusError(`not JSON: ${text.slice(0, 120)}`); }
 }
 
 export async function ollamaPull(model: string): Promise<{ ok: boolean; output?: string; error?: string }> {

@@ -42,28 +42,49 @@ async def auth_check(request: Request) -> dict:
 
 @router.get("/status")
 async def status() -> dict:
-    """Aggregate health for the dashboard: providers, which keys are set, Ollama up."""
+    """Aggregate health for the dashboard: providers, which keys are set, Ollama up.
+
+    Each part is computed on its own: one that fails is reported in ``errors`` (and logged)
+    instead of turning the whole answer into a 500, which the dashboard could only show as
+    "Backend unreachable"."""
+    import logging
 
     from xplogent.core.platform import has_display
     from xplogent.providers.ollama import ollama_settings
 
-    cfg = load_config()
-    ollama_host, token = ollama_settings()
-    used = ollama_in_use(cfg)
+    errors: dict[str, str] = {}
+
+    def part(name: str, fn, default):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 - report it, keep the rest of the status
+            logging.getLogger("xplogent.status").exception("status: %s failed", name)
+            errors[name] = f"{type(exc).__name__}: {exc}"[:300]
+            return default
+
+    cfg = part("config", load_config, None)
+    ollama_host, token = part("ollama", ollama_settings, ("", ""))
+    used = part("ollama", lambda: ollama_in_use(cfg), False) if cfg is not None else False
     # Nothing to probe when no setting uses Ollama (it no longer runs next to Xplogent).
-    probe = await _probe_ollama(ollama_host, token, timeout=3.0) if used else {"ok": False, "error": "not used"}
-    return {
+    probe = await _probe_ollama(ollama_host, token, timeout=3.0) if used and ollama_host else {
+        "ok": False, "error": errors.get("ollama") or "not used"}
+    out = {
         "status": "ok",
-        **repo_info.build_info(),
-        "model": cfg.model,
-        "providers": available_providers(),
-        "secrets": secret_status(),
+        **part("build", repo_info.build_info, {}),
+        "model": cfg.model if cfg is not None else "",
+        "providers": part("providers", available_providers, []),
+        "secrets": part("secrets", secret_status, {}),
         "ollama": {"host": ollama_host, "reachable": probe["ok"], "auth": bool(token),
                    "error": probe.get("error", ""), "in_use": used},
         # What this install can do, so the dashboard can disable what can't work here.
-        "capabilities": {"display": has_display(), "docker": repo_info.in_docker(),
-                         "git": repo_info.repo_root() is not None and not repo_info.in_docker()},
+        "capabilities": part("capabilities", lambda: {
+            "display": has_display(), "docker": repo_info.in_docker(),
+            "git": repo_info.repo_root() is not None and not repo_info.in_docker()}, {}),
+        "errors": errors,
     }
+    if errors:                     # set last: the parts above are what fill ``errors``
+        out["status"] = "degraded"
+    return out
 
 
 def ollama_in_use(cfg) -> bool:

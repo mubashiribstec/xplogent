@@ -37,3 +37,28 @@ def test_status_endpoint_is_200_with_a_malformed_saved_host(monkeypatch):
         resp = client.get("/status")
     assert resp.status_code == 200
     assert resp.json()["ollama"]["reachable"] is False
+
+
+def test_status_reports_a_failing_part_instead_of_500(monkeypatch, tmp_path):
+    """Muse's 4 Nov report: the Health card said 'Backend unreachable' while the backend was
+    up. Any part of /status that throws now shows in ``errors``; the rest still answers."""
+    monkeypatch.setenv("XPLOGENT_HOME", str(tmp_path))
+    from fastapi.testclient import TestClient
+
+    from xplogent.interfaces.api.routes import system
+    from xplogent.interfaces.api.server import create_app
+
+    def broken():
+        raise RuntimeError("secrets store unreadable")
+
+    monkeypatch.setattr(system, "secret_status", broken)
+    monkeypatch.setattr(system, "available_providers", lambda: (_ for _ in ()).throw(ValueError("bad provider")))
+    with TestClient(create_app(), raise_server_exceptions=False) as client:
+        resp = client.get("/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert body["errors"]["secrets"] == "RuntimeError: secrets store unreadable"
+    assert "bad provider" in body["errors"]["providers"]
+    assert body["secrets"] == {} and body["providers"] == [] and body["model"]
+    assert "revision" in body or "version" in body           # the build info still answers
