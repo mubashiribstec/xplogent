@@ -172,7 +172,7 @@ sentence, with barge-in (the greeting is never cut off). Pick both halves in **C
 | Local Kokoro (free) | `xplogent-docker speech on` (`--gpu` on NVIDIA). |
 | OpenAI | `tts-1` voices (OpenAI key). |
 | ElevenLabs | `ELEVENLABS_API_KEY`, model from config (default `eleven_flash_v2_5`), voice picked from your ElevenLabs voices. |
-| Cartesia | `CARTESIA_API_KEY`, model from config (default `sonic-2`), voice picked from your Cartesia voices. |
+| Cartesia | `CARTESIA_API_KEY`, model from config (default `sonic-3.6`; the retired `sonic-2` / `sonic-turbo` are sent as `sonic-3.6`), voice picked from your Cartesia voices. **Cartesia: Gemma** in Calls → Speech is a natural UK female voice for UK calls. |
 
 Keys are stored encrypted (Speech card or Settings). If the main voice fails before speaking,
 it is retried once, then `voip.tts_fallback` (any of the above) takes over for that sentence; the

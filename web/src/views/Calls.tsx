@@ -407,14 +407,18 @@ const OPENAI_SPEECH = {
 const TTS_PRESETS: Record<string, Record<string, any>> = {
   local: LOCAL_SPEECH.tts, openai: OPENAI_SPEECH.tts,
   elevenlabs: { provider: "elevenlabs", model: "eleven_flash_v2_5", voice: "", sample_rate: 24000 },
-  cartesia: { provider: "cartesia", model: "sonic-2", voice: "", sample_rate: 24000, language: "en" },
+  cartesia: { provider: "cartesia", model: "sonic-3.6", voice: "", sample_rate: 24000, language: "en" },
+  // A natural UK voice for UK calls (Cartesia "Gemma", en-GB female).
+  "cartesia-gemma": { provider: "cartesia", model: "sonic-3.6", voice: "62ae83ad-4f6a-430b-af41-a9bede9286ca",
+                      sample_rate: 24000, language: "en" },
 };
 const STT_PRESETS: Record<string, Record<string, any>> = {
   local: LOCAL_SPEECH.stt, openai: OPENAI_SPEECH.stt,
   deepgram: { provider: "deepgram", model: "nova-3", streaming: true, base_url: "" },
 };
 const KEY_FOR: Record<string, string> = {
-  elevenlabs: "ELEVENLABS_API_KEY", cartesia: "CARTESIA_API_KEY", deepgram: "DEEPGRAM_API_KEY",
+  elevenlabs: "ELEVENLABS_API_KEY", cartesia: "CARTESIA_API_KEY", "cartesia-gemma": "CARTESIA_API_KEY",
+  deepgram: "DEEPGRAM_API_KEY",
 };
 
 function SpeechCard({ cfg, secrets, save, toast, onKey }: {
@@ -426,7 +430,8 @@ function SpeechCard({ cfg, secrets, save, toast, onKey }: {
   const [voiceErr, setVoiceErr] = useState("");
   const tts = cfg.tts ?? {};
   const stt = cfg.stt ?? {};
-  const ttsKind = tts.provider === "elevenlabs" || tts.provider === "cartesia" ? tts.provider
+  const ttsKind = tts.provider === "cartesia" && tts.voice === TTS_PRESETS["cartesia-gemma"].voice ? "cartesia-gemma"
+    : tts.provider === "elevenlabs" || tts.provider === "cartesia" ? tts.provider
     : String(tts.base_url ?? "").includes("kokoro") ? "local"
     : String(tts.base_url ?? "api.openai.com").includes("api.openai.com") ? "openai" : "custom";
   const sttKind = stt.provider === "deepgram" ? "deepgram"
@@ -469,7 +474,8 @@ function SpeechCard({ cfg, secrets, save, toast, onKey }: {
             <option value="local">Local on this server (free)</option>
             <option value="openai">OpenAI (needs an OpenAI key)</option>
             <option value="elevenlabs">ElevenLabs</option>
-            <option value="cartesia">Cartesia</option>
+            <option value="cartesia-gemma">Cartesia: Gemma, UK female (natural, for UK calls)</option>
+            <option value="cartesia">Cartesia (choose a voice)</option>
             <option value="custom" disabled>Custom (edit the URL below)</option>
           </select></label>
         {KEY_FOR[ttsKind] && keyInput(KEY_FOR[ttsKind])}

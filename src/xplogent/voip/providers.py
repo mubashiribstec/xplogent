@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import io
 import os
+import re
 import wave
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
@@ -341,23 +342,39 @@ class ElevenLabsTTS:
         await self._client.aclose()
 
 
+CARTESIA_MODEL = "sonic-3.6"            # Cartesia's recommended model (continuously updated)
+CARTESIA_API_VERSION = "2026-08-14"     # the Cartesia-Version their /tts/bytes API requires
+GEMMA_UK_VOICE = "62ae83ad-4f6a-430b-af41-a9bede9286ca"   # Cartesia "Gemma", en-GB female
+# Retired by Cartesia (sonic-2 and sonic-turbo stopped working after 20 Oct 2026; sonic and the
+# 2024 snapshots before that). A saved setting naming one of them is sent as CARTESIA_MODEL.
+_RETIRED_CARTESIA = re.compile(r"^(sonic|sonic-english|sonic-multilingual|sonic-2(-.*)?|sonic-turbo(-.*)?"
+                               r"|sonic-2024-.*)$")
+
+
+def cartesia_model(model: str) -> str:
+    model = (model or "").strip()
+    if not model or _RETIRED_CARTESIA.match(model):
+        return CARTESIA_MODEL
+    return model
+
+
 class CartesiaTTS:
     """Cartesia text-to-speech (``/tts/bytes``), raw 16-bit PCM at ``sample_rate``."""
 
-    def __init__(self, voice: str, model: str = "sonic-2", api_key: str = "", sample_rate: int = 24000,
-                 language: str = "en", api_version: str = "2024-06-10",
+    def __init__(self, voice: str, model: str = CARTESIA_MODEL, api_key: str = "", sample_rate: int = 24000,
+                 language: str = "en", api_version: str = CARTESIA_API_VERSION,
                  base_url: str = "https://api.cartesia.ai") -> None:
         self.sample_rate = sample_rate
         self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=httpx.Timeout(30.0),
                                          headers={"X-API-Key": api_key, "Cartesia-Version": api_version})
-        self.model, self.voice, self.language = model, voice, language
+        self.model, self.voice, self.language = cartesia_model(model), voice, language
         self.label = f"cartesia:{voice}"
 
     async def synthesize(self, text: str) -> AsyncIterator[bytes]:
         if not text.strip():
             return
         body = {"model_id": self.model, "transcript": text, "language": self.language,
-                "voice": {"mode": "id", "id": self.voice},
+                "voice": {"id": self.voice},
                 "output_format": {"container": "raw", "encoding": "pcm_s16le",
                                   "sample_rate": self.sample_rate}}
         async with self._client.stream("POST", "/tts/bytes", json=body) as resp:
@@ -412,7 +429,7 @@ def build_tts(cfg: dict[str, Any]) -> TTS:
         return ElevenLabsTTS(voice=cfg.get("voice") or "", model=cfg.get("model") or "eleven_flash_v2_5",
                              api_key=_env_key(cfg, "ELEVENLABS_API_KEY"), sample_rate=rate)
     if kind == "cartesia":
-        return CartesiaTTS(voice=cfg.get("voice") or "", model=cfg.get("model") or "sonic-2",
+        return CartesiaTTS(voice=cfg.get("voice") or "", model=str(cfg.get("model") or ""),
                            api_key=_env_key(cfg, "CARTESIA_API_KEY"), sample_rate=rate,
                            language=str(cfg.get("language") or "en"))
     key = os.environ.get(str(cfg.get("api_key_env", "OPENAI_API_KEY")), "")

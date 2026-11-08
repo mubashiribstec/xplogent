@@ -187,12 +187,15 @@ async def test_cartesia_streams_pcm_and_reports_errors():
         body = json.loads(request.content)
         if body["transcript"] == "fail":
             return httpx.Response(401, json={"error": "bad key"})
-        assert body["voice"] == {"mode": "id", "id": "c1"} and request.headers["cartesia-version"]
+        assert body["voice"] == {"id": "c1"} and request.headers["cartesia-version"] == "2026-08-14"
+        assert body["model_id"] == "sonic-3.6"
         assert body["output_format"] == {"container": "raw", "encoding": "pcm_s16le", "sample_rate": 24000}
         return httpx.Response(200, content=b"\x00\x01" * 500)
 
     tts = sp.build_tts({"provider": "cartesia", "voice": "c1"})
-    _mock(tts, handler, "https://api.cartesia.ai", {"X-API-Key": "k", "Cartesia-Version": "2024-06-10"})
+    assert tts._client.headers["Cartesia-Version"] == sp.CARTESIA_API_VERSION == "2026-08-14"
+    await tts._client.aclose()
+    _mock(tts, handler, "https://api.cartesia.ai", {"X-API-Key": "k", "Cartesia-Version": sp.CARTESIA_API_VERSION})
     assert len(b"".join([c async for c in tts.synthesize("Hi")])) == 1000
     with pytest.raises(RuntimeError, match="HTTP 401"):
         _ = [c async for c in tts.synthesize("fail")]
@@ -248,3 +251,16 @@ def test_streaming_only_for_deepgram_and_keys_are_their_own(monkeypatch):
     assert sp.build_streaming_stt({"provider": "deepgram", "streaming": False}) is None
     s = sp.build_streaming_stt({"provider": "deepgram", "api_key_env": "OPENAI_API_KEY"})
     assert s.api_key == "dg"                                      # never the OpenAI key
+
+
+@pytest.mark.parametrize("saved,sent", [
+    ("sonic-2", "sonic-3.6"), ("sonic-2-2025-06-11", "sonic-3.6"), ("sonic-turbo", "sonic-3.6"),
+    ("sonic", "sonic-3.6"), ("", "sonic-3.6"),
+    ("sonic-3.6", "sonic-3.6"), ("sonic-3", "sonic-3"), ("sonic-3.6-2026-08-27", "sonic-3.6-2026-08-27"),
+])
+async def test_cartesia_retired_models_are_sent_as_the_current_one(saved, sent):
+    """Cartesia retired sonic-2 and sonic-turbo after 20 Oct 2026, and sonic-2 was our default:
+    a saved setting naming a retired model is sent as sonic-3.6."""
+    tts = sp.build_tts({"provider": "cartesia", "voice": sp.GEMMA_UK_VOICE, "model": saved})
+    assert tts.model == sent
+    await tts.aclose()
