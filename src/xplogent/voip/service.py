@@ -92,6 +92,33 @@ def render_template(text: str, variables: dict[str, Any]) -> str:
     return out
 
 
+def opening_greeting(v: dict[str, Any], info: dict[str, Any], contact: dict[str, Any] | None,
+                     variables: dict[str, Any], template: dict[str, Any] | None) -> tuple[str, str]:
+    """The call's first line, and the first name it checks ("" when there is no identity
+    check). One place, so the warm-up synthesises exactly what the call will say."""
+    greeting_v = {**v, "greeting": template["greeting"]} if template else v
+    if info.get("via_queue") and str(v.get("queue_greeting") or "").strip():
+        greeting_v = {**greeting_v, "greeting": v["queue_greeting"]}   # disclosure rules still apply
+    greeting = render_template(effective_greeting(greeting_v), variables)
+    realtime_mode = str(v.get("mode") or "cascaded") == "realtime"
+    out_cfg = v.get("outbound") or {}
+    first_name = variables.get("first_name") or (str((contact or {}).get("name") or "").split() or [""])[0]
+    if is_outbound(info) and out_cfg.get("identity_check", True) and first_name and not realtime_mode:
+        # Privacy: who are we speaking to, before any word about a job or an application.
+        line = str(out_cfg.get("identity_line") or "").strip() or identity_line(v)
+        return render_template(effective_greeting({**v, "greeting": line}),
+                               {**variables, "first_name": first_name}), first_name
+    return greeting, ""
+
+
+def call_template(v: dict[str, Any], info: dict[str, Any]) -> dict[str, Any] | None:
+    """The call template for this direction (an outbound script never greets an inbound caller)."""
+    template = get_template(v.get("template"))
+    if template and template["direction"] != ("outbound" if is_outbound(info) else "inbound"):
+        return None
+    return template
+
+
 def voicemail_message(vm: dict[str, Any], variables: dict[str, Any]) -> str:
     """The message left on an answering machine, filled from the call; "" (hang up silently)
     when it is blank or a placeholder has no value (e.g. no callback number set yet): a
@@ -358,20 +385,17 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         kinds = tuple(k for k in (guard_cfg.get("check") or KINDS) if k in KINDS)
         if kinds:
             brain.enable_guard(kinds)
-    greeting_v = {**v, "greeting": template["greeting"]} if template else v
-    if info.get("via_queue") and str(v.get("queue_greeting") or "").strip():
-        greeting_v = {**greeting_v, "greeting": v["queue_greeting"]}   # disclosure rules still apply
-    greeting = render_template(effective_greeting(greeting_v), variables)
+    greeting, identity = opening_greeting(v, info, contact, variables, template)
+    if identity:
+        brain.identity_check = identity
+    if is_outbound(info) and tts is None and "prepared_audio" not in session_kw:
+        from xplogent.voip import warmup
+
+        # Synthesised while the phone rang (warmup.start in dial): the first words play at once.
+        session_kw["prepared_audio"] = warmup.take(v, greeting)
     outbound = is_outbound(info)
     realtime_mode = str(v.get("mode") or "cascaded") == "realtime"
     out_cfg = v.get("outbound") or {}
-    first_name = variables.get("first_name") or (str((contact or {}).get("name") or "").split() or [""])[0]
-    if outbound and out_cfg.get("identity_check", True) and first_name and not realtime_mode:
-        # Privacy: who are we speaking to, before any word about a job or an application.
-        line = str(out_cfg.get("identity_line") or "").strip() or identity_line(v)
-        greeting = render_template(effective_greeting({**v, "greeting": line}),
-                                   {**variables, "first_name": first_name})
-        brain.identity_check = first_name
     if outbound and not realtime_mode:
         session_kw.setdefault("listen_first", bool(out_cfg.get("listen_first", True)))
         session_kw.setdefault("hello_wait_s", float(out_cfg.get("hello_wait_s", 2.5)))
@@ -752,6 +776,10 @@ class VoipService:
                         _log.warning("calling %s without the CRM dial lock: %s", number, meta["lock_warning"])
         if via in ("sip", "extension"):
             meta["line"] = via if via == "extension" else "trunk"
+        if not test and meta.get("brief"):
+            from xplogent.voip import warmup
+
+            warmup.start(cfg, number, meta)          # the opening line, while the phone rings
         if via in ("sip", "extension"):
             dialer = self.sip_dialer if via == "sip" else self.sip_extension_dialer
             if dialer is None:
@@ -843,6 +871,12 @@ class VoipService:
                 await self.run_due_callbacks()
             except Exception:  # noqa: BLE001 - keep the loop alive
                 _log.exception("callback runner failed")
+            try:
+                from xplogent.voip import warmup
+
+                warmup.sweep()                  # staged data of calls never answered (> 1 day)
+            except Exception:  # noqa: BLE001
+                _log.exception("staging sweep failed")
 
     # -- live calls -----------------------------------------------------------------------
     def live_by_ref(self, ref: str) -> LiveCall | None:

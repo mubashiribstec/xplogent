@@ -164,6 +164,7 @@ class CallSession:
                  recorder: Any = None, stream_stt: Any = None,
                  listen_first: bool = False, hello_wait_s: float = 2.5, amd: Any = None,
                  voicemail_message: str = "",
+                 prepared_audio: dict[str, tuple[list[bytes], int]] | None = None,
                  wrap_up_s: float = 60.0, quick_close_s: float = 45.0, cost_cap: float = 0.0,
                  cost_rates: dict[str, float] | None = None) -> None:
         self.brain, self.stt, self.tts = brain, stt, tts
@@ -181,6 +182,8 @@ class CallSession:
         self.amd = amd                      # amd.MachineDetector (outbound) or None
         # Left on an answering machine after its beep (or a pause); "" = hang up silently.
         self.voicemail_message = (voicemail_message or "").strip()
+        # Opening-line audio synthesised while the phone rang (voip.warmup): text -> (pcm, rate).
+        self._prepared = dict(prepared_audio or {})
         self._vm_state = ""                 # "" | "waiting" (for the beep) | "leaving"
         self._vm_quiet_s = self._vm_wait_s = 0.0
         self._vm_task: asyncio.Task | None = None
@@ -976,10 +979,23 @@ class CallSession:
                 self.recorder.agent(frame)
             play_end = max(play_end, loop.time()) + len(frame) / 8000.0
 
+        prepared = self._prepared.pop(text, None)
+        if prepared is not None:
+            self.event("prepared_audio", text[:60])
+
+        async def source():
+            if prepared is not None:            # synthesised during the ringing: no TTS wait
+                for chunk in prepared[0]:
+                    yield chunk
+            else:
+                async for chunk in self.tts.synthesize(text):
+                    yield chunk
+
         try:
             carry = b""
-            rs = Resampler(self.tts.sample_rate, 8000)  # one per utterance: no clicks between chunks
-            async for pcm in self.tts.synthesize(text):
+            # one resampler per utterance: no clicks between chunks
+            rs = Resampler(prepared[1] if prepared is not None else self.tts.sample_rate, 8000)
+            async for pcm in source():
                 carry += pcm16_to_mulaw(rs.feed(pcm))
                 while len(carry) >= MULAW_FRAME:
                     await push(carry[:MULAW_FRAME])

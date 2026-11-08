@@ -104,7 +104,8 @@ async def test_dial_checks_hours_dnc_and_remembers_the_contact(telnyx):
     res = await svc.dial("+15550101111", contact_id=cid)
     assert not res["ok"] and res["hours"] and not telnyx.dialed
     assert (await svc.dial("+15550101111", contact_id=cid, ignore_hours=True))["ok"]
-    assert svc.telnyx.outbound["cc-1"] == {"contact_id": cid, "test": False, "transport": "telnyx"}
+    assert svc.telnyx.outbound["cc-1"] == {"contact_id": cid, "test": False, "transport": "telnyx",
+                                         "number": "+15550101111"}
     assert (await svc.dial("+1 555 010 3333", test=True))["ok"]
     assert telnyx.dialed == ["+15550101111", "+15550103333"]
     assert "do-not-call" in (await svc.dial("+15550102222", test=True))["error"]
