@@ -92,6 +92,19 @@ def render_template(text: str, variables: dict[str, Any]) -> str:
     return out
 
 
+def voicemail_message(vm: dict[str, Any], variables: dict[str, Any]) -> str:
+    """The message left on an answering machine, filled from the call; "" (hang up silently)
+    when it is blank or a placeholder has no value (e.g. no callback number set yet): a
+    message with a hole in it is never left."""
+    values = {**variables, "callback_number": str(vm.get("callback_number") or "").strip()}
+    # Only real values: an empty one must leave its placeholder, so the check below sees the hole.
+    text = render_template(str(vm.get("message") or "").strip(),
+                           {k: val for k, val in values.items() if val not in (None, "")})
+    if not text or re.search(r"\{\{?\s*\w+\s*\}?\}", text):
+        return ""
+    return text
+
+
 def call_variables(v: dict[str, Any], info: dict[str, Any],
                    contact: dict[str, Any] | None, customer: str) -> dict[str, Any]:
     """The variables available to greeting/persona/playbook templates on a call."""
@@ -369,6 +382,8 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
             session_kw["amd"] = MachineDetector(window_s=float(vm.get("window_s", 6)),
                                                 long_speech_s=float(vm.get("long_speech_s", 4)),
                                                 beep=bool(vm.get("beep", True)))
+            if "voicemail_message" not in session_kw:
+                session_kw["voicemail_message"] = voicemail_message(vm, variables)
     # Limits: the campaign's, else the template's, else the general maximum call length.
     max_call_s = float(brief.get("max_call_seconds") or (template or {}).get("max_call_seconds")
                        or v.get("max_call_seconds", 900))

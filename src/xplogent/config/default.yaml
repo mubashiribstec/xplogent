@@ -260,8 +260,13 @@ voip:
     hello_wait_s: 2.5
     identity_check: true           # open with "Am I speaking with <first name>?"; why we're calling only after a yes
     identity_line: ""              # "" = "Hi, this is {company}'s AI assistant, on a recorded line. Am I speaking with {first_name}?"
-  voicemail:                       # answering machines on outbound calls: hang up, leave no message (outcome voicemail)
+  voicemail:                       # answering machines on outbound calls (outcome voicemail)
     detect: true
+    # Left after the beep (or 2 s of quiet); "" = hang up without a message. Placeholders come from the
+    # call ({first_name}, {company}, {role}, {location}) and callback_number below; if one has no value,
+    # no message is left (so nothing is left until callback_number is set).
+    message: "Hello {first_name}, this is {company}'s AI assistant calling about a {role} role. Please call us back on {callback_number}. Thank you."
+    callback_number: ""            # the number candidates should ring back, e.g. "0113 496 0000"
     window_s: 6                    # watch the first seconds after answer
     long_speech_s: 4               # speech this long without a pause = a recorded greeting
     beep: true                     # a voicemail beep (800-1200 Hz tone) = machine

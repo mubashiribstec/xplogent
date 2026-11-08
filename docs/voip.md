@@ -271,9 +271,15 @@ FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every
     (outcome `wrong_person`).
   - **Answering machines:** in the first seconds the agent checks for speech that runs on
     without a pause (> 4 s), voicemail phrases ("leave a message", "you've reached…") and the
-    beep (an 800–1,200 Hz tone). On a machine it hangs up silently: outcome `voicemail`, which
-    the CRM counts as an attempt. On Telnyx calls the carrier's detection is used as well
+    beep (an 800–1,200 Hz tone). On a machine the outcome is `voicemail`, which the CRM counts
+    as an attempt. On Telnyx calls the carrier's detection is used as well
     (`voicemail.telnyx_amd: premium`).
+  - **Voicemail message** (`voicemail.message`, `voicemail.callback_number`; Setup →
+    Conversation): after the beep, or once the recorded greeting has been quiet for 2 s (30 s
+    at most), the agent leaves the message and hangs up; the call's summary says "voicemail
+    message left". `{first_name}`, `{company}`, `{role}`, `{location}` and `{callback_number}`
+    are filled from the call. If one has no value, or the message is blank, it hangs up without a
+    word, so nothing is left until you set the call-back number.
 - **Exact-time callbacks** (Calls → Callbacks; `voip.callbacks`, `voip.recruiter_hours`): the
   agent knows today's date and time and books "tomorrow at half five" as an exact time.
   - The time is checked: it must be in the future, within 30 days, and inside the calling hours

@@ -269,9 +269,24 @@ export function Calls() {
             <label className="bud"><span className="lbl-sm">Answering machines</span>
               <select value={cfg.voicemail?.detect === false ? "off" : "on"}
                 onChange={(e) => save({ voicemail: { ...(cfg.voicemail ?? {}), detect: e.target.value === "on" } })}>
-                <option value="on">detect and hang up (no message left)</option>
+                <option value="on">detect (leave the message below, if set)</option>
                 <option value="off">don't detect</option></select></label>
           </div>
+          {cfg.voicemail?.detect !== false && <div className="row wrap" style={{ gap: 10 }}>
+            <label className="bud" style={{ flex: 1, minWidth: 280 }}>
+              <span className="lbl-sm">Voicemail message (after the beep; blank = hang up without one)</span>
+              <textarea rows={2} defaultValue={cfg.voicemail?.message ?? ""} key={cfg.voicemail?.message}
+                onBlur={(e) => save({ voicemail: { ...(cfg.voicemail ?? {}), message: e.target.value.trim() } })} /></label>
+            <label className="bud"><span className="lbl-sm">Call-back number in it</span>
+              <input defaultValue={cfg.voicemail?.callback_number ?? ""} key={cfg.voicemail?.callback_number}
+                placeholder="e.g. 0113 496 0000" style={{ width: 160 }}
+                onBlur={(e) => save({ voicemail: { ...(cfg.voicemail ?? {}), callback_number: e.target.value.trim() } })} /></label>
+            <p className="dim" style={{ fontSize: 12, width: "100%", margin: 0 }}>
+              {"{first_name}"}, {"{company}"}, {"{role}"}, {"{location}"} and {"{callback_number}"} are filled from the
+              call; if one has no value, no message is left (so nothing is left until the call-back number is set).
+              {!cfg.voicemail?.callback_number && <span className="warn"> No call-back number yet: machines get no message.</span>}
+            </p>
+          </div>}
           {status?.spend_today !== undefined && <p className="dim" style={{ fontSize: 12 }}>
             Spent today (estimate): <b>${status.spend_today.toFixed(2)}</b>
             {status.daily_cost_cap ? <> of ${status.daily_cost_cap.toFixed(2)}{status.spend_today >= status.daily_cost_cap

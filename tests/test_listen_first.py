@@ -254,3 +254,61 @@ async def test_telnyx_machine_event_ends_the_call():
                                               "payload": {"call_control_id": "cc-9", "result": "human_residence"}}})
     await asyncio.sleep(0.05)
     assert seen == ["Telnyx: machine"]
+
+
+# ── a voicemail message after the beep (handover 8 Nov, Part 3 #13) ─────────────────
+VM = "Hello Sarah, this is Kingsbury's AI assistant calling about a Care Assistant role. Please call us back on 0113 496 0000. Thank you."
+
+
+async def test_beep_then_the_voicemail_message_then_hangup():
+    session, sent, turns, hung = outbound_session(hello_wait_s=5, voicemail_message=VM)
+    await session.start()
+    await session.on_audio(pcm16_to_mulaw(sine(1000, 400)))      # the beep
+    assert await wait_for(lambda: bool(hung))
+    assert session.tts.spoken == [VM] and ("agent", VM) in turns
+    st = session.brain.state
+    assert st.outcome == "voicemail" and "voicemail message left" in st.summary
+    assert any(e["kind"] == "voicemail_message" for e in session.timeline)
+    await session.stop()
+
+
+async def test_a_recorded_greeting_is_waited_out_before_the_message():
+    session, sent, turns, hung = outbound_session(long_speech_s=1.0, hello_wait_s=5, voicemail_message=VM)
+    await session.start()
+    await session.on_audio(tone_mulaw(1300))                    # their greeting: a machine
+    assert session.brain.state.outcome == "voicemail" and not hung
+    await session.on_audio(tone_mulaw(1500))                    # still talking: wait
+    await asyncio.sleep(0.05)
+    assert not session.tts.spoken, "never speak over the recorded greeting"
+    await session.on_audio(silence_mulaw(2700))                  # it stopped (no beep on this one)
+    assert await wait_for(lambda: bool(hung))
+    assert session.tts.spoken == [VM]
+    await session.stop()
+
+
+def test_voicemail_message_is_filled_from_the_call_or_not_left():
+    from xplogent.voip.service import voicemail_message
+
+    cfg = load_config()
+    vm = dict(cfg.voip["voicemail"])
+    variables = {"first_name": "Sarah", "company": "Kingsbury", "role": "Care Assistant"}
+    assert voicemail_message(vm, variables) == ""                # no callback number yet: no message
+    vm["callback_number"] = "0113 496 0000"
+    assert voicemail_message(vm, variables) == VM
+    assert voicemail_message(vm, {**variables, "role": None}) == ""   # a hole: never left
+    assert voicemail_message({**vm, "message": ""}, variables) == ""
+
+
+def test_the_message_reaches_outbound_calls_only():
+    save_user_config({"voip": {"company": "Kingsbury", "template": "kingsbury_outbound_screener",
+                               "voicemail": {"callback_number": "0113 496 0000"}}})
+    out = {"direction": "outgoing", "from": "+441130000000", "to": "+447700900123", "transport": "sip",
+           "brief": BRIEF}
+    _, store, session, _, _ = _build(out)
+    assert session.voicemail_message == ("Hello Sarah, this is Kingsbury's AI assistant calling about a "
+                                         "Care Assistant role. Please call us back on 0113 496 0000. Thank you.")
+    store.close()
+    inbound = {"direction": "incoming", "from": "+447700900123", "to": "+441130000000", "transport": "sip"}
+    _, store, session, _, _ = _build(inbound)
+    assert session.voicemail_message == ""
+    store.close()

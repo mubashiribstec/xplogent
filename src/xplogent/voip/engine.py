@@ -163,6 +163,7 @@ class CallSession:
                  dtmf_keys: dict[str, str] | None = None, dtmf_gap_s: float = 2.0,
                  recorder: Any = None, stream_stt: Any = None,
                  listen_first: bool = False, hello_wait_s: float = 2.5, amd: Any = None,
+                 voicemail_message: str = "",
                  wrap_up_s: float = 60.0, quick_close_s: float = 45.0, cost_cap: float = 0.0,
                  cost_rates: dict[str, float] | None = None) -> None:
         self.brain, self.stt, self.tts = brain, stt, tts
@@ -178,6 +179,11 @@ class CallSession:
         self._awaiting_hello = False
         self._hello_task: asyncio.Task | None = None
         self.amd = amd                      # amd.MachineDetector (outbound) or None
+        # Left on an answering machine after its beep (or a pause); "" = hang up silently.
+        self.voicemail_message = (voicemail_message or "").strip()
+        self._vm_state = ""                 # "" | "waiting" (for the beep) | "leaving"
+        self._vm_quiet_s = self._vm_wait_s = 0.0
+        self._vm_task: asyncio.Task | None = None
         self.send_audio, self.clear_audio = send_audio, clear_audio
         self.hangup_cb, self.transfer_cb = hangup, transfer
         self.on_turn = on_turn
@@ -323,8 +329,9 @@ class CallSession:
             await self._machine(self.amd.reason)
 
     async def _machine(self, reason: str) -> None:
-        """An answering machine: hang up without leaving a message (outcome voicemail)."""
-        if self.finished.is_set():
+        """An answering machine (outcome voicemail): leave the voicemail message after the
+        beep if one is set, else hang up without a word."""
+        if self.finished.is_set() or self._vm_state:
             return
         self.event("voicemail", reason)
         _log.info("answering machine detected (%s): hanging up", reason)
@@ -339,7 +346,39 @@ class CallSession:
         if self.clear_audio:
             with contextlib.suppress(Exception):
                 await self.clear_audio()
+        if self.voicemail_message:
+            # Wait for the beep (or the greeting to stop) before speaking: on_audio watches.
+            self._vm_state, self._vm_quiet_s, self._vm_wait_s = "waiting", 0.0, 0.0
+            if "beep" in reason:
+                self._start_voicemail()
+            return
         await self._hangup("answering machine")
+
+    def _vm_frame(self, frame: bytes) -> None:
+        """While waiting to leave a message: the beep, 2 s of quiet, or 30 s at most."""
+        from xplogent.voip.audio import rms
+
+        self._vm_wait_s += len(frame) / 16000
+        loud = rms(frame) >= self.vad.threshold      # the recorded greeting still playing
+        self._vm_quiet_s = 0.0 if loud else self._vm_quiet_s + len(frame) / 16000
+        beep = self.amd is not None and self.amd.beep is not None and self.amd.beep.feed(frame)
+        if beep or self._vm_quiet_s >= 2.0 or self._vm_wait_s >= 30.0:
+            self._start_voicemail()
+
+    def _start_voicemail(self) -> None:
+        self._vm_state = "leaving"
+        self._vm_task = asyncio.create_task(self._leave_voicemail())
+
+    async def _leave_voicemail(self) -> None:
+        st = self.brain.state
+        self.event("voicemail_message")
+        self._record("agent", self.voicemail_message)
+        try:
+            await self._say(self.voicemail_message)
+            st.summary = f"Answering machine ({self.amd.reason if self.amd else 'detected'}); voicemail message left."
+        except Exception:  # noqa: BLE001 - the voice failed: still end the call cleanly
+            _log.exception("leaving the voicemail message failed")
+        await self._hangup("voicemail message left")
 
     async def machine_detected(self, reason: str) -> None:
         """The carrier's own detection (Telnyx) said machine."""
@@ -350,7 +389,7 @@ class CallSession:
             self.event("ended")
         self.finished.set()
         for task in (self._turn_task, self._watchdog, self._transfer_timer, self._dtmf_timer,
-                     self._hello_task):
+                     self._hello_task, self._vm_task):
             if task and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -402,6 +441,10 @@ class CallSession:
         while len(self._pending) >= FRAME_BYTES:
             frame = bytes(self._pending[:FRAME_BYTES])
             del self._pending[:FRAME_BYTES]
+            if self._vm_state:                     # an answering machine: only the message is left
+                if self._vm_state == "waiting":
+                    self._vm_frame(frame)
+                continue
             event = self.vad.feed(frame)
             if self.amd is not None and not self.amd.done and \
                     self.amd.frame(frame, self.vad.in_speech):
