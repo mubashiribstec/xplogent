@@ -362,7 +362,7 @@ export async function listOllamaServers(): Promise<{ servers: OllamaServer[] }> 
 }
 export const saveOllamaServer = (s: { name: string; host: string; token?: string }) =>
   postJSON<{ ok: boolean; error?: string; servers?: OllamaServer[] }>("/providers/ollama/servers", s);
-export async function deleteOllamaServer(name: string): Promise<{ ok: boolean; servers: OllamaServer[] }> {
+export async function deleteOllamaServer(name: string): Promise<{ ok: boolean; servers?: OllamaServer[]; error?: string; used_by?: string[] }> {
   return (await fetch(`/providers/ollama/servers/${encodeURIComponent(name)}`, { method: "DELETE" })).json();
 }
 export const saveOllama = (host: string, token: string) =>

@@ -326,7 +326,9 @@ function OllamaServerRow({ server, onUse, flash, onChange, onCancel }: {
         {isNew ? <button onClick={onCancel}>Cancel</button>
           : <button className="danger" onClick={async () => {
               if (!confirm(`Remove the server "${server.name}" and its token?`)) return;
-              await deleteOllamaServer(server.name); flash(`server ${server.name} removed`); onChange();
+              const res = await deleteOllamaServer(server.name);
+              if (!res.ok) { flash(res.error || `couldn't remove ${server.name}`); return; }
+              flash(`server ${server.name} removed`); onChange();
             }}>Remove</button>}
       </div>
       {probe && (probe.ok

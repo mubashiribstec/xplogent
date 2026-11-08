@@ -181,11 +181,31 @@ async def ollama_servers_save(body: dict) -> dict:
     return {"ok": True, **(await ollama_servers_list())}
 
 
+def settings_using_server(cfg, name: str) -> list[str]:
+    """The model settings that run on the named Ollama server (``ollama:<model>@<name>``)."""
+    from xplogent.providers.ollama import split_server
+    from xplogent.providers.registry import backup_target_spec
+
+    settings = {"Chat model": cfg.model, "Summaries (reflection) model": cfg.reflection_model,
+                "Embedding model": cfg.embedding_model, "Vision model": cfg.vision_model,
+                "Model for calls": str((cfg.voip or {}).get("model") or ""),
+                "Backup model": backup_target_spec(cfg.raw.get("fallback") or {})}
+    return [label for label, spec in settings.items()
+            if str(spec or "").startswith("ollama:") and split_server(str(spec)[7:])[1] == name]
+
+
 @router.delete("/providers/ollama/servers/{name}")
 async def ollama_servers_delete(name: str) -> dict:
     from xplogent.core.config import delete_env
     from xplogent.providers.ollama import ollama_servers, server_token_env
 
+    used = settings_using_server(load_config(), name)
+    if used:
+        # Removing it would leave those settings pointing at nothing (the backup test then
+        # failed with a 500): change them first.
+        return {"ok": False, "used_by": used,
+                "error": f"'{name}' is still used by: {', '.join(used)}. Choose another model for "
+                         "those first, then remove the server."}
     _save_servers([s for s in ollama_servers() if s["name"] != name])
     delete_env([server_token_env(name)])
     deps.audit_event("ollama_server_removed", target=name, risk="medium")
@@ -284,7 +304,10 @@ async def backup_model_test() -> dict:
     spec = _backup_target()[0]
     if not spec:
         return {"ok": False, "error": "choose a backup model first"}
-    provider = build_provider(spec, fallback=False)
+    try:
+        provider = build_provider(spec, fallback=False)
+    except Exception as exc:  # noqa: BLE001 - e.g. its Ollama server was removed: say so, never 500
+        return {"ok": False, "error": f"{exc}"[:300], "model": spec}
     started = time.monotonic()
     try:
         reply = await asyncio.wait_for(provider.complete(

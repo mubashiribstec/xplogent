@@ -153,3 +153,37 @@ def test_kokoro_voice_lists_old_and_new_shapes():
     assert _voice_entry({"id": "af_bella", "name": "af_bella", "overall_grade": "A-"}) == \
         {"id": "af_bella", "name": "af_bella (A-)"}
     assert _voice_entry({"id": "af_amelia_inno", "name": "af_amelia_inno"})["id"] == "af_amelia_inno"
+
+
+def test_a_server_in_use_cannot_be_removed_and_a_missing_one_never_500s(client, monkeypatch):
+    """Removing a named server used to leave ``fallback.model …@gpu`` behind, and then
+    ``POST /providers/backup/test`` answered 500. Removal now refuses while a setting uses
+    the server; a config that already points at a missing server gets a clear error."""
+    from xplogent.interfaces.api.routes import system
+
+    async def fake_probe(host, token, timeout=8.0):
+        return {"ok": True, "models": ["qwen2.5:7b"]}
+
+    monkeypatch.setattr(system, "_probe_ollama", fake_probe)
+    client.post("/providers/ollama/servers", json={"name": "gpu", "host": "https://gpu.example.com"})
+    client.post("/providers/backup", json={"model": "ollama:qwen2.5:7b@gpu", "enabled": True})
+    save_user_config({"voip": {"model": "ollama:qwen2.5:7b@gpu"}})
+    refused = client.delete("/providers/ollama/servers/gpu").json()
+    assert not refused["ok"] and set(refused["used_by"]) == {"Backup model", "Model for calls"}
+    assert "Choose another model" in refused["error"]
+    assert client.get("/providers/ollama/servers").json()["servers"][0]["name"] == "gpu"   # still there
+
+    # An older install that already lost the server: errors, not a 500.
+    from xplogent.interfaces.api.routes.system import _save_servers
+    _save_servers([])
+    test = client.post("/providers/backup/test")
+    assert test.status_code == 200
+    assert not test.json()["ok"] and "no Ollama server named 'gpu'" in test.json()["error"]
+    st = client.get("/providers/backup").json()
+    assert not st["ready"] and "no Ollama server named 'gpu'" in st["problem"]
+
+    # Once nothing uses it, removal works.
+    client.post("/providers/ollama/servers", json={"name": "gpu", "host": "https://gpu.example.com"})
+    client.post("/providers/backup", json={"model": "gemini:gemini-3.6-flash"})
+    save_user_config({"voip": {"model": ""}})
+    assert client.delete("/providers/ollama/servers/gpu").json()["ok"]
