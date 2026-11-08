@@ -189,3 +189,52 @@ async def test_lookup_carries_the_cv_excerpt(env):
     assert "NVQ Level 2" in found["contact"]["cv_excerpt"]
     brief = service_mod.brief_from_lookup(found["contact"])
     assert "NVQ Level 2" in brief["candidate"]["cv_excerpt"]
+
+
+# ── busy / unanswered calls the CRM asked for reach the CRM (handover 8 Nov, Part 3 #14) ──
+def _crm_rows(cfg):
+    with Store(cfg.db_path) as store:
+        return [(c, store.get_crm_payload(c["id"])) for c in store.list_calls(20)]
+
+
+def test_a_busy_crm_call_is_logged_and_sent_to_the_crm(env):
+    client, svc, mock = env
+
+    async def busy(number, meta):
+        svc.metas.append((number, meta))
+        return {"ok": False, "error": f"call to {number}: 486 Busy Here"}
+    svc.sip_dialer = busy
+    raw, headers = _signed(BODY)
+    res = client.post("/voip/crm/dial", content=raw, headers=headers).json()
+    assert not res["ok"] and "486" in res["error"]          # the page still hears why
+    cfg = load_config()
+    rows = _crm_rows(cfg)
+    assert len(rows) == 1
+    call, payload = rows[0]
+    assert call["outcome"] == "busy" and call["direction"] == "outbound"
+    assert payload["outcome"] == "busy" and payload["applicant_id"] == 123 and payload["sale_id"] == 45
+    import asyncio
+    sent = asyncio.run(crm.send_queued(cfg, call["id"], payload))
+    assert sent["status"] != "failed" and mock.events[call["id"]]["outcome"] == "busy"
+
+
+def test_a_crm_call_that_rang_out_later_is_logged(env):
+    client, svc, mock = env
+    raw, headers = _signed(BODY)
+    assert client.post("/voip/crm/dial", content=raw, headers=headers).json()["ok"]
+    number, meta = svc.metas[-1]
+    svc.not_answered(dict(meta), f"call to {number}: 480 Temporarily Unavailable")   # what the SIP line reports
+    call, payload = _crm_rows(load_config())[0]
+    assert call["outcome"] == "no_answer" and call["to_number"] == number
+    assert payload["outcome"] == "no_answer" and payload["applicant_id"] == 123
+
+
+def test_our_own_line_failing_is_not_sent_as_the_candidates_outcome(env):
+    client, svc, mock = env
+
+    async def auth_fail(number, meta):
+        return {"ok": False, "error": f"call to {number}: 401 Unauthorized"}
+    svc.sip_dialer = auth_fail
+    raw, headers = _signed(BODY)
+    assert not client.post("/voip/crm/dial", content=raw, headers=headers).json()["ok"]
+    assert _crm_rows(load_config()) == []

@@ -637,6 +637,11 @@ def recover_interrupted_calls(cfg: Config | None = None, live_ids: set[int] | No
     return ids
 
 
+def crm_asked(brief: dict[str, Any] | None) -> bool:
+    """A call the CRM's Agent call page asked for (not a campaign item)."""
+    return bool(brief) and brief.get("source") == "crm_agent_call" and not brief.get("campaign_item_id")
+
+
 class VoipService:
     """Transport-agnostic call service: live-call registry and outbound policy.
 
@@ -693,7 +698,7 @@ class VoipService:
         if cap_problem := daily_cap_problem(cfg):             # test calls cost money too
             return {"ok": False, "error": cap_problem, "cost_cap": True}
         # Both SIP lines share the "sip" transport; the line tag keeps them apart.
-        meta = {"contact_id": contact["id"] if contact else None, "test": test,
+        meta = {"contact_id": contact["id"] if contact else None, "test": test, "number": number,
                 "transport": "sip" if via in ("sip", "extension") else via}
         if brief and not brief.get("campaign_item_id"):   # a lease from an earlier call is never reused
             brief = {k: val for k, val in brief.items() if k not in _LOCK_KEYS}
@@ -743,15 +748,38 @@ class VoipService:
             res = await self.telnyx.dial(number, meta, v)
         if not test:
             alerts.dial_result(res)          # 5 carrier/line failures in a row → alert
+        if not res.get("ok") and not test and via in ("sip", "extension") and crm_asked(brief):
+            # Refused before it rang for long (busy, unavailable): the CRM still hears about it.
+            self.record_crm_unanswered(cfg, number, brief or {}, str(res.get("error") or "dial failed"))
         if not res.get("ok") and (brief or {}).get("manual_lock"):
             await release_manual_lock(cfg, brief)
         if meta.get("lock_warning") and res.get("ok"):
             res = {**res, "warning": meta["lock_warning"]}
         return res
 
+    def record_crm_unanswered(self, cfg: Config, phone: str, brief: dict[str, Any], reason: str) -> int | None:
+        """A call the CRM asked for (Agent call page) that was busy, rang out or failed at the
+        callee: log it and send the CRM a call summary, as a campaign attempt does. Our own
+        line failing (credentials, line off) is not the candidate's outcome: nothing is sent."""
+        from xplogent.voip.dialler import line_fault, log_unanswered_call
+
+        if line_fault(reason):
+            return None
+        try:
+            call_id, outcome = log_unanswered_call(cfg, phone, brief, reason)
+        except Exception:  # noqa: BLE001 - bookkeeping must never break the dial path
+            _log.exception("could not record the unanswered CRM call to %s", phone)
+            return None
+        _log.info("CRM-asked call to %s not answered (%s): %s", phone, outcome, reason[:120])
+        return call_id
+
     def not_answered(self, meta: dict[str, Any], reason: str) -> None:
-        """A line says a placed call rang out, was busy or failed (campaign bookkeeping)."""
+        """A line says a placed call rang out, was busy or failed (campaign bookkeeping, and
+        calls the CRM asked for)."""
         self.dialler.not_answered(meta, reason)
+        brief = meta.get("brief") or {}
+        if crm_asked(brief) and not meta.get("test"):
+            self.record_crm_unanswered(load_config(), str(meta.get("number") or ""), brief, reason)
         if (meta.get("brief") or {}).get("manual_lock"):
             _release_soon(load_config(), meta["brief"])
 

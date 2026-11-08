@@ -65,6 +65,21 @@ def line_fault(reason: str) -> bool:
     return bool(_LINE_FAULT.search(reason or ""))
 
 
+def log_unanswered_call(cfg: Config, phone: str, brief: dict[str, Any], reason: str) -> tuple[int, str]:
+    """Record a dial that never became a conversation as an ended call, and queue its
+    summary for the CRM (which writes the call log and ends the dial lock).
+    Returns ``(call_id, outcome)``."""
+    outcome = unanswered_outcome(reason)
+    with Store(cfg.db_path) as store:
+        call_id = store.start_call("outbound", "", phone, transport="", line="")
+        store.set_call_brief(call_id, brief)
+        store.end_call(call_id, outcome=outcome, summary=f"Not answered ({reason[:120]})")
+        if crm.crm_enabled(cfg):
+            payload = crm.build_payload(cfg, store, call_id, {"outcome": outcome})
+            crm.queue_summary(cfg, store, call_id, payload)
+    return call_id, outcome
+
+
 def line_not_ready(line: str) -> str:
     """A SIP line that is set up to register but isn't registered yet (e.g. just after a
     restart): wait for it instead of failing dials. A line that isn't set up at all still
@@ -304,14 +319,7 @@ class Dialler:
             await self._line_fault(cfg, campaign, item_id, int(item["attempts"]), item["phone"],
                                    str(item["brief"].get("lock_token") or ""), reason)
             return
-        with Store(cfg.db_path) as store:
-            outcome = unanswered_outcome(reason)
-            call_id = store.start_call("outbound", "", item["phone"], transport="", line="")
-            store.set_call_brief(call_id, item["brief"])
-            store.end_call(call_id, outcome=outcome, summary=f"Not answered ({reason[:120]})")
-            if crm.crm_enabled(cfg):
-                payload = crm.build_payload(cfg, store, call_id, {"outcome": outcome})
-                crm.queue_summary(cfg, store, call_id, payload)
+        call_id, outcome = log_unanswered_call(cfg, item["phone"], item["brief"], reason)
         await self.advance(cfg, item_id, outcome, call_id)
 
     async def advance(self, cfg: Config, item_id: int, outcome: str, call_id: int | None = None,
