@@ -70,6 +70,9 @@ _FILLER_WORDS = frozenset({
     "go", "on", "please", "thanks", "thank", "you",
 })
 _INTERRUPT_FIRST_WORDS = frozenset({"stop", "wait", "hold"})   # "stop", "wait a minute", "hold on"
+# A short "yes" / "okay" said while the agent is still asking its closing question is the
+# caller's answer, not a backchannel: it is held and answered once the reply has finished.
+_ANSWER_WORDS = frozenset({"yes", "yeah", "yep", "yup", "ok", "okay", "sure", "right"})
 
 
 def _filler_words(text: str) -> list[str]:
@@ -236,6 +239,10 @@ class CallSession:
         # Why a turn task was cancelled, by task id: "barge_in" | "superseded" |
         # "cancelled". Read by _reply's CancelledError handler for turn_timings.
         self._cancel_reasons: dict[int, str] = {}
+        # When the sentence now playing is a question (0 = it isn't), and a short answer
+        # ("yes") heard over it, to be answered when the reply ends instead of being lost.
+        self._question_since = 0.0
+        self._held_answer: tuple[str, dict[str, Any]] | None = None
 
     # -- lifecycle ---------------------------------------------------------------
     def event(self, kind: str, detail: str = "") -> None:
@@ -499,6 +506,13 @@ class CallSession:
             await self._machine(self.amd.reason)
             return
         if is_filler_utterance(text, speech_s):
+            if (self._question_since and self._barge_in_started_at >= self._question_since
+                    and set(_filler_words(text)) & _ANSWER_WORDS):
+                # "Yes" over "...are you free on Monday?": the answer, given early.
+                _log.info("answer held (%.2fs %r): answered when the question ends", speech_s, text)
+                self.event("answer_held", f"{speech_s:.2f}s {text}"[:200])
+                self._held_answer = (text, info)
+                return
             _log.info("filler ignored (%.2fs %r): reply keeps playing", speech_s, text)
             self.event("filler_ignored", f"{speech_s:.2f}s {text}"[:200])
             if text:
@@ -614,6 +628,7 @@ class CallSession:
             if len(text) < 2 and record_as is None:
                 return
             self._last_activity = time.time()
+            self._held_answer, self._question_since = None, 0.0
             self._record("caller", record_as or text)
             if self.amd is not None:
                 self.amd.conversation()          # a person is talking with the agent
@@ -643,11 +658,13 @@ class CallSession:
                         self.latencies_ms.append(first_ms)
                         stage["llm_first_sentence_ms"] = (sentence_at - reply_start) * 1000
                         self._say_first_frame_at = 0.0
+                        self._question_since = time.time() if sentence.rstrip().endswith("?") else 0.0
                         await self._say(sentence)
                         if self._say_first_frame_at:
                             stage["tts_first_audio_ms"] = (self._say_first_frame_at - sentence_at) * 1000
                             stage["total_ms"] = (self._say_first_frame_at - speech_end_at) * 1000
                         continue
+                    self._question_since = time.time() if sentence.rstrip().endswith("?") else 0.0
                     await self._say(sentence)
             except asyncio.CancelledError:
                 if reply_parts:     # interrupted: keep what the caller already heard
@@ -704,6 +721,12 @@ class CallSession:
                 self._record("agent", line)
                 await self._say(line)
             await self._after_turn()
+            self._question_since = 0.0
+            held, self._held_answer = self._held_answer, None
+            if held and not st.end and not self.finished.is_set():
+                # Answer the "yes" heard over the question. A new task: this one is ending,
+                # and _begin_turn would otherwise cancel it.
+                asyncio.create_task(self._begin_turn(b"", None, text=held[0], info=held[1]))
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - one bad turn must not drop the call

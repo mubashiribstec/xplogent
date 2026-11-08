@@ -167,3 +167,68 @@ async def test_speech_over_disclosure_is_answered_after_it():
     assert session._greeting_task.done() and not session._greeting_task.cancelled()
     assert any(s == "agent" and "We open at nine." in t for s, t in turns)
     await session.stop()
+
+
+# ── a short answer said over the agent's closing question (follow-up, 8 Nov) ─────
+class SequenceSTT:
+    """Returns the given texts in turn (the last one repeats)."""
+
+    def __init__(self, *texts):
+        self.texts, self.calls = list(texts), 0
+
+    async def transcribe(self, pcm):
+        self.calls += 1
+        return self.texts[min(self.calls, len(self.texts)) - 1]
+
+    async def aclose(self):
+        pass
+
+
+async def _wait_until(pred, timeout: float = 5.0) -> None:
+    for _ in range(int(timeout / 0.02)):
+        if pred():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("condition not reached")
+
+
+@pytest.mark.asyncio
+async def test_yes_over_the_closing_question_is_answered_after_it():
+    """'Yes' said while the agent is still asking 'Are you free on Monday?' is the
+    caller's answer: the question finishes, then the agent answers the 'yes'
+    (it used to be dropped as filler, leaving both sides waiting)."""
+    prov = ScriptedProvider([
+        Message(role=Role.ASSISTANT, content="Thanks for that. Are you free on Monday morning?"),
+        Message(role=Role.ASSISTANT, content="Great, I'll book you in for Monday."),
+    ])
+    session, sent, cleared, turns, _ = make_session(prov, tts=FakeTTS(delay=0.05, chunks=12))
+    session.stt = SequenceSTT("I'm interested in the job", "yes")
+    await session.start()
+    await speak_utterance(session)
+    await _wait_until(lambda: len(session.tts.spoken) >= 2 and session._speaking)  # the question plays
+    question_task = session._turn_task
+    await speak_utterance(session)              # "yes" over the question
+    assert not cleared, "the question is not cut off"
+    assert any(e["kind"] == "answer_held" for e in session.timeline)
+    await _wait_until(lambda: ("agent", "Great, I'll book you in for Monday.") in turns)
+    assert question_task.done() and not question_task.cancelled()
+    assert ("agent", "Thanks for that. Are you free on Monday morning?") in turns
+    assert turns.count(("caller", "yes")) == 1, turns
+    assert session.stt.calls == 2               # the held answer is not transcribed twice
+    await session.stop()
+
+
+@pytest.mark.asyncio
+async def test_yeah_over_a_statement_is_still_filler():
+    """Backchannel over a statement (no question playing) is ignored, as before."""
+    prov = ScriptedProvider([Message(role=Role.ASSISTANT, content=LONG_REPLY)])
+    session, sent, cleared, turns, _ = make_session(prov, tts=FakeTTS(delay=0.05, chunks=12))
+    session.stt = SequenceSTT("tell me about the job", "yeah")
+    await _start_long_reply(session)
+    await speak_utterance(session)
+    await _wait_done(session)
+    await asyncio.sleep(0.1)
+    assert any(e["kind"] == "filler_ignored" for e in session.timeline)
+    assert not any(e["kind"] == "answer_held" for e in session.timeline)
+    assert len(session.latencies_ms) == 1       # no second turn
+    await session.stop()
