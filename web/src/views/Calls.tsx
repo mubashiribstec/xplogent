@@ -12,7 +12,7 @@ import { CallAgentCard } from "./CallAgentCard";
 import { CallDebug } from "./CallDebug";
 import { GoLive } from "./GoLive";
 import { BrandingCard } from "./BrandingCard";
-import { FREE_MODELS } from "../lib/models";
+import { FAST_CALL_MODELS, FREE_MODELS } from "../lib/models";
 import { CardBoundary } from "../components/CardBoundary";
 import { AlertsCard } from "./AlertsCard";
 import { CallbacksCard } from "./CallbacksCard";
@@ -567,7 +567,7 @@ function CallModelPicker({ value, mainModel, presets, secrets, onPick }: {
     }).catch(() => undefined);
   };
   useEffect(() => { if (value.includes("@")) loadRemote(); }, []);   // the saved model is on a server: show it
-  const free = FREE_MODELS.map((f) => f.model);
+  const free = [...FREE_MODELS, ...FAST_CALL_MODELS].map((f) => f.model);
   const own = presets.filter((p) => !free.includes(p.model));
   const known = new Set(["", ...free, ...own.map((p) => p.model),
     ...remote.flatMap((r) => r.models.map((m) => `ollama:${m}@${r.server}`))]);
@@ -585,6 +585,8 @@ function CallModelPicker({ value, mainModel, presets, secrets, onPick }: {
         <select value={value} onFocus={loadRemote} onMouseDown={loadRemote}
           onChange={(e) => e.target.value === "__custom" ? setCustom(true) : onPick(e.target.value)}>
           <option value="">Main model{mainModel ? ` (${mainModel})` : ""}</option>
+          <optgroup label="Fast for calls (Vercel AI Gateway)">
+            {FAST_CALL_MODELS.map((f) => <option key={f.model} value={f.model}>{f.label}</option>)}</optgroup>
           <optgroup label="OpenRouter, free">
             {FREE_MODELS.map((f) => <option key={f.model} value={f.model}>{f.label}</option>)}</optgroup>
           {remote.map((r) => (
