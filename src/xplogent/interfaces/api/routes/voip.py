@@ -508,6 +508,34 @@ async def voip_speech_voices(provider: str = "") -> dict:
         return {"ok": False, "voices": [], "error": f"{type(exc).__name__}: {exc}"[:300]}
 
 
+# ── Deepgram Voice Agent (voip.mode: voice_agent) ───────────────────────────────────
+@router.get("/voip/voice-agent/models")
+async def voip_voice_agent_models() -> dict:
+    """The Deepgram-hosted models the Voice Agent can think with (live list, else built in)."""
+    from xplogent.voip.voice_agent import think_models
+
+    return {"ok": True, "models": await think_models(os.environ.get("DEEPGRAM_API_KEY", ""))}
+
+
+@router.get("/voip/voice-agent/voices")
+async def voip_voice_agent_voices() -> dict:
+    """Aura-2 voices for the Voice Agent (UK first)."""
+    from xplogent.voip.providers import DEEPGRAM_VOICES
+
+    return {"ok": True, "voices": [dict(v) for v in DEEPGRAM_VOICES]}
+
+
+@router.post("/voip/voice-agent/test")
+async def voip_voice_agent_test() -> dict:
+    """Connect to the Deepgram Voice Agent with the saved choices, send one typed turn and
+    time the first audio (no call is placed)."""
+    from xplogent.voip.voice_agent import DEFAULT_URL, probe
+
+    va = dict((load_config().voip or {}).get("voice_agent") or {})
+    return await probe(va, os.environ.get("DEEPGRAM_API_KEY", ""), dict(os.environ),
+                       url=str(va.get("url") or DEFAULT_URL))
+
+
 @router.get("/voip/calls")
 async def voip_calls(limit: int = 100) -> dict:
     with Store(load_config().db_path) as store:

@@ -305,7 +305,17 @@ voip:
     api_key_env: OPENAI_API_KEY
     language: en
     device: auto                   # whisper-local: auto | cpu | cuda
-  mode: cascaded                   # cascaded = speech-to-text -> model -> voice; realtime = OpenAI speech-to-speech (OPENAI_API_KEY; the greeting still uses the voice below)
+  mode: cascaded                   # cascaded = speech-to-text -> model -> voice; realtime = OpenAI speech-to-speech (OPENAI_API_KEY; the greeting still uses the voice below); voice_agent = Deepgram Voice Agent (DEEPGRAM_API_KEY; see voice_agent)
+  voice_agent:                     # voip.mode: voice_agent — Deepgram listens, thinks and speaks over one connection
+    listen_model: nova-3           # Deepgram speech-to-text model
+    think:                         # a Deepgram-hosted model (no extra key): open_ai | anthropic | google
+      provider: open_ai
+      model: gpt-4o-mini
+      temperature: 0.6
+    voice_provider: deepgram       # deepgram (Aura-2) | cartesia (your CARTESIA_API_KEY is passed to Deepgram, which calls Cartesia)
+    voice: aura-2-pandora-en       # Aura-2 voice (aura-2-pandora-en / aura-2-draco-en are British)
+    cartesia_voice: ""             # Cartesia voice id when voice_provider is cartesia (e.g. Gemma)
+    url: "wss://agent.deepgram.com/v1/agent/converse"
   realtime:                        # voip.mode: realtime
     provider: openai
     model: gpt-realtime

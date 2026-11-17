@@ -200,12 +200,32 @@ def brief_from_lookup(crm_contact: dict[str, Any]) -> dict[str, Any]:
             "callback_note": crm_contact.get("callback_note") or ""}
 
 
-def _session_class(v: dict[str, Any], session_kw: dict[str, Any]) -> tuple[type, dict[str, Any]]:
-    """The normal engine, or the realtime speech-to-speech one (``voip.mode: realtime``).
+SPEECH_TO_SPEECH = ("realtime", "voice_agent")
 
-    Tests may pass ``rt_url`` / ``rt_api_key`` in ``session_kw`` to point it at a fake server."""
-    overrides = {k: session_kw.pop(k) for k in ("rt_url", "rt_api_key") if k in session_kw}
-    if str(v.get("mode") or "cascaded") != "realtime":
+
+def speech_to_speech(v: dict[str, Any]) -> bool:
+    """A mode where one engine hears and speaks (no separate speech-to-text / voice)."""
+    return str(v.get("mode") or "cascaded") in SPEECH_TO_SPEECH
+
+
+def _session_class(v: dict[str, Any], session_kw: dict[str, Any]) -> tuple[type, dict[str, Any]]:
+    """The normal engine, the OpenAI realtime one (``voip.mode: realtime``) or the Deepgram
+    Voice Agent (``voip.mode: voice_agent``).
+
+    Tests may pass ``rt_url`` / ``rt_api_key`` / ``va_url`` / ``va_api_key`` in ``session_kw``
+    to point them at a fake server."""
+    overrides = {k: session_kw.pop(k) for k in ("rt_url", "rt_api_key", "va_url", "va_api_key")
+                 if k in session_kw}
+    mode = str(v.get("mode") or "cascaded")
+    if mode == "voice_agent":
+        from xplogent.voip.voice_agent import DEFAULT_URL, DeepgramAgentSession
+
+        va = v.get("voice_agent") or {}
+        return DeepgramAgentSession, {
+            "va_url": overrides.get("va_url", str(va.get("url") or DEFAULT_URL)),
+            "va_api_key": overrides.get("va_api_key", os.environ.get("DEEPGRAM_API_KEY", "")),
+            "va_settings": dict(va)}
+    if mode != "realtime":
         return CallSession, {}
     from urllib.parse import urlencode
 
@@ -394,7 +414,7 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         # Synthesised while the phone rang (warmup.start in dial): the first words play at once.
         session_kw["prepared_audio"] = warmup.take(v, greeting)
     outbound = is_outbound(info)
-    realtime_mode = str(v.get("mode") or "cascaded") == "realtime"
+    realtime_mode = speech_to_speech(v)          # the speech engine itself listens and answers
     out_cfg = v.get("outbound") or {}
     if outbound and not realtime_mode:
         session_kw.setdefault("listen_first", bool(out_cfg.get("listen_first", True)))

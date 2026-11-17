@@ -59,7 +59,9 @@ async def prepare(cfg: Config, number: str, meta: dict[str, Any], tts: Any = Non
 
     try:
         v, greeting = _opening(cfg, number, meta)
-        if not greeting or str(v.get("mode") or "cascaded") == "realtime":
+        from xplogent.voip.service import speech_to_speech
+
+        if not greeting or speech_to_speech(v):      # that engine speaks its own greeting
             return ""
         key = _key(v, greeting)
         if key in _CACHE and time.time() - _CACHE[key][0] < TTL_S:

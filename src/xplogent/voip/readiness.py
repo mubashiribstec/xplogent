@@ -204,6 +204,18 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
             add("sip_extension_registered", "PBX extension registration", bool(st.get("registered")),
                 "registered" if st.get("registered") else (st.get("error") or "not registered yet"))
         _capacity(add, "sip_extension_capacity", "PBX extension capacity", sip_extension_status or {})
+    if str(v.get("mode") or "cascaded") == "voice_agent":
+        va = v.get("voice_agent") or {}
+        ok = _key(env, "DEEPGRAM_API_KEY")
+        cartesia = str(va.get("voice_provider") or "deepgram") == "cartesia"
+        problem = ("Voice Agent mode needs a Deepgram key (Speech card); calls fall back to the "
+                   "standard mode without it") if not ok else ""
+        if ok and cartesia and not (_key(env, "CARTESIA_API_KEY") and str(va.get("cartesia_voice") or "").strip()):
+            ok, problem = False, "the Voice Agent's Cartesia voice needs CARTESIA_API_KEY and a voice (Speech card)"
+        think = va.get("think") or {}
+        add("voice_agent", "Deepgram Voice Agent", ok, problem or
+            f"{think.get('provider') or 'open_ai'}:{think.get('model') or 'gpt-4o-mini'} · "
+            f"{(va.get('cartesia_voice') if cartesia else va.get('voice')) or 'aura-2-pandora-en'}")
     if str(v.get("mode") or "cascaded") == "realtime":
         ok = _key(env, "OPENAI_API_KEY")
         add("realtime", "Realtime voice (OpenAI)", ok,
