@@ -79,7 +79,7 @@ export function ModelBar({ value, onChange }:
           </optgroup>
         )}
       </select>
-      <span className="dim mono" style={{ fontSize: 12 }}>{modelName}</span>
+      <span className="dim mono small">{modelName}</span>
 
       <label className="eff">effort
         <select value={value.effort} onChange={(e) => onChange({ ...value, effort: e.target.value })}>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { SipStatus, detectSipIp, getSipStatus, saveSip, testSip } from "../api";
 import { ResultLine } from "../ui";
+import { visibleInterval } from "./calls/shared";
 
 type Toaster = (m: string, kind?: any) => void;
 
@@ -17,7 +18,7 @@ export function SipCard({ cfg, passwordSet, toast, onChange }: { cfg: Record<str
   const set = (k: string, v: any) => setForm((f) => ({ ...f, [k]: v }));
 
   const load = () => getSipStatus().then(setSt).catch(() => {});
-  useEffect(() => { load(); const id = setInterval(load, 5000); return () => clearInterval(id); }, []);
+  useEffect(() => { load(); return visibleInterval(load, 5000); /* eslint-disable-next-line */ }, []);
 
   const save = async () => {
     setBusy(true); setMsg(null);
@@ -56,7 +57,7 @@ export function SipCard({ cfg, passwordSet, toast, onChange }: { cfg: Record<str
   return (
     <div className="card">
       <h3>SIP trunk {badge}</h3>
-      <p className="dim" style={{ marginTop: 0 }}>Xplogent registers like a desk phone (one extension or SIP account) and answers
+      <p className="dim mt-0">Xplogent registers like a desk phone (one extension or SIP account) and answers
         and places calls itself. No public HTTPS address is needed; the server must be reachable on UDP {val("local_port", 5060)} and
         the RTP ports below.</p>
       <div className="row wrap" style={{ gap: 10 }}>
@@ -69,7 +70,7 @@ export function SipCard({ cfg, passwordSet, toast, onChange }: { cfg: Record<str
         {input("auth_username", "Auth username (if different)", "", 150)}
         {input("caller_id", "Caller ID for outbound", "+15551234567", 150)}
       </div>
-      <details style={{ marginTop: 8 }}>
+      <details className="mt-2">
         <summary className="dim">Network (NAT, ports)</summary>
         <div className="row wrap" style={{ gap: 10, marginTop: 8, alignItems: "flex-end" }}>
           {input("public_ip", "Address the PBX sends audio to", "auto", 170)}
@@ -84,10 +85,10 @@ export function SipCard({ cfg, passwordSet, toast, onChange }: { cfg: Record<str
             <input type="checkbox" checked={!!val("strict_source", false)} onChange={(e) => set("strict_source", e.target.checked)} />
             only accept calls from these addresses</label>
         </div>
-        <p className="dim" style={{ fontSize: 12 }}>By default a call is also accepted from another address when it is addressed
+        <p className="dim small">By default a call is also accepted from another address when it is addressed
           to this extension (needed in Docker and with carriers that use several servers).</p>
         {ips && (
-          <p className="dim" style={{ fontSize: 13 }}>
+          <p className="dim small">
             {ips.lan && <>LAN: <button className="linkish" onClick={() => set("public_ip", ips.lan)}><code>{ips.lan}</code></button> (PBX on the same network) · </>}
             {ips.internet && <>Internet: <button className="linkish" onClick={() => set("public_ip", ips.internet)}><code>{ips.internet}</code></button> (provider over the internet; forward the ports)</>}
             {ips.note && <><br />{ips.note}</>}
@@ -100,10 +101,10 @@ export function SipCard({ cfg, passwordSet, toast, onChange }: { cfg: Record<str
           title={st?.configured ? "" : "Enter the trunk's server, username and password, then Save & connect"}>Test registration</button>
       </div>
       {msg && <ResultLine ok={msg.ok}>{msg.text}</ResultLine>}
-      {st?.last_error && <p className="dim" style={{ fontSize: 12 }}>Last problem: {st.last_error}</p>}
-      <details style={{ marginTop: 8 }}>
+      {st?.last_error && <p className="dim small">Last problem: {st.last_error}</p>}
+      <details className="mt-2">
         <summary className="dim">How to connect FreePBX / Asterisk or a Telnyx SIP connection</summary>
-        <ol className="dim" style={{ fontSize: 13 }}>
+        <ol className="dim small">
           <li><b>FreePBX</b>: Applications → Extensions → add a <b>PJSIP</b> extension (e.g. 2000) for the AI. Use its number
             and secret above, and the PBX address as server. Point an inbound route (DID) or ring group at extension 2000.
             Outbound calls from the AI use the PBX's outbound routes, like any phone; the hand-off number can be an

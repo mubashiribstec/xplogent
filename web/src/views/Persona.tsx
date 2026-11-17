@@ -58,7 +58,7 @@ export function Persona() {
           <h3><BrainCircuit size={16} /> SOUL.md — who your agent is</h3>
           <p className="dim">Persona, instructions, boundaries, and values. Injected at the top of every session.</p>
           <textarea className="md-edit" value={soul} onChange={(e) => setSoul(e.target.value)} rows={14} />
-          <div className="row" style={{ marginTop: 8 }}>
+          <div className="row mt-2">
             <button className="btn primary" onClick={() => putSoul(soul).then(() => toast("SOUL.md saved", "success"))}>Save SOUL.md</button>
           </div>
         </div>
@@ -95,7 +95,7 @@ export function Persona() {
             <input placeholder="install from path or http(s) URL…" value={src} onChange={(e) => setSrc(e.target.value)} />
             <button className="btn" onClick={() => { if (src.trim()) install({ src: src.trim() }); setSrc(""); }}><Download size={15} /> Install</button>
           </div>
-          <textarea className="md-edit" style={{ marginTop: 8 }} rows={6} placeholder="…or paste a SKILL.md here"
+          <textarea className="md-edit mt-2" rows={6} placeholder="…or paste a SKILL.md here"
             value={skillMd} onChange={(e) => setSkillMd(e.target.value)} />
           <button className="btn" style={{ marginTop: 6 }} onClick={() => { if (skillMd.trim()) install({ skill_md: skillMd }); setSkillMd(""); }}>Install pasted SKILL.md</button>
         </div>
@@ -107,14 +107,14 @@ export function Persona() {
               const prog = skillProgress(s);
               return (
                 <li key={s.name}>
-                  <span style={{ flex: 1 }}>
+                  <span className="grow">
                     <b>{s.name}</b> <span className="stars" style={{ color: "var(--amber)" }}>{"★".repeat(s.stars ?? 1)}{"☆".repeat(3 - (s.stars ?? 1))}</span>{" "}
                     <span className="badge">{s.level || "novice"}</span> <span className="badge">{s.source || "learned"}</span><br />
-                    <span className="dim" style={{ fontSize: 12 }}>{s.trigger || s.description}</span>
+                    <span className="dim small">{s.trigger || s.description}</span>
                     <div className="skill-bar" title={`${s.uses ?? 0} uses · ${prog.pct}% to ${prog.next}`}>
                       <span className="skill-bar-fill" style={{ width: `${prog.pct}%` }} />
                     </div>
-                    <span className="faint" style={{ fontSize: 11 }}>
+                    <span className="faint xsmall">
                       {s.uses ?? 0} uses · {s.successes ?? 0}✓/{s.failures ?? 0}✗ · {prog.next === "max" ? "maxed" : `${prog.pct}% → ${prog.next}`}</span>
                   </span>
                   <button className="x" aria-label={`Delete the skill ${s.name}`} title="Delete" onClick={async () => {
@@ -134,10 +134,10 @@ export function Persona() {
           <ul className="list">
             {history.map((e, i) => (
               <li key={i}>
-                <span style={{ flex: 1 }}>
+                <span className="grow">
                   <span className={`badge ${e.action === "learned" ? "ok" : e.action === "updated" ? "warn" : ""}`}>{e.action}</span>{" "}
                   <b>{e.name}</b> <span className="stars" style={{ color: "var(--amber)" }}>{"★".repeat(e.stars || 1)}</span><br />
-                  <span className="dim" style={{ fontSize: 12 }}>{e.detail}</span>
+                  <span className="dim small">{e.detail}</span>
                 </span>
                 <span className="faint" style={{ fontSize: 11, whiteSpace: "nowrap" }}>{fmtTime(e.created_at)}</span>
               </li>

@@ -52,7 +52,7 @@ export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: (
           <option value="">none: use my greeting and playbook</option>
           {info.templates.map((t) => <option key={t.name} value={t.name}>{LABELS[t.name] ?? t.name} ({t.direction})</option>)}
         </select></label>
-      {tpl && <p className="dim" style={{ fontSize: 12 }}>This template supplies the greeting, the playbook and the
+      {tpl && <p className="dim small">This template supplies the greeting, the playbook and the
         fields the call must collect ({tpl.fields.join(", ")}); the Greeting above is not used while it is selected.</p>}
 
       <h4 style={{ margin: "14px 0 6px" }}>CRM: send each finished call</h4>
@@ -81,12 +81,12 @@ export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: (
                   if (!v) return;
                   await putSecrets({ XPLOGENT_CRM_API_TOKEN: v }); e.target.value = ""; toast("CRM token saved", "success"); load();
                 }} />
-            : <span className="dim mono" style={{ fontSize: 12 }}>from ${info.crm.token_env}</span>}</label>
+            : <span className="dim mono small">from ${info.crm.token_env}</span>}</label>
         <button className="btn" onClick={test} disabled={busy || !info.crm.enabled || !info.crm.base_url || !info.crm.token_set}>
           {busy ? "Testing…" : "Test connection"}</button>
       </div>
       {info.crm.address_problem && <ResultLine ok={false}>{info.crm.address_problem}</ResultLine>}
-      <p className="dim" style={{ fontSize: 12 }}>Signed with the token (HMAC-SHA256); nothing is sent until it is set.
+      <p className="dim small">Signed with the token (HMAC-SHA256); nothing is sent until it is set.
         Test connection checks both the call-summary push and the CRM's v2 endpoints (vacancies, candidates, dial
         locks). The CRM side is described in docs/crm-laravel.md; to try everything before it's deployed,
         run <span className="mono">xplogent voip mock-crm</span> and use http://127.0.0.1:8089 as the address.
@@ -119,7 +119,7 @@ export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: (
         ? <p className="dim">none yet</p>
         : <ul className="list">{info.knowledge_gaps.map((g) => (
             <li key={g.query}><b>{g.count}×</b> {g.query} <span className="dim">· last {fmt(g.last_ts)}</span></li>))}</ul>}
-      <p className="dim" style={{ fontSize: 12 }}>Add answers to these under Knowledge or Call training; they are the
+      <p className="dim small">Add answers to these under Knowledge or Call training; they are the
         most useful things to teach the agent next.</p>
     </div>
   );

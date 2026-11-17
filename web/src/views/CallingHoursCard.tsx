@@ -28,7 +28,7 @@ export function CallingHoursCard({ cfg, toast }: { cfg: Record<string, any>; toa
       <h3>Calling hours</h3>
       <p className="explain">Outbound calls (from Call now, contacts and campaigns) are only placed inside these hours,
         in the contact's time zone when it's known. Test calls ignore them.</p>
-      <p style={{ fontSize: 13 }}>
+      <p className="small">
         {!h.enabled ? <span className="warn">Off: calls can be placed at any time.</span>
           : h.open_now ? <span className="ok">● Open now</span>
           : <span className="dim">● Closed now ({why}). Next allowed: <b>{when(h.next_allowed)}</b></span>}
@@ -73,7 +73,7 @@ export function CallingHoursCard({ cfg, toast }: { cfg: Record<string, any>; toa
           toast(r.ok ? "bank holidays updated from gov.uk" : `gov.uk not reachable: using the saved list`, r.ok ? "success" : "error");
         }}>Update from gov.uk</button>
       </div>
-      {h.upcoming_bank_holidays.length > 0 && <p className="dim" style={{ fontSize: 12 }}>
+      {h.upcoming_bank_holidays.length > 0 && <p className="dim small">
         Next bank holidays: {h.upcoming_bank_holidays.map((b) => `${b.name} (${new Date(b.date).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })})`).join(" · ")}
       </p>}
     </div>

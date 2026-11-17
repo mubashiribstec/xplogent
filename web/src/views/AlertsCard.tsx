@@ -35,8 +35,8 @@ export function AlertsCard({ toast }: { toast: Toaster }) {
             toast(r.ok ? "test alert sent: check the channel" : (r.error ?? "could not send"), r.ok ? "success" : "error");
           }}>Send test alert</button>
       </div>
-      {a.alerts.length === 0 ? <p className="dim" style={{ fontSize: 12 }}>No alerts yet.</p> : (
-        <div className="table-scroll"><table className="data-table" style={{ marginTop: 8 }}>
+      {a.alerts.length === 0 ? <p className="dim small">No alerts yet.</p> : (
+        <div className="table-scroll"><table className="data-table mt-2">
           <thead><tr><th>When</th><th>What</th><th>Details</th></tr></thead>
           <tbody>{a.alerts.slice(0, 10).map((r) => (
             <tr key={`${r.at}-${r.kind}`}>

@@ -36,7 +36,7 @@ export function Audit() {
             </select>
           </div>
 
-          <table className="data-table" style={{ marginTop: 12 }}>
+          <table className="data-table mt-3">
             <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Risk</th><th>Allowed</th><th>Detail</th></tr></thead>
             <tbody>
               {entries.map((e, i) => (

@@ -33,7 +33,7 @@ export function Login({ onAuthed, brand }: { onAuthed: () => void; brand?: Brand
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submit()} style={{ flex: 1 }} />
         </div>
-        {error && <p className="err" style={{ marginTop: 8 }}>{error}</p>}
+        {error && <p className="err mt-2">{error}</p>}
         <button className="btn primary" style={{ marginTop: 14, width: "100%" }} disabled={busy} onClick={submit}>
           {busy ? "Checking…" : "Unlock"}</button>
       </div>

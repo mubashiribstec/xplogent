@@ -102,7 +102,7 @@ export function Training() {
           onDragLeave={() => setDrag(false)}
           onDrop={(e) => { e.preventDefault(); setDrag(false); upload(Array.from(e.dataTransfer.files)); }}>
           <h3><Upload size={16} /> Upload</h3>
-          <ul className="dim" style={{ marginTop: 0 }}>
+          <ul className="dim mt-0">
             <li><b>Call recordings</b> (wav, mp3, m4a, ogg…): transcribed on this server. A stereo recording is
               split per channel so the transcript says who spoke.</li>
             <li><b>Scripts, FAQs, price lists</b> (txt, md, pdf).</li>
@@ -119,7 +119,7 @@ export function Training() {
               </select>
             </label>
           </div>
-          {uploading !== null && <div className="dim" style={{ marginTop: 8 }}>
+          {uploading !== null && <div className="dim mt-2">
             Uploading… {Math.round(uploading * 100)}%</div>}
           <p className="dim" style={{ marginBottom: 0 }}>Up to 200 MB per file. You can also drop files on this card.</p>
         </div>
@@ -141,7 +141,7 @@ export function Training() {
                     <tr key={it.id}>
                       <td><button className="linkish" onClick={() => open(it)} disabled={it.status !== "done"}>
                         <Icon size={14} /> {it.filename}</button>
-                        <div className="dim" style={{ fontSize: 12 }}>{fmtSize(it.size)}
+                        <div className="dim small">{fmtSize(it.size)}
                           {it.kind === "recording" && it.options?.layout === "agent-right" ? " · agent on the right" : ""}</div>
                       </td>
                       <td>{KIND_LABEL[it.kind] ?? it.kind}</td>
@@ -170,7 +170,7 @@ export function Training() {
             </table>
           )}
           {view && (
-            <div style={{ marginTop: 12 }}>
+            <div className="mt-3">
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <b>{view.filename}</b>
                 <button className="btn ghost" onClick={() => setView(null)}>Close</button>

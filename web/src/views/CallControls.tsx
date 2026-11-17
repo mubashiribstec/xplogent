@@ -489,7 +489,7 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
       )}
       {state !== "live" && <RunChecks />}
       {lines.length > 0 && (
-        <div ref={box} className="transcript" aria-live="polite" style={{ marginTop: 12 }}>
+        <div ref={box} className="transcript mt-3" aria-live="polite">
           {lines.map((l, i) => l.who === "note"
             ? <div key={i} className="dim xsmall">{l.text}</div>
             : <div key={i} className={`turn ${l.who}`}><b>{l.who === "agent" ? "Agent" : "You"}:</b> {l.text}</div>)}

@@ -16,6 +16,7 @@ import {
   deleteOllamaServer, type OllamaServer, StatusError,
   BackupStatus, getBackupModel, saveBackupModel, testBackupModel,
 } from "./api";
+import { visibleInterval } from "./views/calls/shared";
 
 const RISK_TIERS = ["low", "medium", "high", "critical"];
 const ACTIONS = ["auto", "confirm", "deny"];
@@ -276,7 +277,7 @@ function ModelUseTable({ models, server, onUse, flash }: {
     ["reflection", { reflection_model: spec(m) }],
   ] as const;
   return (
-    <table className="data-table" style={{ marginTop: 8 }}>
+    <table className="data-table mt-2">
       <tbody>
         {models.map((m) => (
           <tr key={m}><td><code>{m}</code></td><td style={{ textAlign: "right" }}>
@@ -438,7 +439,7 @@ function HealthCard() {
   const [problem, setProblem] = useState("");
   const reload = () => getStatus().then((s) => { setSt(s); setProblem(""); })
     .catch((e) => { setSt(null); setProblem(e instanceof StatusError ? e.message : ""); });
-  useEffect(() => { reload(); const id = setInterval(reload, 10000); return () => clearInterval(id); }, []);
+  useEffect(() => { reload(); return visibleInterval(reload, 10000); }, []);
   return (
     <div className="card">
       <h3>Status &amp; health</h3>
@@ -606,7 +607,7 @@ function ModelBrowser({ providers, models, onAddPresets, onSave, flash }: {
       <h3>Browse provider models</h3>
       <p className="dim">Fetch a provider's live catalog and add models without typing ids by hand.</p>
       {FREE_MODELS.some((f) => !models.some((m) => m.model === f.model)) && (
-        <p className="dim" style={{ fontSize: 12 }}>
+        <p className="dim small">
           <button onClick={() => onAddPresets([...models, ...FREE_MODELS.filter((f) => !models.some((m) => m.model === f.model))
             .map((f) => ({ ...f, temperature: 0.7, effort: "off", thinking: false }))])}>Add free OpenRouter models</button>{" "}
           {FREE_MODELS.map((f) => f.label).join(" and ")}: they support tools, need an OpenRouter key and are rate-limited.</p>

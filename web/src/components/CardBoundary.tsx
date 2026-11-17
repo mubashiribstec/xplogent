@@ -11,8 +11,8 @@ export class CardBoundary extends React.Component<{ name: string; children: Reac
     return (
       <div className="card">
         <h3>{this.props.name}</h3>
-        <p className="err" style={{ fontSize: 13 }}>This card hit an error: {String(this.state.error.message || this.state.error).slice(0, 300)}</p>
-        <p className="dim" style={{ fontSize: 12 }}>The rest of the page still works. If it keeps happening, update the server
+        <p className="err small">This card hit an error: {String(this.state.error.message || this.state.error).slice(0, 300)}</p>
+        <p className="dim small">The rest of the page still works. If it keeps happening, update the server
           (<span className="mono">sudo xplogent-docker update</span>) and reload the page.</p>
         <button className="btn" onClick={() => this.setState({ error: null })}>Retry</button>
       </div>

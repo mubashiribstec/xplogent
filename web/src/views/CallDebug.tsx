@@ -32,7 +32,7 @@ export function CallDebug({ callId, toast }: { callId: number; toast: Toaster })
           .catch((e) => toast(String(e), "error"))}>Download debug bundle</button>
       </div>
       {(d.kept || d.live) && sip.length === 0 && !(dbg.rtp && Object.keys(dbg.rtp).length) && !(dbg.telnyx_events ?? []).length && (
-        <p className="dim" style={{ fontSize: 12 }}>No phone-line data for this call (a browser test call has no phone line):
+        <p className="dim small">No phone-line data for this call (a browser test call has no phone line):
           SIP messages and audio stats appear on SIP calls, Telnyx events on Telnyx calls.</p>)}
       {!d.kept && !d.live && <p className="dim">No diagnostics were kept for this call (older than the retention period, or made before this version).</p>}
 
@@ -44,16 +44,16 @@ export function CallDebug({ callId, toast }: { callId: number; toast: Toaster })
             <tr key={i}>
               <td>{i + 1}</td><td>{ms(t.stt_ms)}</td><td>{ms(t.llm_first_sentence_ms)}</td>
               <td>{ms(t.tts_first_audio_ms)}</td><td><b>{ms(t.total_ms)}</b></td>
-              <td className="dim mono" style={{ fontSize: 11 }}>{[t.stt, t.llm, t.tts].filter(Boolean).join(" · ")}</td>
+              <td className="dim mono xsmall">{[t.stt, t.llm, t.tts].filter(Boolean).join(" · ")}</td>
               <td>{(t.fallbacks ?? []).map((f: string) => <span key={f} className="badge warn" style={{ marginRight: 4 }}>{f}</span>)}
-                {t.error && <span className="warn" style={{ fontSize: 12 }}>{t.error}</span>}</td>
+                {t.error && <span className="warn small">{t.error}</span>}</td>
             </tr>))}</tbody>
         </table></div>
       </>)}
 
       {(dbg.guard_blocked ?? []).length > 0 && (<>
         <h4>Not said: figures the agent couldn't confirm</h4>
-        <p className="dim" style={{ fontSize: 12 }}>Each sentence below named pay, hours or a date that isn't in the
+        <p className="dim small">Each sentence below named pay, hours or a date that isn't in the
           vacancy's details, the knowledge base or what the caller said. The caller heard "the recruiter will confirm it"
           instead. If the figure is right, add it to the vacancy in the CRM or to Knowledge.</p>
         <ul className="list">{(dbg.guard_blocked ?? []).map((g, i) => (
@@ -80,14 +80,14 @@ export function CallDebug({ callId, toast }: { callId: number; toast: Toaster })
 
       {dbg.rtp && Object.keys(dbg.rtp).length > 0 && (<>
         <h4>Audio (RTP)</h4>
-        <p className="dim mono" style={{ fontSize: 12 }}>{Object.entries(dbg.rtp).map(([k, v]) => `${k} ${String(v)}`).join(" · ")}</p>
+        <p className="dim mono small">{Object.entries(dbg.rtp).map(([k, v]) => `${k} ${String(v)}`).join(" · ")}</p>
       </>)}
 
       {(dbg.telnyx_events ?? []).length > 0 && (<>
         <h4>Telnyx events</h4>
         <ul className="list">{(dbg.telnyx_events ?? []).map((e, i) => (
           <li key={i}><span className="mono dim">{e.t.toFixed(1)}s</span> {e.event}{e.leg && <span className="dim"> ({e.leg} leg)</span>}{e.digit && ` · ${e.digit}`}</li>))}</ul>
-        {dbg.media && <p className="dim mono" style={{ fontSize: 12 }}>{Object.entries(dbg.media).map(([k, v]) => `${k} ${String(v)}`).join(" · ")}</p>}
+        {dbg.media && <p className="dim mono small">{Object.entries(dbg.media).map(([k, v]) => `${k} ${String(v)}`).join(" · ")}</p>}
       </>)}
       {(dbg.errors ?? []).length > 0 && <p className="warn">{(dbg.errors ?? []).join("; ")}</p>}
     </div>

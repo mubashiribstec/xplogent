@@ -98,7 +98,7 @@ function AgentSwitch({ on, items, onSwitch }: {
       <span className={`pill ${on ? "green" : "off"}`}><span className="dot" />Phone agent {on ? "on" : "off"}</span>
       <button className={`btn ${on ? "" : "primary"}`} disabled={busy || !onSwitch} onClick={flip}>
         {busy ? "Saving…" : on ? "Switch off" : "Switch on"}</button>
-      <span className="dim" style={{ fontSize: 12 }}>{on
+      <span className="dim small">{on
         ? "Answering incoming calls."
         : "Off: incoming calls are refused (except the PBX extension's test callers). Test calls from Call now and the browser still work."}</span>
     </div>

@@ -44,7 +44,7 @@ export function Knowledge() {
             <button className="btn primary" disabled={busy} onClick={() => { if (path.trim()) ingest({ path: path.trim() }); setPath(""); }}>
               {busy ? "Ingesting…" : "Ingest path"}</button>
           </div>
-          <textarea className="md-edit" style={{ marginTop: 8 }} rows={5} placeholder="…or paste text to remember"
+          <textarea className="md-edit mt-2" rows={5} placeholder="…or paste text to remember"
             value={paste} onChange={(e) => setPaste(e.target.value)} />
           <button className="btn" style={{ marginTop: 6 }} disabled={busy}
             onClick={() => { if (paste.trim()) ingest({ content: paste, title: "pasted" }); setPaste(""); }}>Ingest pasted text</button>
@@ -70,8 +70,8 @@ export function Knowledge() {
           <ul className="list">
             {docs.map((d) => (
               <li key={d.id}>
-                <span style={{ flex: 1 }}><b>{d.title}</b> <span className="dim">· {d.chunks} chunks</span><br />
-                  <span className="dim" style={{ fontSize: 12 }}>{d.source}</span></span>
+                <span className="grow"><b>{d.title}</b> <span className="dim">· {d.chunks} chunks</span><br />
+                  <span className="dim small">{d.source}</span></span>
                 <button className="x" aria-label={`Delete ${d.title}`} title="Delete" onClick={async () => {
                   if (await confirm({ title: `Delete "${d.title}"?`, body: "The agent stops answering from this source.", confirmLabel: "Delete", danger: true }))
                     deleteDoc(d.id).then(reload);
@@ -82,7 +82,7 @@ export function Knowledge() {
               <p>Nothing here yet. Add your price list, FAQ or policies: the agent answers only from what it knows.</p>
               <button className="btn primary" onClick={() => (document.querySelector(".pane textarea") as HTMLTextAreaElement | null)?.focus()}>
                 Paste your first document</button>{" "}
-              <span className="dim" style={{ fontSize: 12 }}>(or upload files under Call training)</span></div>}
+              <span className="dim small">(or upload files under Call training)</span></div>}
           </ul>
         </div>
       </div>

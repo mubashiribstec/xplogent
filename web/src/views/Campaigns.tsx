@@ -7,6 +7,7 @@ import {
 import { CardBoundary } from "../components/CardBoundary";
 import { useToast } from "../components/Toast";
 import { useConfirm } from "../ui/confirm";
+import { visibleInterval } from "./calls/shared";
 
 const STATE: Record<string, string> = {
   queued: "waiting", dialling: "ringing", in_call: "on a call", retry_wait: "try again later", done: "done",
@@ -31,7 +32,7 @@ export function Campaigns() {
   const confirm = useConfirm();
   const [data, setData] = useState<{ campaigns: Campaign[]; stop_all: boolean; agent_on: boolean } | null>(null);
   const load = () => getCampaigns().then(setData).catch(() => {});
-  useEffect(() => { load(); const id = setInterval(load, 5000); return () => clearInterval(id); }, []);
+  useEffect(() => { load(); return visibleInterval(load, 5000); }, []);
   if (!data) return <div className="pane"><p className="dim">loading…</p></div>;
   return (
     <div className="pane">
@@ -91,7 +92,7 @@ function NewCampaign({ onMade, toast }: { onMade: () => void; toast: (m: string,
       {problem && <p className="warn">{problem}</p>}
       {sales && sales.length === 0 && !problem && <p className="dim">No open vacancies match.</p>}
       {sales && sales.length > 0 && (
-        <div className="table-scroll"><table className="data-table" style={{ marginTop: 8 }}>
+        <div className="table-scroll"><table className="data-table mt-2">
           <thead><tr><th></th><th>Vacancy</th><th>Area</th><th>Pay</th><th>CVs sent</th></tr></thead>
           <tbody>{sales.map((s) => (
             <tr key={s.sale_id} onClick={() => choose(s)} style={{ cursor: "pointer" }}>
@@ -101,7 +102,7 @@ function NewCampaign({ onMade, toast }: { onMade: () => void; toast: (m: string,
             </tr>))}</tbody>
         </table></div>)}
       {pick && preview && (
-        <div style={{ marginTop: 8 }}>
+        <div className="mt-2">
           {preview.error ? <p className="warn">{preview.error}</p> : <p>
             <b>{preview.n}</b> candidates to call within {radius} km
             {Object.entries(preview.skipped).filter(([, n]) => n > 0).length > 0 && <span className="dim"> · not called: {
@@ -144,7 +145,7 @@ function CampaignCard({ c, onChange, toast }: { c: Campaign; onChange: () => voi
         <button className={`btn ${c.enabled ? "" : "primary"}`} onClick={toggle}
           title={!c.enabled && c.enable_problem ? c.enable_problem : ""}>{c.enabled ? "Switch off" : "Switch on"}</button>
       </div>
-      <p style={{ fontSize: 13 }}>
+      <p className="small">
         {c.enabled ? <span className="ok">● On</span> : <span className="dim">● Off</span>}
         {c.paused_reason && <span className="warn"> · paused: {c.paused_reason}</span>}
         {!c.enabled && c.enable_problem && <span className="dim"> · to switch on: {c.enable_problem}</span>}
@@ -185,7 +186,7 @@ function CampaignCard({ c, onChange, toast }: { c: Campaign; onChange: () => voi
             <option value="cold">cold (no prior contact)</option></select></label>
       </div>
       {c.consent_basis === "cold" && !c.cold_signoff?.by && (
-        <div className="warn-banner" style={{ marginTop: 8 }}>
+        <div className="warn-banner mt-2">
           Cold calling needs every number screened against TPS/CTPS and a lawful basis for the call. An admin must
           confirm that before this campaign can run.
           <div className="row" style={{ gap: 6, marginTop: 6 }}>
@@ -197,7 +198,7 @@ function CampaignCard({ c, onChange, toast }: { c: Campaign; onChange: () => voi
             }}>I confirm</button>
           </div>
         </div>)}
-      {c.consent_basis === "cold" && c.cold_signoff?.by && <p className="dim" style={{ fontSize: 12 }}>
+      {c.consent_basis === "cold" && c.cold_signoff?.by && <p className="dim small">
         Cold calling signed off by {c.cold_signoff.by}{c.cold_signoff.at ? ` on ${new Date(c.cold_signoff.at * 1000).toLocaleDateString()}` : ""}.</p>}
       <div className="row" style={{ gap: 8, marginTop: 8 }}>
         <button className="btn ghost sm" onClick={() => setOpen(!open)}>{open ? "Hide candidates" : "Show candidates"}</button>
@@ -208,13 +209,13 @@ function CampaignCard({ c, onChange, toast }: { c: Campaign; onChange: () => voi
         }}>Refill now</button>
       </div>
       {open && items && (
-        <div className="table-scroll"><table className="data-table" style={{ marginTop: 8 }}>
+        <div className="table-scroll"><table className="data-table mt-2">
           <thead><tr><th>Candidate</th><th>Number</th><th>Miles</th><th>Status</th><th>Tries</th><th>Result</th><th>Next try</th><th>Call</th></tr></thead>
           <tbody>{items.map((it) => (
             <tr key={it.id}>
               <td>{it.name || `#${it.applicant_id}`}</td><td className="mono">{it.phone}</td>
               <td>{it.distance_miles ?? ""}</td>
-              <td>{STATE[it.state] ?? it.state}{it.skip_reason && <span className="dim" style={{ fontSize: 12 }}> · {it.skip_reason}</span>}</td>
+              <td>{STATE[it.state] ?? it.state}{it.skip_reason && <span className="dim small"> · {it.skip_reason}</span>}</td>
               <td>{it.attempts}</td><td>{OUTCOME[it.last_outcome] ?? it.last_outcome}</td>
               <td>{it.state === "retry_wait" ? when(it.next_at) : ""}</td>
               <td>{it.last_call_id ? <span className="mono dim">#{it.last_call_id}</span> : ""}</td>
@@ -258,7 +259,7 @@ export function TpsCard({ toast }: { toast: (m: string, k?: any) => void }) {
           <select value={cfg.tps.enabled ? "on" : "off"} onChange={(e) => save({ enabled: e.target.value === "on" })}>
             <option value="off">cold campaigns only</option><option value="on">every campaign</option></select></label>
       </div>
-      <p className="dim" style={{ fontSize: 12 }}>The service gets <span className="mono">POST {"{"}"numbers": [...]{"}"}</span> with
+      <p className="dim small">The service gets <span className="mono">POST {"{"}"numbers": [...]{"}"}</span> with
         the key as a bearer token and answers <span className="mono">{"{"}"results": {"{"}"+447…": {"{"}"tps": false, "ctps": false{"}"}{"}"}{"}"}</span>.
         See docs/voip.md for wiring a provider with another format.</p>
     </div>

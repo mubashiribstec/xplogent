@@ -324,7 +324,7 @@ export function Chat() {
           {skills.length === 0 && <p className="dim" style={{ padding: "0 8px" }}>none yet</p>}
           {skills.map((s) => (
             <div className="skill-row" key={s.name} title={`${s.description} — ${s.level ?? ""}`}>
-              <b style={{ flex: 1 }}>{s.name}</b>
+              <b className="grow">{s.name}</b>
               <span className="stars">{"★".repeat(s.stars ?? 1)}{"☆".repeat(3 - (s.stars ?? 1))}</span>
             </div>
           ))}
@@ -342,7 +342,7 @@ export function Chat() {
               <button className="linkx" onClick={clearAuto}>turn off</button>
             </span>
           )}
-          <div style={{ flex: 1 }} />
+          <div className="grow" />
           {voice.supported && (
             <button className={`btn ghost sm ${handsFree ? "active" : ""}`}
               disabled={!micAllowed} style={micAllowed ? undefined : { opacity: 0.5 }}
@@ -447,7 +447,7 @@ export function Chat() {
               {approval.reason && <p className="dim">{approval.reason}</p>}
               <pre className="snippet">{JSON.stringify(approval.arguments, null, 2)}</pre>
               {approval.risk !== "critical" && (
-                <p className="dim" style={{ fontSize: 12 }}>
+                <p className="dim small">
                   <ShieldCheck size={12} /> "this chat" / "this session" auto-approve non-critical
                   tools so you aren't asked every time. Critical actions always prompt.
                 </p>

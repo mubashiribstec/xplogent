@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { SipExtensionStatus, detectSipIp, getSipStatus, saveSipExtension, testSipExtension } from "../api";
 import { ResultLine } from "../ui";
+import { visibleInterval } from "./calls/shared";
 
 type Toaster = (m: string, kind?: any) => void;
 
@@ -19,7 +20,7 @@ export function SipExtensionCard({ cfg, passwordSet, toast, onChange }: { cfg: R
   const enabled = !!val("enabled", false);
 
   const load = () => getSipStatus().then((s) => setSt(s.extension ?? null)).catch(() => {});
-  useEffect(() => { load(); const id = setInterval(load, 5000); return () => clearInterval(id); }, []);
+  useEffect(() => { load(); return visibleInterval(load, 5000); /* eslint-disable-next-line */ }, []);
 
   const save = async () => {
     setBusy(true); setMsg(null);
@@ -60,9 +61,9 @@ export function SipExtensionCard({ cfg, passwordSet, toast, onChange }: { cfg: R
   return (
     <div className="card">
       <h3>PBX extension (FreePBX) {badge}</h3>
-      <p className="explain" style={{ marginTop: 0 }}>A PBX extension is a phone number inside your office phone system:
+      <p className="explain mt-0">A PBX extension is a phone number inside your office phone system:
         here, one that the AI answers.</p>
-      <p className="dim" style={{ marginTop: 0 }}>A second, separate login: Xplogent registers as one extension on your
+      <p className="dim mt-0">A second, separate login: Xplogent registers as one extension on your
         FreePBX, alongside the SIP trunk above (which stays reserved for your carrier). Call the agent by dialling its
         extension from any office phone, let a queue overflow to it, or have it call extensions back. It has its own
         ports — UDP {val("local_port", 5062)} and RTP {val("rtp_start", 10200)}–{val("rtp_end", 10300)} — so both lines
@@ -82,10 +83,10 @@ export function SipExtensionCard({ cfg, passwordSet, toast, onChange }: { cfg: R
         {input("test_callers", "Test extensions (answered even while the agent is off)", "201, 202", 210)}
       </div>
       {!cfg.enabled && enabled && (
-        <p className="warn" style={{ fontSize: 12 }}>The phone agent is switched off: calls to extension {val("username") || "…"} get
+        <p className="warn small">The phone agent is switched off: calls to extension {val("username") || "…"} get
           "unavailable"{String(val("test_callers") || "").trim() ? `, except from ${val("test_callers")} (answered as test calls)` : ""}.
           Switch it on in Go live, or list your own extension above to try it from your desk phone.</p>)}
-      <details style={{ marginTop: 8 }}>
+      <details className="mt-2">
         <summary className="dim">Network (NAT, ports)</summary>
         <div className="row wrap" style={{ gap: 10, marginTop: 8, alignItems: "flex-end" }}>
           {input("public_ip", "Address the PBX sends audio to", "auto", 170)}
@@ -102,7 +103,7 @@ export function SipExtensionCard({ cfg, passwordSet, toast, onChange }: { cfg: R
             only accept calls from these addresses</label>
         </div>
         {ips && (
-          <p className="dim" style={{ fontSize: 13 }}>
+          <p className="dim small">
             {ips.lan && <>LAN: <button className="linkish" onClick={() => set("public_ip", ips.lan)}><code>{ips.lan}</code></button> (PBX on the same network) · </>}
             {ips.internet && <>Internet: <button className="linkish" onClick={() => set("public_ip", ips.internet)}><code>{ips.internet}</code></button></>}
             {ips.note && <><br />{ips.note}</>}
@@ -116,14 +117,14 @@ export function SipExtensionCard({ cfg, passwordSet, toast, onChange }: { cfg: R
           Test registration</button>
       </div>
       {!busy && (!enabled || !st?.configured) && (
-        <p className="dim" style={{ fontSize: 12 }}>Registration: {!enabled
+        <p className="dim small">Registration: {!enabled
           ? "off. Tick \"Extension line switched on\", then Save & connect to register with the PBX."
           : "not set up. Enter the PBX address, extension number and password, then Save & connect."}</p>)}
       {msg && <ResultLine ok={msg.ok}>{msg.text}</ResultLine>}
-      {st?.last_error && <p className="dim" style={{ fontSize: 12 }}>Last problem: {st.last_error}</p>}
-      <details style={{ marginTop: 8 }}>
+      {st?.last_error && <p className="dim small">Last problem: {st.last_error}</p>}
+      <details className="mt-2">
         <summary className="dim">How to connect FreePBX</summary>
-        <ol className="dim" style={{ fontSize: 13 }}>
+        <ol className="dim small">
           <li><b>FreePBX</b>: Applications → Extensions → add a <b>PJSIP</b> extension for the AI and put its number
             and secret above, with the PBX address as server.</li>
           <li>In the extension's advanced settings keep <b>NAT = yes</b> (rtp_symmetric, force_rport, rewrite_contact) and allow
