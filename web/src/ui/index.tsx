@@ -253,20 +253,28 @@ export function Tabs<T extends string>({ value, onChange, tabs, label }: {
   tabs: { id: T; label: string; icon?: LucideIcon; badge?: ReactNode }[];
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const strip = useRef<HTMLDivElement>(null);
   const key = (e: KeyboardEvent, i: number) => {
     const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
     if (!d) return;
     e.preventDefault();
     const n = (i + d + tabs.length) % tabs.length;
-    refs.current[n]?.focus();
+    refs.current[n]?.focus({ preventScroll: true });
     onChange(tabs[n].id);
   };
+  // Keep the selected tab visible when the strip scrolls sideways (phones). Only the strip
+  // scrolls, never the page, and only when the selection changes: pages rebuild `tabs` on every
+  // render (live status every few seconds), and scrolling the tab into view there pulled the page up.
+  const selected = tabs.findIndex((t) => t.id === value);
   useEffect(() => {
-    const i = tabs.findIndex((t) => t.id === value);
-    refs.current[i]?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [value, tabs]);
+    const s = strip.current, el = refs.current[selected];
+    if (!s || !el || s.scrollWidth <= s.clientWidth) return;
+    const a = s.getBoundingClientRect(), b = el.getBoundingClientRect();
+    if (b.left < a.left) s.scrollLeft += b.left - a.left - 8;
+    else if (b.right > a.right) s.scrollLeft += b.right - a.right + 8;
+  }, [selected]);
   return (
-    <div className="tabs" role="tablist" aria-label={label}>
+    <div className="tabs" role="tablist" aria-label={label} ref={strip}>
       {tabs.map((t, i) => {
         const Icon = t.icon;
         return (
