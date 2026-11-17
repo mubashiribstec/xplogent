@@ -242,6 +242,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); opacity: 1; }
 input:disabled, select:disabled, textarea:disabled { opacity: .6; cursor: not-allowed; }
 input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; padding: 0; margin: 0; accent-color: var(--accent);
   cursor: pointer; flex-shrink: 0; box-shadow: none; }
+input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 input[type="range"] { height: auto; padding: 0; border: 0; accent-color: var(--accent); background: none; }
 input[type="file"] { height: auto; padding: 6px; }
 input[type="color"] { padding: 2px; width: 48px; }
