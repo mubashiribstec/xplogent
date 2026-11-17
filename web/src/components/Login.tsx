@@ -20,7 +20,7 @@ export function Login({ onAuthed, brand }: { onAuthed: () => void; brand?: Brand
 
   return (
     <div className="overlay">
-      <div className="modal login" onClick={(e) => e.stopPropagation()}>
+      <div className="modal login" role="dialog" aria-modal="true" aria-label="Sign in" onClick={(e) => e.stopPropagation()}>
         {brand?.logo
           ? <img src={`/branding/logo?v=${brand.logo_version}`} alt={brand.company || "logo"} style={{ maxHeight: 56, maxWidth: 200, objectFit: "contain" }} />
           : <div className="login-icon"><ShieldCheck size={28} /></div>}

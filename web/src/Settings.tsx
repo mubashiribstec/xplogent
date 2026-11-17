@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
+import { Activity, Brain, Cpu, KeyRound, Monitor, Moon, Palette, Plus, Settings as SettingsIcon, ShieldCheck, Sun, Trash2 } from "lucide-react";
 import { FREE_MODELS } from "./lib/models";
+import { useToast } from "./components/Toast";
+import { useSubRoute } from "./lib/router";
+import { type ThemeMode, useTheme } from "./lib/theme";
+import { Badge, Button, Callout, Card, PageHeader, ResultLine, SecretField, Segmented, SelectField, Tabs, TextField } from "./ui";
+import { useConfirm } from "./ui/confirm";
+import { BrandingCard } from "./views/BrandingCard";
 import { CardBoundary } from "./components/CardBoundary";
 import { ModelTestButton } from "./components/ModelTest";
 import {
@@ -26,14 +33,20 @@ const KEY_TEST_MODEL: Record<string, (cfg: Record<string, any>) => string> = {
 // Tool groups that drive a real screen/mouse: unusable on a server without a display.
 const DISPLAY_GROUPS = ["gui"];
 
+const SECTIONS = ["models", "keys", "appearance", "safety", "memory", "status"] as const;
+type Section = typeof SECTIONS[number];
+const SPEECH_KEYS = ["DEEPGRAM_API_KEY", "CARTESIA_API_KEY", "ELEVENLABS_API_KEY"];
+
 export function Settings() {
   const [cfg, setCfg] = useState<Record<string, any> | null>(null);
   const [tools, setTools] = useState<any[]>([]);
   const [roles, setRoles] = useState<Record<string, any>>({});
   const [facts, setFacts] = useState<{ id: number; content: string; source?: string; created_at?: number }[]>([]);
   const [skills, setSkills] = useState<{ name: string; uses: number; description: string }[]>([]);
-  const [saved, setSaved] = useState("");
   const [caps, setCaps] = useState<StatusInfo["capabilities"]>();
+  const [section, setSection] = useSubRoute<Section>("settings", SECTIONS, "models");
+  const toast = useToast();
+  const confirm = useConfirm();
 
   const reload = async () => {
     setCfg(await getFullConfig());
@@ -44,144 +57,159 @@ export function Settings() {
   };
   useEffect(() => { reload(); getStatus().then((s) => setCaps(s.capabilities)).catch(() => {}); }, []);
 
-  const flash = (m: string) => { setSaved(m); setTimeout(() => setSaved(""), 1500); };
+  const flash = (m: string) => toast(m, /fail|couldn|could not|error/i.test(m) ? "error" : "success");
   const save = async (updates: Record<string, any>) => { await patchConfig(updates); flash("saved"); };
 
-  if (!cfg) return <div className="settings"><p className="dim">loading…</p></div>;
+  const tabs = [
+    { id: "models" as Section, label: "Models", icon: Cpu },
+    { id: "keys" as Section, label: "API keys", icon: KeyRound },
+    { id: "appearance" as Section, label: "Appearance & backup", icon: Palette },
+    { id: "safety" as Section, label: "Safety & tools", icon: ShieldCheck },
+    { id: "memory" as Section, label: "Memory & skills", icon: Brain },
+    { id: "status" as Section, label: "Status", icon: Activity },
+  ];
 
-  const enabledGroups: string[] = cfg.tools_enabled ?? [];
-  const policy: Record<string, string> = cfg.safety?.policy ?? {};
+  const enabledGroups: string[] = cfg?.tools_enabled ?? [];
+  const policy: Record<string, string> = cfg?.safety?.policy ?? {};
 
   return (
-    <div className="settings">
-      <div className="warn-banner">⚠ Anyone with the access token controls this agent. Keep the token private
-        {caps?.docker ? " (rotate it on the server with: xplogent-docker token --rotate)." : " and the server bound to 127.0.0.1."}</div>
-      {saved && <div className="toast">{saved}</div>}
+    <div className="pane">
+      <div className="pane-wide">
+        <PageHeader icon={SettingsIcon} title="Settings" description="Models, keys, look and safety for the whole workspace." />
+        <Tabs<Section> label="Settings sections" value={section} onChange={setSection} tabs={tabs} />
+        {!cfg ? <div className="card"><div className="skeleton" style={{ height: 160 }} /></div> : <>
 
-      <CardBoundary name="Status & health"><HealthCard /></CardBoundary>
-<CardBoundary name="Ollama server">      <OllamaCard host={cfg.ollama?.host ?? ""} hasToken={!!cfg.secrets?.OLLAMA_API_KEY}
-        onUse={async (u) => { await save(u); reload(); }} onSaved={reload} flash={flash} /></CardBoundary>
-      <CardBoundary name="Ollama servers"><OllamaServersCard onUse={async (u) => { await save(u); reload(); }} flash={flash} /></CardBoundary>
-      <CardBoundary name="Backup model"><BackupModelCard flash={flash} /></CardBoundary>
+        {section === "models" && <>
+          <Card title="Model" description="The main model for chat; calls can use their own (Calls → Setup).">
+            <div className="form-grid">
+              <TextField label="Active model" value={cfg.model} onCommit={(v) => save({ model: v })} />
+              <TextField label="Reflection model" value={cfg.reflection_model} onCommit={(v) => save({ reflection_model: v })} />
+              <TextField label="Embedding model" value={cfg.embedding_model} onCommit={(v) => save({ embedding_model: v })} />
+              <TextField label="Vision model" optional value={cfg.vision_model}
+                placeholder="e.g. ollama:llava, openai:gpt-4o" hint="For image chats and analyze_image; blank = the active model."
+                onCommit={(v) => save({ vision_model: v })} />
+            </div>
+            <p className="fld-hint mt-3">Providers: {(cfg.providers ?? []).join(", ")}</p>
+          </Card>
+          <CardBoundary name="Backup model"><BackupModelCard flash={flash} /></CardBoundary>
+          <CardBoundary name="Ollama server"><OllamaCard host={cfg.ollama?.host ?? ""} hasToken={!!cfg.secrets?.OLLAMA_API_KEY}
+            onUse={async (u) => { await save(u); reload(); }} onSaved={reload} flash={flash} /></CardBoundary>
+          <CardBoundary name="Ollama servers"><OllamaServersCard onUse={async (u) => { await save(u); reload(); }} flash={flash} /></CardBoundary>
+          <CardBoundary name="Browse provider models"><ModelBrowser providers={cfg.providers ?? []} models={cfg.models ?? []}
+            onAddPresets={async (m) => { await save({ models: m }); reload(); }} onSave={save} flash={flash} /></CardBoundary>
+          <CardBoundary name="Models"><ModelsManager models={cfg.models ?? []} onSave={async (m) => { await save({ models: m }); reload(); }} /></CardBoundary>
+        </>}
 
-      <div className="card">
-        <h3>Model</h3>
-        <label>Active model
-          <input defaultValue={cfg.model} onBlur={(e) => save({ model: e.target.value })} />
-        </label>
-        <label>Reflection model
-          <input defaultValue={cfg.reflection_model}
-                 onBlur={(e) => save({ reflection_model: e.target.value })} />
-        </label>
-        <label>Embedding model
-          <input defaultValue={cfg.embedding_model}
-                 onBlur={(e) => save({ embedding_model: e.target.value })} />
-        </label>
-        <label>Vision model <span className="dim">(for image chats &amp; analyze_image; blank = use active model)</span>
-          <input defaultValue={cfg.vision_model}
-                 placeholder="e.g. ollama:llava, openai:gpt-4o, anthropic:claude-sonnet-4-6"
-                 onBlur={(e) => save({ vision_model: e.target.value })} />
-        </label>
-        <p className="dim">Providers: {(cfg.providers ?? []).join(", ")}</p>
+        {section === "keys" && <>
+          <Callout tone="warn">Keys are stored on the server and never shown again. Anyone with the dashboard's access token can use
+            them: keep the token private{caps?.docker ? " (rotate it with: xplogent-docker token --rotate)." : " and the server bound to 127.0.0.1."}</Callout>
+          <Card title="Model providers">
+            <div className="form-grid">
+              {SECRET_KEYS.map((k) => (
+                <div key={k} className="fld">
+                  <SecretField label={k} isSet={!!cfg.secrets?.[k]}
+                    onSave={async (v) => { await putSecrets({ [k]: v }); flash(`${k} saved`); reload(); }} />
+                  {cfg.secrets?.[k] && KEY_TEST_MODEL[k](cfg) && <div><ModelTestButton spec={KEY_TEST_MODEL[k](cfg)} label="Test key" /></div>}
+                </div>
+              ))}
+            </div>
+          </Card>
+          <Card title="Speech" description="Used by Calls → Speech (listening, voices and the Deepgram Voice Agent), where each has a Test button.">
+            <div className="form-grid">
+              {SPEECH_KEYS.map((k) => (
+                <SecretField key={k} label={k} isSet={!!cfg.secrets?.[k]}
+                  onSave={async (v) => { await putSecrets({ [k]: v }); flash(`${k} saved`); reload(); }} />
+              ))}
+            </div>
+          </Card>
+        </>}
+
+        {section === "appearance" && <>
+          <Appearance />
+          <CardBoundary name="Branding"><BrandingCard toast={toast} /></CardBoundary>
+          <CardBoundary name="Backup"><BackupCard flash={flash} reload={reload} /></CardBoundary>
+        </>}
+
+        {section === "safety" && <>
+          <Card title="Safety policy" description="What the agent may do on its own, by the risk of the action.">
+            <div className="form-grid">
+              {RISK_TIERS.map((tier) => (
+                <SelectField key={tier} label={`${tier[0].toUpperCase()}${tier.slice(1)} risk`} value={policy[tier] ?? "confirm"}
+                  options={ACTIONS.map((a) => ({ value: a, label: a === "auto" ? "Allow" : a === "confirm" ? "Ask me first" : "Never" }))}
+                  onChange={(v) => { setCfg({ ...cfg, safety: { ...(cfg.safety ?? {}), policy: { ...policy, [tier]: v } } }); save({ safety: { policy: { [tier]: v } } }); }} />
+              ))}
+            </div>
+          </Card>
+          <Card title="Tools" description="Groups of tools the chat assistant may use.">
+            <div className="toolgrid">
+              {Array.from(new Set(tools.map((t) => t.group))).map((group) => {
+                const noScreen = DISPLAY_GROUPS.includes(group) && caps && !caps.display;
+                return (
+                  <label key={group} className="check" style={noScreen ? { opacity: 0.55 } : undefined}
+                    title={noScreen ? "Needs a screen: not available on this server" : undefined}>
+                    <input type="checkbox" defaultChecked={enabledGroups.includes(group)} disabled={!!noScreen}
+                      onChange={(e) => {
+                        const next = e.target.checked ? [...enabledGroups, group] : enabledGroups.filter((g) => g !== group);
+                        setCfg({ ...cfg, tools_enabled: next });
+                        save({ tools: { enabled: next } });
+                      }} />
+                    {group}{noScreen && <span className="dim small"> (needs a screen)</span>}
+                  </label>
+                );
+              })}
+            </div>
+          </Card>
+          <ExecutionBackend execution={cfg.execution ?? {}} onSave={save} />
+          <RolesEditor roles={roles} allTools={tools.map((t) => t.name)} onSaved={() => { flash("role saved"); reload(); }} />
+        </>}
+
+        {section === "memory" && <>
+          <Card title={<>Memory <Badge>{facts.length} facts</Badge></>}
+            description={'"Learned" facts were picked up by the agent from chats; check them now and then.'}
+            actions={facts.some((f) => f.source === "reflection" && (f.created_at ?? 0) * 1000 > Date.now() - 864e5) &&
+              <Button size="sm" onClick={async () => {
+                if (!(await confirm({ title: "Forget recently learned facts?", body: "Every fact the agent learned by itself in the last 24 hours is removed. Facts you added stay.", confirmLabel: "Forget them", danger: true }))) return;
+                const r = await forgetLearnedFacts(24); flash(`forgot ${r.removed} learned fact(s)`); reload();
+              }}>Forget the last 24 h</Button>}>
+            <form className="fld-row" onSubmit={async (e) => {
+              e.preventDefault();
+              const el = (e.currentTarget.elements.namedItem("fact") as HTMLInputElement);
+              if (el.value.trim()) { await addFact(el.value.trim()); el.value = ""; reload(); }
+            }}>
+              <input name="fact" placeholder="Remember a fact…" aria-label="New fact" />
+              <Button type="submit" icon={Plus}>Add</Button>
+            </form>
+            <ul className="list">
+              {facts.map((f) => (
+                <li key={f.id}>
+                  <span className="grow">{f.content}{" "}
+                    <span className="faint xsmall">{f.source === "reflection" ? "learned" : f.source === "gui" ? "added by you" : f.source || ""}
+                      {f.created_at ? ` · ${new Date(f.created_at * 1000).toLocaleDateString()}` : ""}</span></span>
+                  <button className="x" aria-label="Forget this fact" title="Forget" onClick={async () => {
+                    if (await confirm({ title: "Forget this fact?", body: f.content, confirmLabel: "Forget", danger: true })) { await deleteFact(f.id); reload(); }
+                  }}><Trash2 size={14} /></button>
+                </li>
+              ))}
+              {facts.length === 0 && <li className="dim">No facts yet.</li>}
+            </ul>
+          </Card>
+          <Card title={<>Skills <Badge>{skills.length}</Badge></>} description="Skills the assistant learned or installed (more under Persona & Skills).">
+            <ul className="list">
+              {skills.map((sk) => (
+                <li key={sk.name}><b>{sk.name}</b> <span className="dim">used {sk.uses}×</span>
+                  <button className="x" aria-label={`Delete the skill ${sk.name}`} title="Delete" onClick={async () => {
+                    if (await confirm({ title: `Delete the skill "${sk.name}"?`, confirmLabel: "Delete", danger: true })) { await deleteSkill(sk.name); reload(); }
+                  }}><Trash2 size={14} /></button>
+                </li>
+              ))}
+              {skills.length === 0 && <li className="dim">No skills yet.</li>}
+            </ul>
+          </Card>
+        </>}
+
+        {section === "status" && <CardBoundary name="Status & health"><HealthCard /></CardBoundary>}
+        </>}
       </div>
-
-<CardBoundary name="Browse provider models">      <ModelBrowser providers={cfg.providers ?? []} models={cfg.models ?? []}
-        onAddPresets={async (m) => { await save({ models: m }); reload(); }}
-        onSave={save} flash={flash} /></CardBoundary>
-      <CardBoundary name="Models"><ModelsManager models={cfg.models ?? []} onSave={async (m) => { await save({ models: m }); reload(); }} /></CardBoundary>
-
-      <Appearance />
-      <CardBoundary name="Backup"><BackupCard flash={flash} reload={reload} /></CardBoundary>
-      <ExecutionBackend execution={cfg.execution ?? {}} onSave={save} />
-
-      <div className="card">
-        <h3>API keys</h3>
-        {SECRET_KEYS.map((k) => (
-          <div key={k}>
-            <label>{k} {cfg.secrets?.[k] ? "✓ set" : "✗ unset"}
-              <input type="password" placeholder={cfg.secrets?.[k] ? "•••••• (set)" : "paste key"}
-                     onBlur={async (e) => {
-                       if (e.target.value) { await putSecrets({ [k]: e.target.value.trim() }); e.target.value = ""; reload(); }
-                     }} />
-            </label>
-            {cfg.secrets?.[k] && KEY_TEST_MODEL[k](cfg) && <ModelTestButton spec={KEY_TEST_MODEL[k](cfg)} label="Test key" />}
-          </div>
-        ))}
-      </div>
-
-      <div className="card">
-        <h3>Safety policy</h3>
-        {RISK_TIERS.map((tier) => (
-          <label key={tier}>{tier}
-            <select defaultValue={policy[tier] ?? "confirm"}
-                    onChange={(e) => save({ safety: { policy: { [tier]: e.target.value } } })}>
-              {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
-          </label>
-        ))}
-      </div>
-
-      <div className="card">
-        <h3>Tools</h3>
-        {Array.from(new Set(tools.map((t) => t.group))).map((group) => {
-          const noScreen = DISPLAY_GROUPS.includes(group) && caps && !caps.display;
-          return (
-          <label key={group} className="check" style={noScreen ? { opacity: 0.5 } : undefined}
-                 title={noScreen ? "Needs a screen: not available on this server" : undefined}>
-            <input type="checkbox" defaultChecked={enabledGroups.includes(group)} disabled={!!noScreen}
-                   onChange={(e) => {
-                     const next = e.target.checked
-                       ? [...enabledGroups, group]
-                       : enabledGroups.filter((g) => g !== group);
-                     save({ tools: { enabled: next } });
-                   }} />
-            {group}{noScreen && <span className="dim"> (needs a screen: not available on this server)</span>}
-          </label>
-          );
-        })}
-      </div>
-
-      <RolesEditor roles={roles} allTools={tools.map((t) => t.name)}
-                   onSaved={() => { flash("role saved"); reload(); }} />
-
-      <div className="card">
-        <h3>Memory ({facts.length} facts)</h3>
-        <div className="row">
-          <input id="newfact" placeholder="remember a fact…" />
-          <button onClick={async () => {
-            const el = document.getElementById("newfact") as HTMLInputElement;
-            if (el.value) { await addFact(el.value); el.value = ""; reload(); }
-          }}>Add</button>
-        </div>
-        <p className="dim" style={{ fontSize: 12 }}>"learned" facts were picked up by the agent from chats; check them
-          now and then. {facts.some((f) => f.source === "reflection" && (f.created_at ?? 0) * 1000 > Date.now() - 864e5) && (
-          <button className="btn sm" onClick={async () => {
-            if (!confirm("Forget every fact the agent learned by itself in the last 24 hours? Facts you added stay.")) return;
-            const r = await forgetLearnedFacts(24); flash(`forgot ${r.removed} learned fact(s)`); reload();
-          }}>Forget facts learned in the last 24 h</button>)}</p>
-        <ul className="list">
-          {facts.map((f) => (
-            <li key={f.id}>{f.content}{" "}
-              <span className="dim" style={{ fontSize: 11 }}>
-                {f.source === "reflection" ? "learned" : f.source === "gui" ? "added by you" : f.source || ""}
-                {f.created_at ? ` · ${new Date(f.created_at * 1000).toLocaleDateString()}` : ""}</span>
-              <button className="x" onClick={async () => { await deleteFact(f.id); reload(); }}>✕</button>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <div className="card">
-        <h3>Skills ({skills.length})</h3>
-        <ul className="list">
-          {skills.map((s) => (
-            <li key={s.name}><b>{s.name}</b> <span className="dim">×{s.uses}</span>
-              <button className="x" onClick={async () => { await deleteSkill(s.name); reload(); }}>✕</button>
-            </li>
-          ))}
-        </ul>
-      </div>
-
     </div>
   );
 }
@@ -219,7 +247,7 @@ function OllamaCard({ host, hasToken, onUse, onSaved, flash }: {
       <label>Server URL
         <input value={url} placeholder="https://ai.example.com" onChange={(e) => setUrl(e.target.value)} />
       </label>
-      <label>Bearer token {hasToken ? "✓ set" : <span className="dim">(optional)</span>}
+      <label>Bearer token {hasToken ? <span className="secret-state set">saved</span> : <span className="dim">(optional)</span>}
         <input type="password" value={token} placeholder={hasToken ? "•••••• (set; type to replace)" : "paste token"}
                onChange={(e) => setTokenValue(e.target.value)} />
       </label>
@@ -228,8 +256,8 @@ function OllamaCard({ host, hasToken, onUse, onSaved, flash }: {
         <button className="primary" onClick={store} disabled={!url.trim()}>Save</button>
       </div>
       {probe && (probe.ok
-        ? <p className="ok">✓ Connected: {probe.models.length} model(s)</p>
-        : <p className="warn">✗ {probe.error}</p>)}
+        ? <ResultLine ok>Connected: {probe.models.length} model(s)</ResultLine>
+        : <ResultLine ok={false}>{probe.error}</ResultLine>)}
       {probe?.ok && probe.models.length > 0 && <ModelUseTable models={probe.models} server="" onUse={onUse} flash={flash} />}
     </div>
   );
@@ -292,6 +320,7 @@ function OllamaServerRow({ server, onUse, flash, onChange, onCancel }: {
   onUse: (u: Record<string, any>) => Promise<void>;
 }) {
   const isNew = !server.name;
+  const confirm = useConfirm();
   const [name, setName] = useState(server.name);
   const [url, setUrl] = useState(server.host);
   const [token, setToken] = useState("");
@@ -316,7 +345,7 @@ function OllamaServerRow({ server, onUse, flash, onChange, onCancel }: {
             onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} /></label>
         <label className="bud"><span className="lbl-sm">Server URL</span>
           <input value={url} placeholder="https://gpu.example.com" style={{ width: 230 }} onChange={(e) => setUrl(e.target.value)} /></label>
-        <label className="bud"><span className="lbl-sm">Bearer token {server.token_set ? "✓ set" : "(optional)"}</span>
+        <label className="bud"><span className="lbl-sm">Bearer token {server.token_set ? <span className="secret-state set">saved</span> : "(optional)"}</span>
           <input type="password" value={token} placeholder={server.token_set ? "•••••• (type to replace)" : "paste token"}
             style={{ width: 170 }} onChange={(e) => setToken(e.target.value)} /></label>
       </div>
@@ -325,15 +354,15 @@ function OllamaServerRow({ server, onUse, flash, onChange, onCancel }: {
         <button className="primary" onClick={save} disabled={!name.trim() || !url.trim()}>Save</button>
         {isNew ? <button onClick={onCancel}>Cancel</button>
           : <button className="danger" onClick={async () => {
-              if (!confirm(`Remove the server "${server.name}" and its token?`)) return;
+              if (!(await confirm({ title: `Remove the server "${server.name}"?`, body: "Its saved token is removed too.", confirmLabel: "Remove", danger: true }))) return;
               const res = await deleteOllamaServer(server.name);
               if (!res.ok) { flash(res.error || `couldn't remove ${server.name}`); return; }
               flash(`server ${server.name} removed`); onChange();
             }}>Remove</button>}
       </div>
       {probe && (probe.ok
-        ? <p className="ok">✓ Connected: {probe.models.length} model(s)</p>
-        : <p className="warn">✗ {probe.error}</p>)}
+        ? <ResultLine ok>Connected: {probe.models.length} model(s)</ResultLine>
+        : <ResultLine ok={false}>{probe.error}</ResultLine>)}
       {probe?.ok && probe.models.length > 0 && !isNew && <ModelUseTable models={probe.models} server={server.name} onUse={onUse} flash={flash} />}
     </div>
   );
@@ -398,7 +427,7 @@ function BackupModelCard({ flash }: { flash: (m: string) => void }) {
             setResult(r.ok ? `✓ ${r.model} answered in ${r.seconds}s: "${r.reply}"` : `✗ ${r.error}`);
           })}>{busy === "test" ? "Testing…" : "Test backup"}</button>
       </div>
-      {result && <p className={result.startsWith("✓") ? "ok" : "warn"}>{result}</p>}
+      {result && <ResultLine ok={result.startsWith("✓")}>{result.replace(/^[✓✗] /, "")}</ResultLine>}
       {st.models && st.models.length > 0 && <p className="dim">On that Ollama server: {st.models.join(", ")}</p>}
     </div>
   );
@@ -449,24 +478,12 @@ function HealthCard() {
 }
 
 function Appearance() {
-  const [theme, setTheme] = useState(localStorage.getItem("xplogent_theme") || "auto");
-  const applyTheme = (t: string) => {
-    setTheme(t);
-    localStorage.setItem("xplogent_theme", t);
-    if (t === "auto") document.documentElement.removeAttribute("data-theme");
-    else document.documentElement.setAttribute("data-theme", t);
-  };
+  const { mode, setMode } = useTheme();
   return (
-    <div className="card">
-      <h3>Appearance</h3>
-      <label>Theme
-        <select value={theme} onChange={(e) => applyTheme(e.target.value)}>
-          {["auto", "dark", "light"].map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
-      </label>
-      <p className="dim" style={{ fontSize: 12 }}>The accent colour, logo and company name are set once, for everyone,
-        under Calls → Setup → Branding.</p>
-    </div>
+    <Card title="Theme" description="Also in the top bar. Saved in this browser.">
+      <Segmented<ThemeMode> label="Theme" value={mode} onChange={setMode}
+        options={[{ value: "auto", label: "Device", icon: Monitor }, { value: "light", label: "Light", icon: Sun }, { value: "dark", label: "Dark", icon: Moon }]} />
+    </Card>
   );
 }
 
@@ -494,12 +511,9 @@ function BackupCard({ flash, reload }: { flash: (m: string) => void; reload: () 
   return (
     <div className="card">
       <h3>Backup &amp; knowledge</h3>
-      <p className="dim">Full backup downloads the DB + skills + config as a .tar.gz.</p>
+      <p className="dim small">The full backup downloads the database, skills and settings as a .tar.gz.</p>
       <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-        <a className="primary" href="/backup" style={{ padding: "8px 14px", borderRadius: 6,
-           textDecoration: "none", color: "#0d1117", background: "var(--accent)" }}>
-          Download backup
-        </a>
+        <a className="btn primary" href="/backup">Download backup</a>
         <button onClick={doExport}>Export skills + memory</button>
         <label className="filebtn">Import knowledge
           <input type="file" accept="application/json" style={{ display: "none" }}
@@ -633,7 +647,7 @@ function ModelsManager({ models, onSave }:
       <ul className="list">
         {models.map((m, i) => (
           <li key={i}><b>{m.label}</b> <span className="dim">{m.model} · {m.effort}{m.thinking ? " · think" : ""}</span>
-            <button className="x" onClick={() => onSave(models.filter((_, j) => j !== i))}>✕</button>
+            <button className="x" aria-label="Remove this preset" title="Remove" onClick={() => onSave(models.filter((_, j) => j !== i))}><Trash2 size={14} /></button>
           </li>
         ))}
       </ul>

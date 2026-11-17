@@ -5,12 +5,14 @@ import {
   getSkillLibrary, getSkills, getSoul, installSkill, putMemoryMd, putSoul,
 } from "../api";
 import { skillProgress } from "../lib/skills";
+import { useConfirm } from "../ui/confirm";
 import { useToast } from "../components/Toast";
 
 const fmtTime = (t: number) => new Date(t * 1000).toLocaleString();
 
 export function Persona() {
   const toast = useToast();
+  const confirm = useConfirm();
   const [soul, setSoul] = useState("");
   const [memory, setMemory] = useState("");
   const [library, setLibrary] = useState<SkillPack[]>([]);
@@ -115,7 +117,10 @@ export function Persona() {
                     <span className="faint" style={{ fontSize: 11 }}>
                       {s.uses ?? 0} uses · {s.successes ?? 0}✓/{s.failures ?? 0}✗ · {prog.next === "max" ? "maxed" : `${prog.pct}% → ${prog.next}`}</span>
                   </span>
-                  <button className="x" onClick={() => deleteSkill(s.name).then(reloadSkills)}><Trash2 size={14} /></button>
+                  <button className="x" aria-label={`Delete the skill ${s.name}`} title="Delete" onClick={async () => {
+                    if (await confirm({ title: `Delete the skill "${s.name}"?`, body: "Its progress is lost; the agent can learn it again.", confirmLabel: "Delete", danger: true }))
+                      deleteSkill(s.name).then(reloadSkills);
+                  }}><Trash2 size={14} /></button>
                 </li>
               );
             })}

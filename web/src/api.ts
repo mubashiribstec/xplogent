@@ -522,7 +522,35 @@ export async function deleteLogo(): Promise<void> {
 export const setTourDone = (done = true) => postJSON<{ ok: boolean }>("/ui/tour", { done });
 export const setDemo = (on: boolean) => postJSON<{ ok: boolean; demo_calls: number }>("/voip/demo", { on });
 export const testTelnyx = () => postJSON<Record<string, any>>("/voip/telnyx/test");
-export const testSpeech = (stt = true) => postJSON<Record<string, any>>("/voip/speech/test", { stt });
+export interface SpeechTest {
+  ok: boolean; error?: string; sentence?: string; tts_ms?: number; audio_seconds?: number;
+  transcript?: string; stt_ms?: number; /** base64 WAV, when asked for with play: true */ wav?: string;
+}
+/** Speak a test sentence (and hear it back when stt). ``tts`` previews another voice without saving it. */
+export const testSpeech = (stt = true, extra: { play?: boolean; text?: string; tts?: Record<string, any> } = {}) =>
+  postJSON<SpeechTest & Record<string, any>>("/voip/speech/test", { stt, ...extra });
+/** Play a base64 WAV in the browser (the voice previews). */
+export function playWav(b64: string): Promise<void> {
+  const audio = new Audio(`data:audio/wav;base64,${b64}`);
+  return new Promise((resolve, reject) => {
+    audio.onended = () => resolve();
+    audio.onerror = () => reject(new Error("the browser could not play the sample"));
+    audio.play().catch(reject);
+  });
+}
+// ── Deepgram Voice Agent ─────────────────────────────────────────────────────
+export interface ThinkModel { provider: string; model: string; name: string }
+export async function getVoiceAgentModels(): Promise<{ ok: boolean; models: ThinkModel[] }> {
+  return (await fetch("/voip/voice-agent/models")).json();
+}
+export async function getVoiceAgentVoices(): Promise<{ ok: boolean; voices: { id: string; name: string }[] }> {
+  return (await fetch("/voip/voice-agent/voices")).json();
+}
+export interface VoiceAgentTest {
+  ok: boolean; model?: string; voice?: string; connect_ms?: number; first_audio_ms?: number; reply?: string;
+  audio_seconds?: number; error?: string;
+}
+export const testVoiceAgent = () => postJSON<VoiceAgentTest>("/voip/voice-agent/test");
 
 /** Thrown when the backend answered, but not with a usable status (so it isn't "unreachable"). */
 export class StatusError extends Error {}

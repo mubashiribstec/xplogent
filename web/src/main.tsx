@@ -2,13 +2,14 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { ToastProvider } from "./components/Toast";
+import { ConfirmProvider } from "./ui/confirm";
+import { applyMode, readMode } from "./lib/theme";
 import "./styles.css";
 
 // Apply the saved theme + accent before first paint. Storage can be blocked (privacy
 // settings / site-data policies): never let that stop the app from starting.
+applyMode(readMode());
 try {
-  const theme = localStorage.getItem("xplogent_theme") || "auto";
-  if (theme !== "auto") document.documentElement.setAttribute("data-theme", theme);
   // Branding (server side) is the only accent now; an old browser-only one would fight it.
   localStorage.removeItem("xplogent_accent");
 } catch { /* defaults */ }
@@ -35,7 +36,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
       <ToastProvider>
-        <App />
+        <ConfirmProvider>
+          <App />
+        </ConfirmProvider>
       </ToastProvider>
     </ErrorBoundary>
   </React.StrictMode>

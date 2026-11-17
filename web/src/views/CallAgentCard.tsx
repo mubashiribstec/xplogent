@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CallAgentInfo, CrmV2Check, getCallAgent, patchConfig, putSecrets, testCrm } from "../api";
+import { ResultLine } from "../ui";
 
 type Toaster = (m: string, kind?: any) => void;
 const fmt = (t: number) => (t ? new Date(t * 1000).toLocaleString() : "—");
@@ -72,7 +73,7 @@ export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: (
                       + "local-network address (or set voip.crm.allow_http for an internal name)", "error");
               save({ crm: { base_url: v } });
             }} /></label>
-        <label className="bud"><span className="lbl-sm">API token {info.crm.token_set ? "✓ set" : "✗ not set"}</span>
+        <label className="bud"><span className="lbl-sm">API token <span className={`secret-state ${info.crm.token_set ? "set" : "unset"}`}>{info.crm.token_set ? "saved" : "not set"}</span></span>
           {defaultTokenName
             ? <input type="password" placeholder={info.crm.token_set ? "•••••• (type to replace)" : "the CRM's token"}
                 onBlur={async (e) => {
@@ -84,7 +85,7 @@ export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: (
         <button className="btn" onClick={test} disabled={busy || !info.crm.enabled || !info.crm.base_url || !info.crm.token_set}>
           {busy ? "Testing…" : "Test connection"}</button>
       </div>
-      {info.crm.address_problem && <p className="warn">✗ {info.crm.address_problem}</p>}
+      {info.crm.address_problem && <ResultLine ok={false}>{info.crm.address_problem}</ResultLine>}
       <p className="dim" style={{ fontSize: 12 }}>Signed with the token (HMAC-SHA256); nothing is sent until it is set.
         Test connection checks both the call-summary push and the CRM's v2 endpoints (vacancies, candidates, dial
         locks). The CRM side is described in docs/crm-laravel.md; to try everything before it's deployed,
@@ -99,11 +100,11 @@ export function CallAgentCard({ toast, onChange }: { toast: Toaster; onChange: (
           {info.crm.callback.warning && <> ✗ {info.crm.callback.warning}</>}
           {info.crm.callback.note && <span className="dim"> {info.crm.callback.note}</span>}
         </div>)}
-      {msg && <p className={msg.ok ? "ok" : "warn"}>{msg.ok ? "✓" : "✗"} {msg.text}</p>}
+      {msg && <ResultLine ok={msg.ok}>{msg.text}</ResultLine>}
       {v2 && (v2.ok
-        ? <p className="ok">✓ CRM API v2: vacancies, candidates and dial locks reachable ({Math.round(v2.ms)} ms,
-            {" "}{v2.open_vacancies_seen ? "open vacancies found" : "no open vacancies right now"})</p>
-        : <p className="warn">✗ CRM API v2: {v2.reason} <span className="dim">{v2.fix}</span></p>)}
+        ? <ResultLine ok>CRM API v2: vacancies, candidates and dial locks reachable ({Math.round(v2.ms)} ms,
+            {" "}{v2.open_vacancies_seen ? "open vacancies found" : "no open vacancies right now"})</ResultLine>
+        : <ResultLine ok={false}>CRM API v2: {v2.reason} <span className="dim">{v2.fix}</span></ResultLine>)}
       {info.crm.deliveries.length > 0 && (
         <details><summary className="dim">Recent deliveries ({info.crm.deliveries.length})</summary>
           <table className="data-table"><thead><tr><th>When</th><th>Call</th><th>Try</th><th>Result</th></tr></thead>

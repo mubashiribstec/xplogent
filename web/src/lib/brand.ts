@@ -15,7 +15,7 @@ export const contrast = (a: RGB, b: RGB) => {
 /** Lighten (dark theme) or darken (light theme) until accent text on the background is >= 4.5:1. */
 export function readableAccent(accent: string, theme: "dark" | "light"): string {
   if (!/^#[0-9a-fA-F]{6}$/.test(accent)) return "";
-  const bg: RGB = theme === "dark" ? [11, 14, 20] : [255, 255, 255];
+  const bg: RGB = theme === "dark" ? [20, 24, 33] : [255, 255, 255];
   let c = hex(accent);
   for (let i = 0; i < 40 && contrast(c, bg) < 4.5; i++) {
     c = theme === "dark" ? c.map((v) => v + (255 - v) * 0.08) as RGB : c.map((v) => v * 0.92) as RGB;
@@ -26,9 +26,15 @@ export function readableAccent(accent: string, theme: "dark" | "light"): string 
 export function applyAccent(accent: string, theme: "dark" | "light") {
   const root = document.documentElement.style;
   const value = readableAccent(accent, theme);
-  if (!value) { root.removeProperty("--accent"); root.removeProperty("--accent-weak"); return; }
+  if (!value) {
+    ["--accent", "--accent-weak", "--on-accent"].forEach((p) => root.removeProperty(p));
+    return;
+  }
   root.setProperty("--accent", value);
-  root.setProperty("--accent-weak", value + "22");
+  root.setProperty("--accent-weak", value + (theme === "dark" ? "24" : "1a"));
+  // Text on accent-coloured buttons: white or near-black, whichever reads better.
+  const c = hex(value);
+  root.setProperty("--on-accent", contrast(c, [255, 255, 255]) >= contrast(c, [11, 13, 18]) ? "#ffffff" : "#0b0d12");
 }
 
 /** Fired after branding changes so the shell reloads the logo and colour. */

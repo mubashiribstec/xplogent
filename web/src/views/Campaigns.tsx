@@ -6,6 +6,7 @@ import {
 } from "../api";
 import { CardBoundary } from "../components/CardBoundary";
 import { useToast } from "../components/Toast";
+import { useConfirm } from "../ui/confirm";
 
 const STATE: Record<string, string> = {
   queued: "waiting", dialling: "ringing", in_call: "on a call", retry_wait: "try again later", done: "done",
@@ -27,6 +28,7 @@ const when = (t: number) => (t ? new Date(t * 1000).toLocaleString(undefined, { 
 /** Automatic calling: one campaign per vacancy, candidates from the CRM, with hard limits. */
 export function Campaigns() {
   const toast = useToast();
+  const confirm = useConfirm();
   const [data, setData] = useState<{ campaigns: Campaign[]; stop_all: boolean; agent_on: boolean } | null>(null);
   const load = () => getCampaigns().then(setData).catch(() => {});
   useEffect(() => { load(); const id = setInterval(load, 5000); return () => clearInterval(id); }, []);
@@ -37,7 +39,7 @@ export function Campaigns() {
         <div className="page-head">
           <h1><Megaphone size={22} /> Campaigns</h1>
           <button className={`btn ${data.stop_all ? "" : "danger"}`} onClick={async () => {
-            if (!data.stop_all && !confirm("Stop every campaign now? Calls in progress finish; nothing new is dialled.")) return;
+            if (!data.stop_all && !(await confirm({ title: "Stop every campaign?", body: "Calls in progress finish; nothing new is dialled.", confirmLabel: "Stop all", danger: true }))) return;
             await stopAllCampaigns(!data.stop_all); toast(data.stop_all ? "campaigns may dial again" : "all campaigns stopped",
               data.stop_all ? "success" : "error"); load();
           }}>{data.stop_all ? "Resume campaigns" : "Stop all"}</button>
@@ -118,6 +120,7 @@ function NewCampaign({ onMade, toast }: { onMade: () => void; toast: (m: string,
 }
 
 function CampaignCard({ c, onChange, toast }: { c: Campaign; onChange: () => void; toast: (m: string, k?: any) => void }) {
+  const confirm = useConfirm();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<CampaignItem[] | null>(null);
   const [signer, setSigner] = useState("");
@@ -188,7 +191,7 @@ function CampaignCard({ c, onChange, toast }: { c: Campaign; onChange: () => voi
           <div className="row" style={{ gap: 6, marginTop: 6 }}>
             <input placeholder="Your name" value={signer} onChange={(e) => setSigner(e.target.value)} />
             <button className="btn sm" disabled={!signer.trim()} onClick={async () => {
-              if (!confirm("You confirm cold calling for this campaign is lawful and TPS screening is in place?")) return;
+              if (!(await confirm({ title: "Sign off cold calling?", body: "You confirm cold calling for this campaign is lawful and TPS screening is in place. This is recorded in the audit log.", confirmLabel: "I confirm" }))) return;
               const r = await coldSignoff(c.id, signer); toast(r.ok ? "signed off (audited)" : r.error ?? "failed", r.ok ? "success" : "error");
               onChange();
             }}>I confirm</button>
@@ -244,7 +247,7 @@ export function TpsCard({ toast }: { toast: (m: string, k?: any) => void }) {
               if (v && !/^https?:\/\//.test(v)) { toast("the address must start with https://", "error"); return; }
               save({ url: v });
             }} /></label>
-        <label className="bud"><span className="lbl-sm">API key {cfg.keySet ? <span className="ok">✓ saved</span> : <span className="dim">not set</span>}</span>
+        <label className="bud"><span className="lbl-sm">API key {cfg.keySet ? <span className="secret-state set">saved</span> : <span className="secret-state unset">not set</span>}</span>
           <input type="password" autoComplete="off" placeholder={cfg.keySet ? "•••••• (paste to replace)" : "the service's key"}
             onBlur={async (e) => {
               const v = e.target.value.trim();

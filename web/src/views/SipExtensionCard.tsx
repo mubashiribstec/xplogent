@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { SipExtensionStatus, detectSipIp, getSipStatus, saveSipExtension, testSipExtension } from "../api";
+import { ResultLine } from "../ui";
 
 type Toaster = (m: string, kind?: any) => void;
 
@@ -73,7 +74,7 @@ export function SipExtensionCard({ cfg, passwordSet, toast, onChange }: { cfg: R
         {input("server", "FreePBX / PBX address", "192.168.1.10", 210)}
         {input("port", "Port", "5060", 80, "number")}
         {input("username", "Extension number", "2000", 130)}
-        <label className="bud"><span className="lbl-sm">Password {pwSet === undefined ? "…" : pwSet ? "✓ set" : "✗ not set"}</span>
+        <label className="bud"><span className="lbl-sm">Password {pwSet === undefined ? "…" : <span className={`secret-state ${pwSet ? "set" : "unset"}`}>{pwSet ? "saved" : "not set"}</span>}</span>
           <input type="password" value={form.password ?? ""} placeholder={pwSet ? "•••••• (type to replace)" : "extension secret"}
             onChange={(e) => set("password", e.target.value)} style={{ width: 150 }} /></label>
         {input("auth_username", "Auth username (if different)", "", 150)}
@@ -118,7 +119,7 @@ export function SipExtensionCard({ cfg, passwordSet, toast, onChange }: { cfg: R
         <p className="dim" style={{ fontSize: 12 }}>Registration: {!enabled
           ? "off. Tick \"Extension line switched on\", then Save & connect to register with the PBX."
           : "not set up. Enter the PBX address, extension number and password, then Save & connect."}</p>)}
-      {msg && <p className={msg.ok ? "ok" : "warn"}>{msg.ok ? "✓" : "✗"} {msg.text}</p>}
+      {msg && <ResultLine ok={msg.ok}>{msg.text}</ResultLine>}
       {st?.last_error && <p className="dim" style={{ fontSize: 12 }}>Last problem: {st.last_error}</p>}
       <details style={{ marginTop: 8 }}>
         <summary className="dim">How to connect FreePBX</summary>

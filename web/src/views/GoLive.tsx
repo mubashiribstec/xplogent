@@ -1,3 +1,5 @@
+import { AlertTriangle, Check, CheckCircle2 } from "lucide-react";
+import { useConfirm } from "../ui/confirm";
 import { useEffect, useState } from "react";
 import { CallAgentInfo, CallRow, ReadinessItem, getCallAgent } from "../api";
 
@@ -53,13 +55,13 @@ export function GoLive({ ready, items, calls, cfg, onSwitch }: {
   ];
   return (
     <div className="card" data-tour="golive">
-      <h3>{live ? "✓ Your agent is live" : "Go live"} <span className="dim" style={{ fontSize: 13, fontWeight: 400 }}>{doneCount} of {steps.length} done</span></h3>
+      <h3>{live ? <><CheckCircle2 size={18} className="ok" aria-hidden /> Your agent is live</> : "Go live"} <span className="dim" style={{ fontSize: 13, fontWeight: 400 }}>{doneCount} of {steps.length} done</span></h3>
       <AgentSwitch on={!!cfg.enabled} ready={ready} items={items} onSwitch={onSwitch} />
       <div className="golive-progress"><div style={{ width: `${(doneCount / steps.length) * 100}%` }} /></div>
       <ol className="golive-steps">
         {steps.map((s, n) => (
           <li key={s.title} className={s.done ? "done" : ""}>
-            <span className="mark">{s.done ? "✓" : n + 1}</span>
+            <span className="mark">{s.done ? <Check size={13} aria-label="done" /> : n + 1}</span>
             <span className="what"><b>{s.title}</b><small>{s.hint}</small></span>
             {!s.done && <button className="btn sm" onClick={() => scrollTo(s.go)}>Open</button>}
           </li>
@@ -70,7 +72,7 @@ export function GoLive({ ready, items, calls, cfg, onSwitch }: {
       </div>
       {/* Warnings that don't block going live but will hurt a demo: said in words, not only on hover. */}
       {["model_speed", "company"].map((id) => find(items, id)).filter((i) => i && !i.ok).map((i) => (
-        <p key={i!.id} className="warn" style={{ fontSize: 12, margin: "6px 0 0" }}>⚠ {i!.label}: {i!.detail}</p>))}
+        <p key={i!.id} className="warn small" style={{ margin: "6px 0 0", display: "flex", gap: 6 }}><AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden />{i!.label}: {i!.detail}</p>))}
     </div>
   );
 }
@@ -81,11 +83,13 @@ function AgentSwitch({ on, items, onSwitch }: {
   on: boolean; ready?: boolean; items: ReadinessItem[]; onSwitch?: (on: boolean) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  const confirm = useConfirm();
   // "Phone agent switched on" is what this button does: it isn't a reason to hesitate.
   const red = items.filter((i) => i.required && !i.ok && i.id !== "enabled").map((i) => i.label);
   const flip = async () => {
     if (!onSwitch) return;
-    if (!on && red.length && !confirm(`These checks are still red:\n• ${red.join("\n• ")}\n\nSwitch the phone agent on anyway (for testing)?`)) return;
+    if (!on && red.length && !(await confirm({ title: "Switch on with red checks?", confirmLabel: "Switch on anyway",
+      body: `These checks are still red:\n• ${red.join("\n• ")}\n\nSwitch the phone agent on anyway (for testing)?` }))) return;
     setBusy(true);
     try { await onSwitch(!on); } finally { setBusy(false); }
   };

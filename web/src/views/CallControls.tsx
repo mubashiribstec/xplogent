@@ -1,18 +1,23 @@
 import { useEffect, useRef, useState } from "react";
-import { Mic, MicOff, Pause, Phone, PhoneForwarded, PhoneOff, Play, Send } from "lucide-react";
+import { CheckCircle2, Circle, Loader2, MinusCircle, Mic, MicOff, Pause, Phone, PhoneForwarded, PhoneOff, Play, Send, Stethoscope, X, XCircle } from "lucide-react";
 import {
-  CallResult, CallTurn, LiveCallInfo, dialCall, getCall, hangupCall, instructCall, pauseAI, sayOnCall,
-  transferCall, wsTokenParam, wsUrl, testModel, testSpeech, getBackupModel, testBackupModel,
+  CallResult, CallTurn, LiveCallInfo, dialCall, getCall, getFullConfig, hangupCall, instructCall, pauseAI, sayOnCall,
+  transferCall, wsTokenParam, wsUrl, testModel, testSpeech, testVoiceAgent, getBackupModel, testBackupModel,
   getTestNumbers, saveTestNumber,
 } from "../api";
+import { Badge, Button, Card, Field } from "../ui";
+import { useConfirm, usePrompt } from "../ui/confirm";
+import { Transcript } from "./calls/Transcript";
 
 type Toaster = (m: string, kind?: any) => void;
+type Ask = (o: { title: string; body?: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
 const since = (t: number) => { const s = Math.max(0, Math.round(Date.now() / 1000 - t)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
 /** Dial, asking before calling outside calling hours. */
-export async function placeCall(body: Parameters<typeof dialCall>[0], toast: Toaster): Promise<boolean> {
+export async function placeCall(body: Parameters<typeof dialCall>[0], toast: Toaster, ask: Ask): Promise<boolean> {
   let res: CallResult = await dialCall(body);
-  if (!res.ok && res.hours && confirm(`${res.error}.\n\nCall anyway?`)) res = await dialCall({ ...body, ignore_hours: true });
+  if (!res.ok && res.hours && await ask({ title: "Outside calling hours", body: `${res.error}.`, confirmLabel: "Call anyway" }))
+    res = await dialCall({ ...body, ignore_hours: true });
   if (res.ok) toast(body.test ? "calling your phone…" : "calling…", "success");
   else if (!res.hours || res.error) toast(res.error ?? "call failed", "error");
   return !!res.ok;
@@ -22,10 +27,9 @@ export async function placeCall(body: Parameters<typeof dialCall>[0], toast: Toa
 export function LiveCalls({ active, toast, onChange }: { active: LiveCallInfo[]; toast: Toaster; onChange: () => void }) {
   if (!active.length) return null;
   return (
-    <div className="card">
-      <h3>Live calls ({active.length})</h3>
+    <Card title={<>Live calls <Badge tone="warn">{active.length}</Badge></>}>
       {active.map((c) => <LiveCall key={c.call_id} call={c} toast={toast} onChange={onChange} />)}
-    </div>
+    </Card>
   );
 }
 
@@ -34,13 +38,15 @@ function LiveCall({ call, toast, onChange }: { call: LiveCallInfo; toast: Toaste
   const [text, setText] = useState("");
   const [, tick] = useState(0);
   const box = useRef<HTMLDivElement>(null);
+  const confirm = useConfirm();
+  const prompt = usePrompt();
   useEffect(() => {
     const load = () => { getCall(call.call_id).then((r) => setTurns(r.call?.turns ?? [])).catch(() => {}); tick((n) => n + 1); };
     load();
     const id = setInterval(load, 1500);
     return () => clearInterval(id);
   }, [call.call_id]);
-  useEffect(() => { box.current?.scrollTo({ top: box.current.scrollHeight }); }, [turns.length]);
+  useEffect(() => { const t = box.current?.querySelector(".transcript"); t?.scrollTo({ top: t.scrollHeight }); }, [turns.length]);
 
   const act = async (p: Promise<CallResult>, ok: string) => {
     const r = await p;
@@ -50,9 +56,12 @@ function LiveCall({ call, toast, onChange }: { call: LiveCallInfo; toast: Toaste
   };
   const say = async () => { if (text.trim() && await act(sayOnCall(call.call_id, text), "the agent is saying it")) setText(""); };
   const instruct = async () => { if (text.trim() && await act(instructCall(call.call_id, text), "instruction added")) setText(""); };
-  const transfer = () => {
-    const to = prompt("Transfer to which number? (blank = the hand-off number)", "");
+  const transfer = async () => {
+    const to = await prompt({ title: "Transfer this call", label: "Number (blank = the hand-off number)", confirmLabel: "Transfer" });
     if (to !== null) act(transferCall(call.call_id, to.trim()), "transferring");
+  };
+  const hangup = async () => {
+    if (await confirm({ title: "Hang up this call?", confirmLabel: "Hang up", danger: true })) act(hangupCall(call.call_id), "hung up");
   };
 
   return (
@@ -61,31 +70,24 @@ function LiveCall({ call, toast, onChange }: { call: LiveCallInfo; toast: Toaste
         <div>
           <b>{call.contact_name || call.number || "unknown"}</b>{" "}
           <span className="dim">{call.direction} · {call.transport}{call.test && call.direction !== "test" ? " · test" : ""}{call.via_queue ? " · via queue" : ""} · {since(call.started)}</span>
-          {call.paused && <span className="badge warn" style={{ marginLeft: 6 }}>AI paused</span>}
+          {call.paused && <> <Badge tone="warn">AI paused</Badge></>}
         </div>
-        <div className="row" style={{ gap: 6 }}>
-          <button className="btn" onClick={() => act(pauseAI(call.call_id, !call.paused), call.paused ? "AI resumed" : "AI paused")}
+        <div className="row wrap" style={{ gap: 6 }}>
+          <Button size="sm" icon={call.paused ? Play : Pause} onClick={() => act(pauseAI(call.call_id, !call.paused), call.paused ? "AI resumed" : "AI paused")}
             title={call.paused ? "Let the AI answer again" : "Stop the AI from answering (type what to say instead)"}>
-            {call.paused ? <><Play size={14} /> Resume AI</> : <><Pause size={14} /> Pause AI</>}</button>
-          <button className="btn" disabled={!call.can_transfer} onClick={transfer}><PhoneForwarded size={14} /> Transfer</button>
-          <button className="btn danger" onClick={() => confirm("Hang up this call?") && act(hangupCall(call.call_id), "hung up")}>
-            <PhoneOff size={14} /> Hang up</button>
+            {call.paused ? "Resume AI" : "Pause AI"}</Button>
+          <Button size="sm" icon={PhoneForwarded} disabled={!call.can_transfer} onClick={transfer}>Transfer</Button>
+          <Button size="sm" variant="danger" icon={PhoneOff} onClick={hangup}>Hang up</Button>
         </div>
       </div>
-      <div ref={box} className="live-transcript">
-        {turns.length === 0 && <span className="dim">waiting for the first words…</span>}
-        {turns.map((t, i) => (
-          <div key={i}><b style={{ color: t.speaker === "agent" ? "var(--accent)" : "var(--amber)" }}>
-            {t.speaker === "agent" ? "Agent" : "Caller"}:</b> {t.text}</div>
-        ))}
-      </div>
-      {call.notes.length > 0 && <div className="dim" style={{ fontSize: 12 }}>Instructions: {call.notes.join(" · ")}</div>}
-      <div className="row" style={{ gap: 6, marginTop: 6 }}>
-        <input style={{ flex: 1 }} value={text} placeholder="Type a sentence for the agent to say, or an instruction"
+      <div ref={box}><Transcript turns={turns} live empty="Waiting for the first words…" /></div>
+      {call.notes.length > 0 && <div className="dim xsmall">Instructions: {call.notes.join(" · ")}</div>}
+      <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
+        <input className="grow" style={{ flex: "1 1 220px" }} value={text} aria-label="Sentence or instruction for the agent"
+          placeholder="Type a sentence for the agent to say, or an instruction"
           onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") say(); }} />
-        <button className="btn primary" disabled={!text.trim()} onClick={say} title="The agent says this now">Say</button>
-        <button className="btn" disabled={!text.trim()} onClick={instruct}
-          title="A private note the agent follows from its next reply on">Instruct</button>
+        <Button variant="primary" disabled={!text.trim()} onClick={say} title="The agent says this now">Say</Button>
+        <Button disabled={!text.trim()} onClick={instruct} title="A private note the agent follows from its next reply on">Instruct</Button>
       </div>
     </div>
   );
@@ -98,7 +100,8 @@ export function CallNow({ toast, via, onCalled }: { toast: Toaster; via: string[
   const [me, setMe] = useState(() => { try { return localStorage.getItem("xpl_test_phone") || ""; } catch { return ""; } });
   const [busy, setBusy] = useState(false);
   const [tests, setTests] = useState<{ numbers: string[]; per_day?: number }>({ numbers: [] });
-  useEffect(() => { if (!via.includes(line) && via[0]) setLine(via[0]); }, [via.join(",")]);
+  const confirm = useConfirm();
+  useEffect(() => { if (!via.includes(line) && via[0]) setLine(via[0]); /* eslint-disable-next-line */ }, [via.join(",")]);
   useEffect(() => { getTestNumbers().then(setTests).catch(() => {}); }, []);
   const editTests = async (b: { add?: string; remove?: string }) => {
     const r = await saveTestNumber(b);
@@ -114,38 +117,43 @@ export function CallNow({ toast, via, onCalled }: { toast: Toaster; via: string[
   const call = async (n: string, test: boolean) => {
     setBusy(true);
     try {
-      if (test && !listed(n) && !(confirm(`${n} isn't one of your test numbers yet. Add it? (Only you should answer it.)`)
-                                  && await editTests({ add: n }))) return;
-      if (await placeCall({ number: n, via: line, test }, toast)) onCalled();
+      if (test && !listed(n) && !(await confirm({ title: "Add a test number?", confirmLabel: "Add and call",
+        body: `${n} isn't one of your test numbers yet. Only you should answer it.` }) && await editTests({ add: n }))) return;
+      if (await placeCall({ number: n, via: line, test }, toast, confirm)) onCalled();
     } finally { setBusy(false); }
   };
+  const lineSelect = via.length > 1 && (
+    <Field label="Line">{(id) => <select id={id} value={line} onChange={(e) => setLine(e.target.value)}>
+      {via.map((v) => <option key={v} value={v}>{v === "sip" ? "SIP trunk" : v === "extension" ? "PBX extension" : "Telnyx API"}</option>)}</select>}</Field>
+  );
   return (
-    <div className="card">
-      <h3><Phone size={16} /> Call now</h3>
-      <div className="row wrap" style={{ gap: 8 }}>
-        <input value={number} placeholder={line === "extension" ? "extension (e.g. 201) or number" : "+15551234567"}
-          onChange={(e) => setNumber(e.target.value)} style={{ width: 200 }} />
-        {via.length > 1 && <select value={line} onChange={(e) => setLine(e.target.value)}>
-          {via.map((v) => <option key={v} value={v}>{v === "sip" ? "SIP trunk" : v === "extension" ? "PBX extension" : "Telnyx API"}</option>)}</select>}
-        <button className="btn primary" disabled={busy || !number.trim()} onClick={() => call(number, false)}>Call</button>
+    <Card title={<><Phone size={16} aria-hidden /> Call now</>}
+      description="The AI agent places the call. Numbers on the do-not-call list are refused; outside calling hours you're asked first.">
+      <div className="form-grid" style={{ alignItems: "end" }}>
+        <Field label="Number to call">{(id) => <input id={id} value={number} inputMode="tel"
+          placeholder={line === "extension" ? "extension (e.g. 201) or number" : "+15551234567"}
+          onChange={(e) => setNumber(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && number.trim()) call(number, false); }} />}</Field>
+        {lineSelect}
+        <div><Button variant="primary" icon={Phone} disabled={busy || !number.trim()} onClick={() => call(number, false)}>Call</Button></div>
       </div>
-      <p className="dim" style={{ fontSize: 12 }}>The AI agent places the call. Numbers on the do-not-call list are refused;
-        outside calling hours you're asked first. You can also call a customer from Contacts.</p>
-      <h3 style={{ marginTop: 14 }}>{line === "extension" ? "Test call to my extension" : "Test on my phone"}</h3>
-      <div className="row wrap" style={{ gap: 8 }}>
-        <input value={me} placeholder={line === "extension" ? "your extension, e.g. 201" : "your mobile, +1555…"} style={{ width: 200 }}
-          onChange={(e) => { setMe(e.target.value); try { localStorage.setItem("xpl_test_phone", e.target.value); } catch { /* not saved */ } }} />
-        <button className="btn" disabled={busy || !me.trim()} onClick={() => call(me, true)}>Call me</button>
+      <h4 className="mt-4" style={{ marginBottom: 8 }}>{line === "extension" ? "Test call to my extension" : "Test on my phone"}</h4>
+      <div className="form-grid" style={{ alignItems: "end" }}>
+        <Field label={line === "extension" ? "Your extension" : "Your mobile"}
+          hint={`Not counted in stats and never changes a contact. Only your own test numbers${tests.per_day ? `, at most ${tests.per_day} a day` : ""}; counts toward the daily cost cap.`}>
+          {(id) => <input id={id} value={me} inputMode="tel" placeholder={line === "extension" ? "e.g. 201" : "+447700900000"}
+            onChange={(e) => { setMe(e.target.value); try { localStorage.setItem("xpl_test_phone", e.target.value); } catch { /* not saved */ } }} />}
+        </Field>
+        <div><Button disabled={busy || !me.trim()} onClick={() => call(me, true)}>Call me</Button></div>
       </div>
-      <p className="dim" style={{ fontSize: 12 }}>A test call: not counted in stats and never changes a contact. It may only
-        ring your own test numbers{tests.per_day ? `, at most ${tests.per_day} a day` : ""}; it still counts toward the daily cost cap.</p>
-      <div className="row wrap" style={{ gap: 6, alignItems: "center" }}>
-        <span className="dim" style={{ fontSize: 12 }}>Test numbers:</span>
+      <div className="row wrap mt-3" style={{ gap: 6 }}>
+        <span className="dim small">Test numbers:</span>
         {tests.numbers.length ? tests.numbers.map((t) => (
-          <span key={t} className="pill">{t} <button className="btn ghost sm" title={`Remove ${t}`} aria-label={`Remove ${t}`}
-            onClick={() => editTests({ remove: t })}>✕</button></span>)) : <span className="dim" style={{ fontSize: 12 }}>none yet</span>}
+          <span key={t} className="pill">{t}
+            <button type="button" className="icon-btn" style={{ width: 22, height: 22 }} aria-label={`Remove ${t}`} title={`Remove ${t}`}
+              onClick={() => editTests({ remove: t })}><X size={12} /></button></span>))
+          : <span className="dim small">none yet</span>}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -175,6 +183,11 @@ interface Line { who: "agent" | "caller" | "note"; text: string }
 // ── "Run checks": every link of a call, tested one by one before you talk ────────
 type CheckState = "wait" | "run" | "ok" | "bad" | "skip";
 interface Check { id: string; label: string; state: CheckState; detail?: string; fix?: string }
+const VA_CHECKS: Check[] = [
+  { id: "voice_agent", label: "Deepgram Voice Agent (hears, answers and speaks)", state: "wait" },
+  { id: "mic", label: "Your microphone", state: "wait" },
+  { id: "live", label: "Live connection to the server", state: "wait" },
+];
 const CHECKS: Check[] = [
   { id: "model", label: "Call model (with a tool, as on a call)", state: "wait" },
   { id: "backup", label: "Backup model", state: "wait" },
@@ -192,7 +205,23 @@ function RunChecks() {
   const secs = (ms?: number) => `${((ms ?? 0) / 1000).toFixed(1)} s`;
 
   const run = async () => {
-    setBusy(true); setChecks(CHECKS.map((c) => ({ ...c })));
+    setBusy(true);
+    const mode = await getFullConfig().then((c) => String(c.voip?.mode ?? "")).catch(() => "");
+    setChecks((mode === "voice_agent" ? VA_CHECKS : CHECKS).map((c) => ({ ...c })));
+    if (mode === "voice_agent") {
+      set("voice_agent", { state: "run" });
+      try {
+        const r = await testVoiceAgent();
+        set("voice_agent", r.ok
+          ? { state: "ok", detail: `${r.model} · ${r.voice} · connected in ${r.connect_ms} ms · first audio ${r.first_audio_ms} ms` }
+          : { state: "bad", detail: r.error, fix: "Calls → Speech → Deepgram Voice Agent: check the key, the model and the voice." });
+      } catch (e: any) { set("voice_agent", { state: "bad", detail: String(e?.message || e) }); }
+    } else await standard();
+    await browserChecks();
+    setBusy(false);
+  };
+
+  const standard = async () => {
     // 1. the call model, exactly as a call uses it
     set("model", { state: "run" });
     try {
@@ -230,6 +259,9 @@ function RunChecks() {
               fix: share >= 60 ? undefined : "The voice or speech-to-text model may be poor; try another voice or a larger Whisper model." });
       }
     } catch (e: any) { set("voice", { state: "bad", detail: String(e?.message || e) }); set("hearing", { state: "skip" }); }
+  };
+
+  const browserChecks = async () => {
     // 5. microphone (browser side)
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       set("mic", { state: "bad", detail: "this page is plain http://, and browsers only allow the microphone on HTTPS or localhost",
@@ -262,24 +294,30 @@ function RunChecks() {
         done();
       };
     });
-    setBusy(false);
   };
 
-  const icon: Record<CheckState, string> = { wait: "○", run: "…", ok: "✓", bad: "✗", skip: "–" };
-  const cls: Record<CheckState, string> = { wait: "dim", run: "dim", ok: "ok", bad: "err", skip: "dim" };
+  const ICON = { wait: Circle, run: Loader2, ok: CheckCircle2, bad: XCircle, skip: MinusCircle };
+  const cls: Record<CheckState, string> = { wait: "faint", run: "dim", ok: "ok", bad: "err", skip: "faint" };
   return (
-    <div style={{ marginTop: 10 }}>
-      <button className="btn" onClick={run} disabled={busy}>{busy ? "Checking…" : "Run checks"}</button>
-      <span className="dim" style={{ fontSize: 12, marginLeft: 8 }}>tests the model, backup, voice, hearing, microphone and connection
-        (with a free OpenRouter model this uses 1 of your daily free requests)</span>
+    <div className="subtle mt-4">
+      <div className="row wrap" style={{ gap: 10 }}>
+        <Button icon={Stethoscope} loading={busy} onClick={run}>{busy ? "Checking…" : "Run checks"}</Button>
+        <span className="dim small grow">Tests every link of a call for the chosen conversation mode: model, voice, hearing (or the
+          Voice Agent), your microphone and the live connection.</span>
+      </div>
       {checks && (
-        <ul className="list checks" style={{ marginTop: 8 }}>
-          {checks.map((c) => (
-            <li key={c.id} style={{ display: "block" }}>
-              <span className={cls[c.state]} style={{ display: "inline-block", width: 18 }}>{icon[c.state]}</span>
-              <b>{c.label}</b>{c.detail && <span className="dim" style={{ fontSize: 12 }}> · {c.detail}</span>}
-              {c.fix && c.state !== "ok" && <div style={{ fontSize: 12, marginLeft: 18 }}>→ {c.fix}</div>}
-            </li>))}
+        <ul className="list checks mt-2">
+          {checks.map((c) => {
+            const I = ICON[c.state];
+            return (
+              <li key={c.id} style={{ alignItems: "flex-start", flexWrap: "nowrap" }}>
+                <I size={16} className={cls[c.state]} style={{ flexShrink: 0, marginTop: 2 }}
+                  aria-label={c.state === "ok" ? "passed" : c.state === "bad" ? "failed" : c.state} />
+                <div className="grow"><b>{c.label}</b>{c.detail && <span className="dim"> · {c.detail}</span>}
+                  {c.fix && c.state !== "ok" && <div className="dim">→ {c.fix}</div>}</div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
@@ -417,65 +455,60 @@ export function TestCall({ contacts }: { contacts?: { id: number; name: string }
   };
 
   return (
-    <div className="card">
-      <h3>Test call in the browser</h3>
-      <p className="dim">Talk to the phone agent exactly as a caller would (same greeting, playbook, knowledge and
-        tools), without a phone line. Type as the caller{canMic ? " or talk into your microphone" : ""}.</p>
+    <Card title="Test call in the browser"
+      description={`Talk to the phone agent exactly as a caller would (same greeting, playbook, knowledge and tools), without a phone line. Type as the caller${canMic ? " or talk into your microphone" : ""}.`}>
       {!canMic && (
-        <p className="dim" style={{ fontSize: 12 }}><MicOff size={12} /> Browsers only allow the microphone on HTTPS (or
+        <p className="dim small"><MicOff size={12} aria-hidden /> Browsers only allow the microphone on HTTPS (or
           on <span className="mono">localhost</span>), so it is off on this address; typing works. To talk: run{" "}
           <span className="mono">sudo xplogent-docker https your.domain</span>, or open the dashboard through an SSH
           tunnel (<span className="mono">ssh -L 8765:localhost:8765 you@server</span>, then{" "}
           <span className="mono">http://localhost:8765</span>).</p>)}
       {state !== "live" ? (
-        <div className="row wrap" style={{ gap: 10 }}>
-          <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={voice} onChange={(e) => setVoice(e.target.checked)} />
-            play the agent's voice</label>
-          <label className="row" style={{ gap: 6 }} title={canMic ? "" : "needs HTTPS or localhost"}>
+        <div className="row wrap" style={{ gap: 16 }}>
+          <label className="check"><input type="checkbox" checked={voice} onChange={(e) => setVoice(e.target.checked)} />
+            Play the agent's voice</label>
+          <label className="check" title={canMic ? "" : "needs HTTPS or localhost"}>
             <input type="checkbox" checked={useMic && canMic} disabled={!canMic} onChange={(e) => setUseMic(e.target.checked)} />
-            talk with my microphone</label>
+            Talk with my microphone</label>
           {contacts && contacts.length > 0 && (
-            <select value={contact} onChange={(e) => setContact(e.target.value)}>
-              <option value="">as an unknown caller</option>
-              {contacts.map((c) => <option key={c.id} value={c.id}>as {c.name || `contact ${c.id}`}</option>)}
+            <select value={contact} onChange={(e) => setContact(e.target.value)} aria-label="Call as" style={{ width: "auto", minWidth: 200 }}>
+              <option value="">As an unknown caller</option>
+              {contacts.map((c) => <option key={c.id} value={c.id}>As {c.name || `contact ${c.id}`}</option>)}
             </select>)}
-          <button className="btn primary" onClick={start}><Phone size={14} /> Start test call</button>
+          <Button variant="primary" icon={Phone} onClick={start}>Start test call</Button>
         </div>
       ) : (
         <div className="row wrap" style={{ gap: 8 }}>
-          <button className="btn danger" onClick={hang}><PhoneOff size={14} /> Hang up</button>
+          <Button variant="danger" icon={PhoneOff} onClick={hang}>Hang up</Button>
           {canMic ? (mic
-            ? <button className="btn" onClick={stopMic}><MicOff size={14} /> Mic off</button>
-            : <button className="btn" onClick={() => startMic().catch((e) => add({ who: "note", text: `⚠ microphone: ${micError(e)}` }))}>
-                <Mic size={14} /> Use microphone</button>)
-            : <button className="btn" disabled title="Browsers only allow the microphone on HTTPS or localhost">
-                <MicOff size={14} /> Microphone needs HTTPS</button>}
-          {mic && <span className="dim" style={{ fontSize: 12 }}>🎙 listening: just talk</span>}
+            ? <Button icon={MicOff} onClick={stopMic}>Mic off</Button>
+            : <Button icon={Mic} onClick={() => startMic().catch((e) => add({ who: "note", text: `⚠ microphone: ${micError(e)}` }))}>Use microphone</Button>)
+            : <Button icon={MicOff} disabled title="Browsers only allow the microphone on HTTPS or localhost">Microphone needs HTTPS</Button>}
+          {mic && <Badge tone="ok">Listening: just talk</Badge>}
         </div>
       )}
       {state !== "live" && <RunChecks />}
       {lines.length > 0 && (
-        <div ref={box} className="live-transcript" style={{ marginTop: 10 }}>
+        <div ref={box} className="transcript" aria-live="polite" style={{ marginTop: 12 }}>
           {lines.map((l, i) => l.who === "note"
-            ? <div key={i} className="dim" style={{ fontSize: 12 }}>{l.text}</div>
-            : <div key={i}><b style={{ color: l.who === "agent" ? "var(--accent)" : "var(--amber)" }}>
-                {l.who === "agent" ? "Agent" : "You"}:</b> {l.text}</div>)}
-          {thinking && state === "live" && <div className="dim" style={{ fontSize: 12 }}>… the agent is thinking</div>}
+            ? <div key={i} className="dim xsmall">{l.text}</div>
+            : <div key={i} className={`turn ${l.who}`}><b>{l.who === "agent" ? "Agent" : "You"}:</b> {l.text}</div>)}
+          {thinking && state === "live" && <div className="dim xsmall">… the agent is thinking</div>}
         </div>
       )}
       {state === "live" && (
         <div className="keypad" aria-label="phone keypad">
           {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((k) => (
-            <button key={k} className="btn" onClick={() => press(k)}>{k}</button>))}
+            <button key={k} type="button" className="btn" aria-label={`Press ${k}`} onClick={() => press(k)}>{k}</button>))}
         </div>
       )}
       {state === "live" && (
-        <div className="row" style={{ gap: 6, marginTop: 6 }}>
-          <input style={{ flex: 1 }} value={text} placeholder="Say something as the caller…" autoFocus
+        <div className="row" style={{ gap: 6, marginTop: 8 }}>
+          <input className="grow" value={text} placeholder="Say something as the caller…" autoFocus aria-label="Say as the caller"
             onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }} />
-          <button className="btn primary" disabled={!text.trim()} onClick={send}><Send size={14} /></button>
+          <Button variant="primary" icon={Send} disabled={!text.trim()} onClick={send} aria-label="Send">Send</Button>
         </div>
       )}
-    </div>
+    </Card>
   );
 }

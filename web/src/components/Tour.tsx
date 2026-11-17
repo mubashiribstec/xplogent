@@ -1,37 +1,36 @@
 import { useEffect, useLayoutEffect, useState } from "react";
-import type { Tab } from "./NavRail";
 
 export const TOUR_EVENT = "xplogent:tour";
 export const startTour = () => window.dispatchEvent(new Event(TOUR_EVENT));
 
-interface Step { tab: Tab; target: string; title: string; text: string; }
+interface Step { path: string; target: string; title: string; text: string; }
 const STEPS: Step[] = [
-  { tab: "calls", target: "golive", title: "Is my agent live?",
+  { path: "calls/overview", target: "golive", title: "Is my agent live?",
     text: "This card shows what is set up and what is left, and the health of every phone line, the voices and the CRM, in green, amber or red." },
-  { tab: "calls", target: "calls-list", title: "Every call, with its transcript",
+  { path: "calls/overview", target: "calls-list", title: "Every call, with its transcript",
     text: "Open a call to read what was said, play the recording, see what was sent to your CRM, and debug it if something went wrong." },
-  { tab: "calls", target: "test-call", title: "Try it yourself",
+  { path: "calls/test", target: "test-call", title: "Try it yourself",
     text: "Talk to your agent in the browser exactly like a caller would: same greeting, same knowledge, same tools. No phone line needed." },
-  { tab: "chat", target: "chat", title: "Chat with your assistant",
+  { path: "chat", target: "chat", title: "Chat with your assistant",
     text: "Ask questions, draft messages, or try out answers before your callers hear them." },
-  { tab: "training", target: "training-upload", title: "Teach it from your real calls",
+  { path: "training", target: "training-upload", title: "Teach it from your real calls",
     text: "Upload call recordings, scripts, FAQs or a Q&A sheet. The agent answers only from what you give it." },
-  { tab: "calls", target: "crm", title: "Your CRM, connected",
+  { path: "calls/crm", target: "crm", title: "Your CRM, connected",
     text: "Every finished call is sent to your CRM, and the agent looks callers up before it answers, so it can greet them by name." },
-  { tab: "calls", target: "setup", title: "Setup",
-    text: "Phone lines, your company name and branding, the hand-off number and the voices all live here. You can restart this tour from the Guide." },
+  { path: "calls/setup", target: "setup", title: "Setup",
+    text: "Your greeting, the model for calls and the costs live here; phone lines and voices have their own tabs. You can restart this tour from the Guide." },
 ];
 
 type Box = { top: number; left: number; width: number; height: number } | null;
 
 /** A small guided tour: highlight + tooltip + Next / Back / Skip. Never blocks the app. */
-export function Tour({ open, onTab, onClose }: { open: boolean; onTab: (t: Tab) => void; onClose: (completed: boolean) => void }) {
+export function Tour({ open, onGo, onClose }: { open: boolean; onGo: (path: string) => void; onClose: (completed: boolean) => void }) {
   const [i, setI] = useState(0);
   const [box, setBox] = useState<Box>(null);
   const step = STEPS[i];
 
   useEffect(() => { if (open) setI(0); }, [open]);
-  useEffect(() => { if (open) onTab(step.tab); /* eslint-disable-next-line */ }, [open, i]);
+  useEffect(() => { if (open) onGo(step.path); /* eslint-disable-next-line */ }, [open, i]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -82,7 +81,7 @@ export function Tour({ open, onTab, onClose }: { open: boolean; onTab: (t: Tab) 
   return (
     <>
       {box && <div className="tour-hole" style={box} />}
-      <div className="tour-tip" role="dialog" aria-label={step.title} style={{ top, left, width: W }}>
+      <div className="tour-tip" role="dialog" aria-modal="false" aria-label={step.title} style={{ top, left, width: W }}>
         <h4>{step.title}</h4>
         <p>{step.text}</p>
         <div className="tour-actions">

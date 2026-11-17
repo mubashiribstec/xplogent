@@ -20,7 +20,7 @@ export function AlertsCard({ toast }: { toast: Toaster }) {
         were cut off by a restart. Paste a Slack or Microsoft Teams incoming-webhook address (any URL that accepts
         JSON works). At most one alert of each kind every {a.min_gap_minutes} minutes.</p>
       <div className="row wrap" style={{ gap: 8, alignItems: "flex-end" }}>
-        <label className="bud"><span className="lbl-sm">Webhook address {a.webhook_set ? <span className="ok">✓ saved</span> : <span className="dim">not set</span>}</span>
+        <label className="bud"><span className="lbl-sm">Webhook address {a.webhook_set ? <span className="secret-state set">saved</span> : <span className="secret-state unset">not set</span>}</span>
           <input type="password" placeholder={a.webhook_set ? "•••••• (paste to replace)" : "https://hooks.slack.com/services/…"}
             style={{ width: 340 }} autoComplete="off"
             onBlur={async (e) => {

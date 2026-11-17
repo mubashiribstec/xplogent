@@ -157,26 +157,51 @@ agent can send digits (e.g. through a menu) on lines that negotiated it.
 
 ## Speech
 
-Calls go: caller audio → speech-to-text → the call model → text-to-speech, sentence by
-sentence, with barge-in (the greeting is never cut off). Pick both halves in **Calls → Speech**;
-**Test voice** speaks a sentence and hears it back, showing both times in ms.
+There are three **conversation modes** (Calls → Speech):
+
+- **Standard** (`voip.mode: cascaded`, the default): caller audio → speech-to-text → the call
+  model → text-to-speech, sentence by sentence, with barge-in (the greeting is never cut off). You
+  choose listening and voice separately. **Test listening** speaks a sentence with your voice and
+  hears it back (both times in ms); **Play a sample** plays the voice in your browser.
+- **Deepgram Voice Agent** (`voip.mode: voice_agent`): one Deepgram connection listens, thinks
+  and speaks (below).
+- **OpenAI Realtime** (`voip.mode: realtime`): OpenAI's speech-to-speech model (below).
 
 | Listening (speech-to-text) | Notes |
 |---|---|
 | Built-in Whisper (default, free) | Runs inside Xplogent. `voip.stt.model: auto` = `large-v3-turbo` on an NVIDIA GPU (≈1.6 GB download on first use, cached), `small.en` on CPU. Transcribes after the caller stops. |
 | OpenAI Whisper | `whisper-1` over the API (OpenAI key). |
 | **Deepgram, streaming** | Transcribes *while* the caller speaks, so the text is ready almost as soon as they stop (`DEEPGRAM_API_KEY`, model e.g. `nova-3`). If the stream fails mid-sentence, the recorded utterance is transcribed by Deepgram's batch API, then the built-in Whisper: no words are lost. |
+| **Cartesia Ink, streaming** | Cartesia's live speech-to-text (`CARTESIA_API_KEY`, model `ink-2`; `ink-whisper` also works). Same safety net as Deepgram: if the stream fails, the utterance goes to Cartesia's batch API, then the built-in Whisper. |
 
 | Voice (text-to-speech) | Notes |
 |---|---|
 | Local Kokoro (free) | `xplogent-docker speech on` (`--gpu` on NVIDIA). |
 | OpenAI | `tts-1` voices (OpenAI key). |
 | ElevenLabs | `ELEVENLABS_API_KEY`, model from config (default `eleven_flash_v2_5`), voice picked from your ElevenLabs voices. |
-| Cartesia | `CARTESIA_API_KEY`, model from config (default `sonic-3.6`; the retired `sonic-2` / `sonic-turbo` are sent as `sonic-3.6`), voice picked from your Cartesia voices. **Cartesia: Gemma** in Calls → Speech is a natural UK female voice for UK calls. |
+| Cartesia | `CARTESIA_API_KEY`, model from config (default `sonic-3.6`; the retired `sonic-2` / `sonic-turbo` are sent as `sonic-3.6`), voice picked from your Cartesia voices. **Gemma** (the default Cartesia voice in Calls → Speech) is a natural UK female voice for UK calls. |
+| **Deepgram Aura-2** | `DEEPGRAM_API_KEY`, voice e.g. `aura-2-pandora-en` (UK female, the default) or `aura-2-draco-en` (UK male); the picker lists the UK and Australian voices first, then about 35 US voices. |
 
 Keys are stored encrypted (Speech card or Settings). If the main voice fails before speaking,
 it is retried once, then `voip.tts_fallback` (any of the above) takes over for that sentence; the
 call's debug view shows which provider served each turn and why a fallback happened.
+
+**Deepgram Voice Agent (optional).** Choose **Deepgram Voice Agent** in Calls → Speech
+(`voip.mode: voice_agent`, `DEEPGRAM_API_KEY`). One connection to Deepgram does the whole turn:
+Deepgram listens (`voip.voice_agent.listen_model`, default `nova-3`), a **Deepgram-hosted model**
+answers (`voip.voice_agent.think`: OpenAI, Anthropic or Google models; the list in the dashboard is
+Deepgram's live list, no separate key needed) and the chosen voice speaks: an Aura-2 voice
+(`voip.voice_agent.voice`), or your Cartesia voice such as Gemma (`voice_provider: cartesia`,
+`cartesia_voice`, `CARTESIA_API_KEY`; the key is then sent to Deepgram in the session settings so
+Deepgram can call Cartesia). The agent gets the same prompt, knowledge search and tools as in the
+standard mode (callbacks, outcomes, transfer, required fields before `end_call`), Pause AI stops
+it hearing the caller, and recording, transcripts, the debug view and the CRM work as usual. The
+greeting, with the AI and recording notice, is spoken by the agent's own voice and can't be
+interrupted. Not in this mode: the price guard on the model's sentences, local answering-machine
+detection, the voicemail message and "listen first" (Telnyx carrier detection still works). **Test
+Voice Agent** connects with your choices, asks one question and shows the connection time, the
+time to the first audio and the reply; **Run checks** in the browser test call does the same. If
+Deepgram can't be reached when a call starts, the call runs in the standard mode.
 
 **Realtime speech-to-speech (optional).** Set **Conversation mode → Realtime** (`voip.mode:
 realtime`, OpenAI key; `voip.realtime` holds the model, voice and transcription model). The OpenAI

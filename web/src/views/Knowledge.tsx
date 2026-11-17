@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { BookText, FileUp, Search, Trash2 } from "lucide-react";
 import { DocInfo, deleteDoc, getDocs, ingestDocs, searchDocs } from "../api";
 import { useToast } from "../components/Toast";
+import { useConfirm } from "../ui/confirm";
 
 export function Knowledge() {
   const toast = useToast();
+  const confirm = useConfirm();
   const [docs, setDocs] = useState<DocInfo[]>([]);
   const [path, setPath] = useState("");
   const [paste, setPaste] = useState("");
@@ -70,7 +72,10 @@ export function Knowledge() {
               <li key={d.id}>
                 <span style={{ flex: 1 }}><b>{d.title}</b> <span className="dim">· {d.chunks} chunks</span><br />
                   <span className="dim" style={{ fontSize: 12 }}>{d.source}</span></span>
-                <button className="x" onClick={() => deleteDoc(d.id).then(reload)}><Trash2 size={14} /></button>
+                <button className="x" aria-label={`Delete ${d.title}`} title="Delete" onClick={async () => {
+                  if (await confirm({ title: `Delete "${d.title}"?`, body: "The agent stops answering from this source.", confirmLabel: "Delete", danger: true }))
+                    deleteDoc(d.id).then(reload);
+                }}><Trash2 size={14} /></button>
               </li>
             ))}
             {docs.length === 0 && <div className="empty-state">

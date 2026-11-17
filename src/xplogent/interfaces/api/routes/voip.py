@@ -438,16 +438,24 @@ async def voip_telnyx_test() -> dict:
 @router.post("/voip/speech/test")
 async def voip_speech_test(body: dict | None = None) -> dict:
     """Speak a test sentence with the configured voice, then (optionally) transcribe it
-    back with the configured speech-to-text: checks both directions end to end."""
+    back with the configured speech-to-text: checks both directions end to end.
+
+    ``tts`` previews another voice (e.g. a Voice Agent voice) without saving it, and
+    ``play: true`` returns the audio (base64 WAV) so the dashboard can play it."""
+    import base64
     import time
 
     from xplogent.voip.audio import resample
-    from xplogent.voip.providers import build_stt, build_tts
+    from xplogent.voip.providers import build_stt, build_tts, pcm_to_wav
 
+    body = body or {}
     v = load_config().voip or {}
-    sentence = "Hello, this is a voice test from your phone agent."
+    sentence = str(body.get("text") or "Hello, this is a voice test from your phone agent.")[:300]
     out: dict = {"ok": False, "sentence": sentence}
-    tts = build_tts(v.get("tts", {}) or {})
+    preview = body.get("tts") if isinstance(body.get("tts"), dict) else {}
+    # A preview naming its provider stands alone (no stray URL or model from the saved voice).
+    tts_cfg = dict(preview) if preview.get("provider") else {**(v.get("tts", {}) or {}), **preview}
+    tts = build_tts(tts_cfg)
     try:
         started = time.monotonic()
         chunks = [c async for c in tts.synthesize(sentence)]
@@ -463,7 +471,9 @@ async def voip_speech_test(body: dict | None = None) -> dict:
     finally:
         await tts.aclose()
     out["ok"] = True
-    if (body or {}).get("stt", True):
+    if body.get("play"):
+        out["wav"] = base64.b64encode(pcm_to_wav(pcm, tts.sample_rate)).decode()
+    if body.get("stt", True):
         stt = build_stt(v.get("stt", {}) or {})
         try:
             started = time.monotonic()

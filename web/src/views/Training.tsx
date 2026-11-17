@@ -5,6 +5,7 @@ import {
   savePlaybook, TrainingItem, uploadTraining,
 } from "../api";
 import { useToast } from "../components/Toast";
+import { useConfirm } from "../ui/confirm";
 
 const KIND_ICON = { recording: FileAudio, document: FileText, qa: FileQuestion } as const;
 const KIND_LABEL = { recording: "Call recording", document: "Script / document", qa: "Q&A sheet" } as const;
@@ -13,6 +14,7 @@ const fmtSize = (n: number) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math
 
 export function Training() {
   const toast = useToast();
+  const confirm = useConfirm();
   const [items, setItems] = useState<TrainingItem[]>([]);
   const [layout, setLayout] = useState("agent-left");
   const [uploading, setUploading] = useState<number | null>(null);
@@ -54,7 +56,7 @@ export function Training() {
   };
 
   const remove = async (it: TrainingItem) => {
-    if (!confirm(`Delete ${it.filename}? Its knowledge is removed from the agent too.`)) return;
+    if (!(await confirm({ title: `Delete ${it.filename}?`, body: "Its knowledge is removed from the agent too.", confirmLabel: "Delete", danger: true }))) return;
     const r = await deleteTrainingItem(it.id);
     if (!r.ok) toast(r.error ?? "could not delete", "error");
     if (view?.id === it.id) setView(null);

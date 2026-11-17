@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Copy, Download, FileJson, ImagePlus, Mic, MicOff, RotateCcw, Search, Send, Share2, ShieldCheck,
+  Copy, Download, FileJson, ImagePlus, Mic, MicOff, PanelLeft, Pencil, Plus, RotateCcw, Search, Send, Share2, ShieldCheck,
   Square, Trash2, Undo2, Volume2, X,
 } from "lucide-react";
 import {
@@ -11,6 +11,7 @@ import {
 import { GenChoice, ModelBar } from "../ModelBar";
 import { Markdown } from "../Markdown";
 import { useToast } from "../components/Toast";
+import { useConfirm, usePrompt } from "../ui/confirm";
 import { downloadJSON, downloadMarkdown, shareHTML } from "../lib/exportChat";
 import { useVoice } from "../hooks/useVoice";
 
@@ -31,14 +32,20 @@ const readImage = (file: File) => new Promise<string>((res, rej) => {
   r.readAsDataURL(file);
 });
 
-export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
+export function Chat() {
   const toast = useToast();
+  const confirm = useConfirm();
+  const prompt = usePrompt();
+  // Tablets and phones: the chat list is a drawer opened from the toolbar.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const textRef = useRef<HTMLTextAreaElement>(null);
   const [skills, setSkills] = useState<any[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
   const [search, setSearch] = useState("");
   const [hits, setHits] = useState<any[]>([]);
   const [log, setLog] = useState<LogLine[]>([]);
   const [input, setInput] = useState("");
+  useEffect(() => { if (!input && textRef.current) textRef.current.style.height = ""; }, [input]);
   const [images, setImages] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
@@ -180,7 +187,9 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
       const { id } = await newSession(); loadSession(id); refreshSessions();
     } catch (e) { fail("could not start a new chat")(e); }
   };
-  const removeSession = async (id: number) => {
+  const removeSession = async (id: number, title: string) => {
+    if (!(await confirm({ title: `Delete "${title || "chat"}"?`, body: "The conversation is removed. Facts the agent learned stay.",
+      confirmLabel: "Delete", danger: true }))) return;
     try {
       await deleteSession(id);
       if (id === activeId) { localStorage.removeItem("xplogent_session"); loadSession(null); }
@@ -188,7 +197,7 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
     } catch (e) { fail("could not delete the chat")(e); }
   };
   const rename = async (id: number, current: string) => {
-    const title = window.prompt("Rename chat:", current);
+    const title = await prompt({ title: "Rename chat", label: "Name", initial: current });
     if (!title?.trim()) return;
     try { await renameSession(id, title.trim()); refreshSessions(); }
     catch (e) { fail("could not rename the chat")(e); }
@@ -276,12 +285,13 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
 
   return (
     <div className="view">
-      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+      {sidebarOpen && <div className="chat-scrim" onClick={() => setSidebarOpen(false)} aria-hidden />}
+      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`} aria-label="Chats">
         <div className="side-head">
-          <button className="btn primary" onClick={newChat}><span>+ New chat</span></button>
+          <button className="btn primary" onClick={() => { newChat(); setSidebarOpen(false); }}><Plus size={16} aria-hidden /> New chat</button>
           <div className="side-search">
-            <Search size={15} className="dim" />
-            <input value={search} placeholder="Search chats…" onChange={(e) => runSearch(e.target.value)} />
+            <Search size={15} aria-hidden />
+            <input value={search} placeholder="Search chats…" aria-label="Search chats" onChange={(e) => runSearch(e.target.value)} />
           </div>
         </div>
         <div className="side-scroll">
@@ -290,7 +300,7 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
               {hits.length === 0 && <p className="dim" style={{ padding: "8px" }}>no matches</p>}
               {hits.map((h, i) => (
                 <li key={i}><button className="open" title={h.content}
-                  onClick={() => { loadSession(h.session_id); runSearch(""); }}>
+                  onClick={() => { loadSession(h.session_id); runSearch(""); setSidebarOpen(false); }}>
                   <span className="dim">[{h.role}]</span> {String(h.content).slice(0, 48)}
                 </button></li>
               ))}
@@ -301,11 +311,12 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
           <ul className="chatlist">
             {sessions.map((s) => (
               <li key={s.id} className={s.id === activeId ? "active" : ""}>
-                <button className="open" onClick={() => loadSession(s.id)}
-                  onDoubleClick={() => rename(s.id, s.title)} title="double-click to rename">
+                <button className="open" onClick={() => { loadSession(s.id); setSidebarOpen(false); }}
+                  onDoubleClick={() => rename(s.id, s.title)} aria-current={s.id === activeId ? "true" : undefined}>
                   {s.title || "chat"} <span className="dim">· {s.message_count ?? 0}</span>
                 </button>
-                <button className="x" aria-label="delete" onClick={() => removeSession(s.id)}><Trash2 size={14} /></button>
+                <button className="x" aria-label={`Rename ${s.title || "chat"}`} title="Rename" onClick={() => rename(s.id, s.title)}><Pencil size={13} /></button>
+                <button className="x" aria-label={`Delete ${s.title || "chat"}`} title="Delete" onClick={() => removeSession(s.id, s.title)}><Trash2 size={14} /></button>
               </li>
             ))}
           </ul>
@@ -320,9 +331,11 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
         </div>
       </aside>
 
-      <main className="chat">
+      <section className="chat" aria-label="Conversation">
         <ModelBar value={gen} onChange={setGen} />
         <div className="chat-toolbar">
+          <button type="button" className="btn ghost sm chat-menu-btn" onClick={() => setSidebarOpen(true)} aria-label="Show chats">
+            <PanelLeft size={15} aria-hidden /> Chats</button>
           {autoScope && (
             <span className="badge warn">
               <ShieldCheck size={13} /> auto-approving ({autoScope})
@@ -409,9 +422,10 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
               )}
               <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }}
                 onChange={(e) => e.target.files && addFiles(e.target.files)} />
-              <textarea rows={1} value={input + (voice.listening && voice.interim ? ` ${voice.interim}` : "")}
-                placeholder={handsFree ? "Listening… just talk" : busy ? "Add a suggestion… (Enter to nudge the agent)" : "Message Xplogent…  (Enter to send, Shift+Enter for newline)"}
+              <textarea ref={textRef} rows={1} aria-label="Message" value={input + (voice.listening && voice.interim ? ` ${voice.interim}` : "")}
+                placeholder={handsFree ? "Listening… just talk" : busy ? "Add a suggestion… (Enter to nudge the agent)" : "Message Xplogent…"}
                 onChange={(e) => setInput(e.target.value)}
+                onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, 200)}px`; }}
                 onPaste={(e) => { const imgs = [...e.clipboardData.files]; if (imgs.length) addFiles(imgs); }}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
             </div>
@@ -421,13 +435,13 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
             </button>
           </div>
         </div>
-      </main>
+      </section>
 
       {approval && (
         <div className="overlay center" onClick={() => resolve(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal" role="alertdialog" aria-modal="true" aria-labelledby="approval-title" onClick={(e) => e.stopPropagation()}>
             <div className="modal-body">
-              <h3>Approval required</h3>
+              <h3 id="approval-title">Approval required</h3>
               <p><b>{approval.tool}</b> — risk{" "}
                 <span className={`badge ${approval.risk === "critical" ? "bad" : "warn"}`}>{approval.risk}</span></p>
               {approval.reason && <p className="dim">{approval.reason}</p>}
@@ -440,7 +454,7 @@ export function Chat({ sidebarOpen }: { sidebarOpen?: boolean }) {
               )}
             </div>
             <div className="modal-actions" style={{ flexWrap: "wrap" }}>
-              <button className="btn danger" onClick={() => resolve(false)}>Deny</button>
+              <button className="btn danger" autoFocus onClick={() => resolve(false)}>Deny</button>
               <button className="btn" onClick={() => resolve(true)}>Allow once</button>
               {approval.risk !== "critical" && <>
                 <button className="btn" onClick={() => resolve(true, "chat")}>Allow this chat</button>

@@ -203,6 +203,33 @@ def test_speech_test_round_trip(monkeypatch):
     monkeypatch.setattr(providers, "build_stt", lambda cfg: FakeSTT())
     res = _client().post("/voip/speech/test", json={}).json()
     assert res["ok"] and res["audio_seconds"] == 1.0 and "voice test" in res["transcript"]
+    assert "wav" not in res
+
+
+def test_speech_test_previews_another_voice_and_returns_audio(monkeypatch):
+    import base64
+
+    from xplogent.voip import providers
+
+    seen = {}
+
+    class FakeTTS:
+        sample_rate = 24000
+
+        async def synthesize(self, text):
+            seen["text"] = text
+            yield b"\x01\x00" * 2400
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(providers, "build_tts", lambda cfg: seen.update(cfg=cfg) or FakeTTS())
+    res = _client().post("/voip/speech/test", json={
+        "stt": False, "play": True, "text": "Hi there", "tts": {"provider": "deepgram", "voice": "aura-2-draco-en"},
+    }).json()
+    assert res["ok"] and seen["text"] == "Hi there" and "transcript" not in res
+    assert seen["cfg"]["provider"] == "deepgram" and seen["cfg"]["voice"] == "aura-2-draco-en"
+    assert base64.b64decode(res["wav"])[:4] == b"RIFF"
 
 
 # ── capabilities for "show disabled" ─────────────────────────────────────────

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { SipStatus, detectSipIp, getSipStatus, saveSip, testSip } from "../api";
+import { ResultLine } from "../ui";
 
 type Toaster = (m: string, kind?: any) => void;
 
@@ -62,7 +63,7 @@ export function SipCard({ cfg, passwordSet, toast, onChange }: { cfg: Record<str
         {input("server", "SIP server / PBX", "pbx.example.com or 192.168.1.10", 210)}
         {input("port", "Port", "5060", 80, "number")}
         {input("username", "Username / extension", "2000", 130)}
-        <label className="bud"><span className="lbl-sm">Password {pwSet === undefined ? "…" : pwSet ? "✓ set" : "✗ not set"}</span>
+        <label className="bud"><span className="lbl-sm">Password {pwSet === undefined ? "…" : <span className={`secret-state ${pwSet ? "set" : "unset"}`}>{pwSet ? "saved" : "not set"}</span>}</span>
           <input type="password" value={form.password ?? ""} placeholder={pwSet ? "•••••• (type to replace)" : "secret"}
             onChange={(e) => set("password", e.target.value)} style={{ width: 150 }} /></label>
         {input("auth_username", "Auth username (if different)", "", 150)}
@@ -98,7 +99,7 @@ export function SipCard({ cfg, passwordSet, toast, onChange }: { cfg: Record<str
         <button className="btn" disabled={busy || !st?.configured} onClick={test}
           title={st?.configured ? "" : "Enter the trunk's server, username and password, then Save & connect"}>Test registration</button>
       </div>
-      {msg && <p className={msg.ok ? "ok" : "warn"}>{msg.ok ? "✓" : "✗"} {msg.text}</p>}
+      {msg && <ResultLine ok={msg.ok}>{msg.text}</ResultLine>}
       {st?.last_error && <p className="dim" style={{ fontSize: 12 }}>Last problem: {st.last_error}</p>}
       <details style={{ marginTop: 8 }}>
         <summary className="dim">How to connect FreePBX / Asterisk or a Telnyx SIP connection</summary>

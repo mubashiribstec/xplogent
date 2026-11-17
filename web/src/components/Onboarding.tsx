@@ -51,7 +51,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
   return (
     <div className="overlay center">
-      <div className="modal onboard">
+      <div className="modal onboard" role="dialog" aria-modal="true" aria-label="Get started">
         <div className="modal-body">
           <div className="steps">
             {[0, 1].map((i) => <div key={i} className={`step-dot ${i <= step ? "on" : ""}`} />)}
