@@ -13,6 +13,8 @@
 #   xplogent-docker local [--lan]       switch to no-domain mode (port 8765)
 #   xplogent-docker speech on [--gpu] | off   local voices for the phone agent
 #   xplogent-docker sip on [--ip ADDR] | off   open UDP ports for the built-in SIP trunk client
+#   xplogent-docker crm link | unlink | status  the CRM (in Docker) on this same server: one
+#                                       shared Docker network, no extra port opened
 #   xplogent-docker cli ARGS...         run an xplogent command inside the container
 #                                       (e.g. cli voip status · cli dial +1555… --test)
 #   xplogent-docker uninstall [--purge] remove containers (--purge: also all data!)
@@ -119,10 +121,93 @@ drop_ollama_models() {
   return 0
 }
 
-# COMPOSE_FILE for a mode, keeping the SIP ports file when SIP is on.
+# COMPOSE_FILE for a mode, keeping the SIP ports file when SIP is on and the shared CRM
+# network when the CRM on this server is linked.
 compose_files() {
-  if [ "$(get_env XPLOGENT_SIP)" = "1" ]; then echo "docker-compose.yml:$1:compose.sip.yml"
-  else echo "docker-compose.yml:$1"; fi
+  local files="docker-compose.yml:$1"
+  [ "$(get_env XPLOGENT_SIP)" = "1" ] && files="$files:compose.sip.yml"
+  [ "$(get_env XPLOGENT_CRM_LINK)" = "1" ] && files="$files:compose.crm.yml"
+  echo "$files"
+}
+mode_file() { case "$(get_env COMPOSE_FILE)" in *https*) echo compose.https.yml ;; *) echo compose.local.yml ;; esac; }
+
+# The CRM (crm_laravel_sass) in Docker on this same server: one shared network.
+CRM_NET_DEFAULT="xplogent-crm"
+crm_net() { local n; n="$(get_env XPLOGENT_CRM_NETWORK)"; echo "${n:-$CRM_NET_DEFAULT}"; }
+# The CRM's containers (its docker-compose.yml names them). nginx answers as "crm".
+CRM_WEB="${XPLOGENT_CRM_WEB:-laravel-nginx}"
+CRM_APP="${XPLOGENT_CRM_APP:-laravel-app}"
+
+# A helper older than compose.crm.yml didn't download it: fetch it on first use.
+ensure_deploy_file() {
+  local f="$1"
+  [ -f "$COMPOSE_DIR/$f" ] && return 0
+  [ -f "$DIR/.install-info" ] && command -v curl >/dev/null 2>&1 || die "$COMPOSE_DIR/$f is missing (run: xplogent-docker update)"
+  # shellcheck disable=SC1091
+  . "$DIR/.install-info"
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/$REF/deploy/docker/$f" -o "$COMPOSE_DIR/$f.download" \
+    && mv "$COMPOSE_DIR/$f.download" "$COMPOSE_DIR/$f" && chmod 644 "$COMPOSE_DIR/$f" \
+    || { rm -f "$COMPOSE_DIR/$f.download"; die "could not download $f (run: xplogent-docker update)"; }
+}
+
+# Attach a running CRM container now (its own compose file keeps it attached after that).
+crm_attach() {  # crm_attach CONTAINER [ALIAS]
+  local c="$1" alias="${2:-}" net
+  net="$(crm_net)"
+  docker inspect "$c" >/dev/null 2>&1 || { warn "CRM container $c is not running here (skipped)"; return 1; }
+  if docker inspect -f '{{json .NetworkSettings.Networks}}' "$c" | grep -q "\"$net\""; then
+    ok "$c is already on $net"; return 0
+  fi
+  if [ -n "$alias" ]; then docker network connect --alias "$alias" "$net" "$c"
+  else docker network connect "$net" "$c"; fi
+  ok "$c joined $net${alias:+ (as \"$alias\")}"
+}
+
+cmd_crm() {
+  local net; net="$(crm_net)"
+  case "${1:-status}" in
+    link)
+      ensure_deploy_file compose.crm.yml
+      if ! docker network inspect "$net" >/dev/null 2>&1; then
+        docker network create --label xplogent.crm-link=1 "$net" >/dev/null
+        ok "Created the Docker network $net"
+      fi
+      set_env "$ENV_FILE" XPLOGENT_CRM_LINK 1
+      set_env "$ENV_FILE" COMPOSE_FILE "$(compose_files "$(mode_file)")"
+      apply
+      local linked=0
+      crm_attach "$CRM_WEB" crm && linked=1
+      crm_attach "$CRM_APP" || true
+      ok "Xplogent is on $net as \"xplogent\"."
+      say "Now, once:"
+      say "  1. Dashboard -> Calls -> CRM -> CRM address: http://crm   (then Test connection)"
+      say "  2. In the CRM's .env:  XPLOGENT_BASE_URL=http://xplogent:8765"
+      say "     and, so the link survives a 'docker compose up' of the CRM:"
+      say "     COMPOSE_FILE=docker-compose.yml:docker-compose.xplogent.yml"
+      say "     then in the CRM folder: docker compose up -d && docker compose exec app php artisan config:clear"
+      say "  3. Check the way back: docker compose exec app php artisan xplogent:check"
+      say "Both sides use the same token: XPLOGENT_API_TOKEN (CRM .env) = the CRM token in the dashboard."
+      [ "$linked" = 1 ] || warn "The CRM wasn't found running ($CRM_WEB). Start it with the COMPOSE_FILE line above; it joins $net itself." ;;
+    unlink)
+      set_env "$ENV_FILE" XPLOGENT_CRM_LINK 0
+      set_env "$ENV_FILE" COMPOSE_FILE "$(compose_files "$(mode_file)")"
+      apply
+      ok "Xplogent left $net. Set the CRM address in the dashboard and XPLOGENT_BASE_URL in the CRM again."
+      say "(The network is kept for the CRM; remove it when nothing uses it: docker network rm $net)" ;;
+    status)
+      if [ "$(get_env XPLOGENT_CRM_LINK)" != "1" ]; then
+        say "Not linked. A CRM in Docker on this server: sudo xplogent-docker crm link"; return 0
+      fi
+      docker network inspect "$net" >/dev/null 2>&1 || die "network $net is missing: run sudo xplogent-docker crm link"
+      say "On $net: $(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$net")"
+      if dc exec -T xplogent python -c \
+          "import urllib.request as u; u.urlopen('http://crm/', timeout=5)" >/dev/null 2>&1; then
+        ok "Xplogent reaches the CRM at http://crm"
+      else
+        warn "Xplogent can't reach http://crm: is the CRM running, with docker-compose.xplogent.yml?"
+      fi ;;
+    *) die "usage: xplogent-docker crm link | unlink | status" ;;
+  esac
 }
 
 add_profile() {  # add_profile NAME / remove with "-NAME"
@@ -232,7 +317,8 @@ cmd_backup() {
 }
 
 DEPLOY_FILES="deploy/docker/docker-compose.yml deploy/docker/compose.https.yml
-deploy/docker/compose.local.yml deploy/docker/compose.sip.yml deploy/docker/.env.example deploy/caddy/Caddyfile"
+deploy/docker/compose.local.yml deploy/docker/compose.sip.yml deploy/docker/compose.crm.yml
+deploy/docker/.env.example deploy/caddy/Caddyfile"
 
 rollback_files() {
   local f
@@ -387,9 +473,9 @@ case "$cmd" in
         apply ;;
       *) die "usage: xplogent-docker speech on [--gpu] | off" ;;
     esac ;;
+  crm) cmd_crm "$@" ;;
   sip)
-    mode_file=compose.local.yml
-    case "$(get_env COMPOSE_FILE)" in *https*) mode_file=compose.https.yml ;; esac
+    mode_file="$(mode_file)"
     case "${1:-}" in
       on)
         ip=""

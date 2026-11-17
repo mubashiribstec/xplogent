@@ -18,6 +18,11 @@ The dashboard can't replace its own container, so you update on the server:
 xplogent-docker update     # backup → new deploy files → pull the new image → restart
 ```
 
+Re-running the install command (`curl -fsSL …/get.sh | sudo bash`) does the same and keeps
+your settings and token. To check that the update worked, open **Settings → Status** in the
+dashboard: "build" shows the version you are running, and it should match the newest commit on
+`main`.
+
 If the new image can't be downloaded, nothing changes and the current version keeps
 running. To stay on a specific version, set
 `XPLOGENT_IMAGE=ghcr.io/mubashiribstec/xplogent:1.2.3` with `xplogent-docker config`;

@@ -1,0 +1,19 @@
+# The CRM (crm_laravel_sass, in Docker) on this same server: Xplogent joins the shared
+# Docker network "xplogent-crm", so the two reach each other by container name without
+# publishing any extra port (and without hairpinning through the host):
+#   Xplogent → CRM:  http://crm          (the CRM's nginx joins with the alias "crm")
+#   CRM → Xplogent:  XPLOGENT_BASE_URL=http://xplogent:8765 in the CRM's .env
+# Added by `xplogent-docker crm link`, which also creates the network. The CRM side joins
+# with docker-compose.xplogent.yml in its own repository. Its database stays on its own
+# private network.
+services:
+  xplogent:
+    networks:
+      default: {}
+      crm:
+        aliases: [xplogent]
+
+networks:
+  crm:
+    name: ${XPLOGENT_CRM_NETWORK:-xplogent-crm}
+    external: true

@@ -267,6 +267,35 @@ def test_installer_keeps_sip_ports_when_switching_mode(tmp_path):
     assert _env(tmp_path)["COMPOSE_FILE"] == "docker-compose.yml:compose.https.yml:compose.sip.yml"
 
 
+def test_crm_link_compose_file_joins_the_shared_network():
+    yaml = pytest.importorskip("yaml")
+    doc = yaml.safe_load((REPO / "deploy" / "docker" / "compose.crm.yml").read_text())
+    nets = doc["services"]["xplogent"]["networks"]
+    assert "default" in nets and nets["crm"]["aliases"] == ["xplogent"]       # keeps its own network too
+    assert doc["networks"]["crm"]["external"] is True
+    assert doc["networks"]["crm"]["name"] == "${XPLOGENT_CRM_NETWORK:-xplogent-crm}"
+    assert "ports" not in doc["services"]["xplogent"]                         # nothing published
+
+
+def test_helper_has_crm_link_and_keeps_it_across_mode_switches():
+    helper = (REPO / "deploy" / "docker" / "xplogent-docker").read_text()
+    assert "crm link | unlink | status" in helper and "docker network create" in helper
+    assert "compose.crm.yml" in helper.split("DEPLOY_FILES=")[1].split('"')[1]     # refreshed by update
+    get_sh = (REPO / "get.sh").read_text()
+    assert "deploy/docker/compose.crm.yml" in get_sh and "XPLOGENT_CRM_LINK" in get_sh
+
+
+@_bash
+def test_installer_keeps_the_crm_link_when_switching_mode(tmp_path):
+    assert _get_sh(tmp_path, "--mode", "local").returncode == 0
+    assert (tmp_path / "x" / "deploy" / "docker" / "compose.crm.yml").exists()
+    env_file = tmp_path / "x" / "deploy" / "docker" / ".env"
+    env_file.write_text(env_file.read_text() + "XPLOGENT_SIP=1\nXPLOGENT_CRM_LINK=1\n")
+    res = _get_sh(tmp_path, "--reconfigure", "--domain", "agent.example.com")
+    assert res.returncode == 0, res.stderr
+    assert _env(tmp_path)["COMPOSE_FILE"] == "docker-compose.yml:compose.https.yml:compose.sip.yml:compose.crm.yml"
+
+
 def test_helper_has_sip_command():
     helper = (REPO / "deploy" / "docker" / "xplogent-docker").read_text()
     assert "sip on [--ip ADDR] | off" in helper and "compose.sip.yml" in helper

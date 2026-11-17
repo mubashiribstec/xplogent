@@ -141,7 +141,12 @@ get_env() {  # get_env FILE KEY
 run() { if [ "$DRY" -eq 1 ]; then say "(dry run) $*"; else "$@"; fi; }
 
 # Keep the SIP ports file when SIP was turned on (xplogent-docker sip on).
-sip_suffix() { [ "$(get_env "$ENV_FILE" XPLOGENT_SIP 2>/dev/null)" = "1" ] && echo ":compose.sip.yml" || true; }
+# ... and the shared network with a CRM on this server (xplogent-docker crm link).
+sip_suffix() {
+  [ "$(get_env "$ENV_FILE" XPLOGENT_SIP 2>/dev/null)" = "1" ] && printf ':compose.sip.yml'
+  [ "$(get_env "$ENV_FILE" XPLOGENT_CRM_LINK 2>/dev/null)" = "1" ] && printf ':compose.crm.yml'
+  return 0
+}
 
 # ── checks ─────────────────────────────────────────────────────────────────────
 [ "$(uname -s)" = "Linux" ] || die "this installer is for Linux servers (on a desktop use install.sh / install.ps1)"
@@ -176,7 +181,8 @@ fi
 
 # ── files ─────────────────────────────────────────────────────────────────────
 FILES="deploy/docker/docker-compose.yml deploy/docker/compose.https.yml deploy/docker/compose.local.yml
-deploy/docker/compose.sip.yml deploy/docker/.env.example deploy/docker/xplogent-docker deploy/caddy/Caddyfile"
+deploy/docker/compose.sip.yml deploy/docker/compose.crm.yml deploy/docker/.env.example deploy/docker/xplogent-docker
+deploy/caddy/Caddyfile"
 umask 077
 mkdir -p "$DIR/deploy/docker" "$DIR/deploy/caddy" "$DIR/backups"
 chmod 755 "$DIR" "$DIR/deploy" "$DIR/deploy/docker" "$DIR/deploy/caddy"

@@ -78,6 +78,7 @@ model is set in Settings → Backup model.
 | `xplogent-docker local [--lan]` | switch to no-domain mode |
 | `xplogent-docker speech on [--gpu] \| off` | local voices for the phone agent (Kokoro) |
 | `xplogent-docker sip on [--ip ADDR] \| off` | open UDP 5060 + 10000-10100 for the built-in SIP trunk client |
+| `xplogent-docker crm link \| unlink \| status` | the CRM in Docker on this same server: one shared Docker network (below) |
 | `xplogent-docker restart \| stop \| start` | |
 | `xplogent-docker uninstall [--purge]` | remove containers; `--purge` also deletes all data |
 
@@ -216,6 +217,25 @@ sudo ufw allow from 192.168.1.20 to any port 8765 proto tcp      # the CRM machi
 In https mode (`xplogent-docker https your.domain`), the CRM uses `XPLOGENT_BASE_URL=https://your.domain`
 instead. The CRM machine must resolve that name to this server; if your router doesn't loop
 public addresses back, add a local DNS entry.
+
+**The CRM on this same server, both in Docker (the CRM's `docker compose` setup):**
+one command puts both on a shared Docker network (`xplogent-crm`), so they call each other
+by name. No port is opened, and the CRM's database stays on its own network.
+
+```bash
+sudo xplogent-docker crm link        # creates the network, joins it, attaches the running CRM
+```
+
+| Direction | What to set |
+|---|---|
+| Xplogent → CRM | Calls → CRM → CRM address: `http://crm` |
+| CRM → Xplogent | the CRM's `.env`: `XPLOGENT_BASE_URL=http://xplogent:8765` |
+
+So the CRM stays on the network after its containers are recreated, add to the CRM's `.env`:
+`COMPOSE_FILE=docker-compose.yml:docker-compose.xplogent.yml`, then in the CRM folder run
+`docker compose up -d` and `docker compose exec app php artisan config:clear`. Check both ways:
+**Test connection** in the dashboard, and `docker compose exec app php artisan xplogent:check` on
+the CRM. `sudo xplogent-docker crm status` shows who is on the network.
 
 **The CRM on this same server, outside Docker:** Xplogent reaches it at
 `http://host.docker.internal:8000`. `docker-compose.yml` maps that name to the host; the CRM

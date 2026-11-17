@@ -9,7 +9,7 @@ from xplogent.core.config import load_config, save_user_config
 from xplogent.voip import crm, readiness
 
 _ENV = ("XPLOGENT_IN_DOCKER", "COMPOSE_FILE", "DOMAIN", "XPLOGENT_BIND", "XPLOGENT_PORT", "XPLOGENT_HOST_IP",
-        "XPLOGENT_LAN_ADDRESS",
+        "XPLOGENT_LAN_ADDRESS", "XPLOGENT_CRM_LINK",
         "XPLOGENT_API_HOST", "XPLOGENT_API_PORT")
 
 
@@ -45,6 +45,17 @@ def test_this_server_only_warns_with_the_fix(docker):
     out = crm.callback_address({})
     assert out["url"] == "http://127.0.0.1:8765"
     assert "another machine" in out["warning"] and "xplogent-docker local --lan" in out["note"]
+
+
+def test_same_server_crm_link_uses_the_shared_network(docker):
+    docker.setenv("COMPOSE_FILE", "docker-compose.yml:compose.local.yml:compose.crm.yml")
+    docker.setenv("XPLOGENT_CRM_LINK", "1")              # written by `xplogent-docker crm link`
+    out = crm.callback_address({})
+    assert out["url"] == "http://xplogent:8765" and not out["warning"]
+    assert "docker-compose.xplogent.yml" in out["note"] and "http://crm" in out["note"]
+    docker.setenv("XPLOGENT_CRM_LINK", "0")
+    assert "crm link" in crm.callback_address({})["note"]          # not linked: says how
+    assert crm.base_url_problem("http://crm") == ""                # the CRM's name on the network is accepted
 
 
 def test_outside_docker(monkeypatch):

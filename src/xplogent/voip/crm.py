@@ -745,8 +745,9 @@ def loopback_problem(base_url: str) -> tuple[str, str] | None:
         return None
     if host == "localhost" or host.startswith("127.") or host in ("::1", "0.0.0.0"):
         return (f"Xplogent runs in Docker, where {host} is the container itself, not the CRM.",
-                "Use the CRM machine's LAN address (e.g. http://192.168.1.20:8000), or "
-                "http://host.docker.internal:<port> if the CRM runs on this same server.")
+                "Use the CRM machine's LAN address (e.g. http://192.168.1.20:8000). A CRM in Docker on this "
+                "same server: run sudo xplogent-docker crm link, then use http://crm; a CRM on this "
+                "server outside Docker: http://host.docker.internal:<port>.")
     return None
 
 
@@ -761,6 +762,11 @@ def callback_address(voip: dict[str, Any]) -> dict[str, str]:
     env = os.environ
     lan_host = (env.get("XPLOGENT_LAN_ADDRESS", "").strip() or env.get("XPLOGENT_HOST_IP", "").strip()
                 or "<this server's LAN IP>")       # written by `xplogent-docker local --lan` / get.sh --lan
+    if in_docker() and env.get("XPLOGENT_CRM_LINK", "").strip() == "1":
+        # `xplogent-docker crm link`: the CRM's containers share a Docker network with this one.
+        return {"url": "http://xplogent:8765", "mode": "same server (shared Docker network)", "warning": "",
+                "note": "The CRM joins the network with COMPOSE_FILE=docker-compose.yml:docker-compose.xplogent.yml "
+                        "in its .env; set the CRM address here to http://crm."}
     if in_docker():
         domain = env.get("DOMAIN", "").strip()
         if "https" in env.get("COMPOSE_FILE", "") and domain:
@@ -773,9 +779,10 @@ def callback_address(voip: dict[str, Any]) -> dict[str, str]:
             return {"url": f"http://127.0.0.1:{port}", "mode": "this server only",
                     "warning": "Xplogent's port is open to this server only, so a CRM on another machine "
                                "can't reach it (Call with AI in the CRM would fail).",
-                    "note": f"On this server run: sudo xplogent-docker local --lan, then allow port {port} "
-                            "from the CRM machine in the firewall. A CRM on this same server can use "
-                            f"http://127.0.0.1:{port} as it is."}
+                    "note": f"CRM on another machine: run sudo xplogent-docker local --lan, then allow port {port} "
+                            "from the CRM machine in the firewall. CRM in Docker on this same server: run "
+                            "sudo xplogent-docker crm link (no port is opened). A CRM on this server outside "
+                            f"Docker can use http://127.0.0.1:{port} as it is."}
         host = lan_host if bind in ("0.0.0.0", "::") else bind
         return {"url": f"http://{host}:{port}", "mode": "local network", "warning": "",
                 "note": f"Allow port {port} from the CRM machine in this server's firewall."}
