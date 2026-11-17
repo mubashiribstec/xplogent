@@ -100,27 +100,29 @@ def speech_status(v: dict[str, Any], env: dict[str, str]) -> tuple[bool, str]:
 
         if importlib.util.find_spec("faster_whisper") is None:
             problems.append("built-in speech-to-text needs faster-whisper: pip install 'xplogent[voip]'")
-    elif stt_kind == "deepgram":
-        if not _key(env, "DEEPGRAM_API_KEY"):
-            problems.append("speech-to-text uses Deepgram but no Deepgram key is set (Speech card)")
+    elif stt_kind in ("deepgram", "cartesia"):
+        env_name = f"{stt_kind.upper()}_API_KEY"
+        if not _key(env, env_name):
+            problems.append(f"speech-to-text uses {stt_kind.title()} but {env_name} is not set (Speech card)")
     else:
         if not stt.get("base_url") and not _key(env, str(stt.get("api_key_env", "OPENAI_API_KEY"))):
             problems.append("speech-to-text needs a URL or an OpenAI key")
     tts_kind = str(tts.get("provider") or "openai")
     base = str(tts.get("base_url") or "https://api.openai.com/v1")
-    if tts_kind in ("elevenlabs", "cartesia"):
+    if tts_kind in ("elevenlabs", "cartesia", "deepgram"):
         env_name = f"{tts_kind.upper()}_API_KEY"
         if not _key(env, env_name):
             problems.append(f"text-to-speech uses {tts_kind.title()} but {env_name} is not set (Speech card)")
-        if not str(tts.get("voice") or "").strip():
+        if tts_kind != "deepgram" and not str(tts.get("voice") or "").strip():   # Deepgram has a default
             problems.append(f"pick a {tts_kind.title()} voice in the Speech card")
     elif "api.openai.com" in base and not _key(env, str(tts.get("api_key_env", "OPENAI_API_KEY"))):
         problems.append("text-to-speech uses OpenAI but no OpenAI key is set: "
                         "choose 'Local on this server' in Speech")
-    detail = (tts_kind if tts_kind in ("elevenlabs", "cartesia")
+    detail = (tts_kind if tts_kind in ("elevenlabs", "cartesia", "deepgram")
               else "local" if any(h in base for h in LOCAL_TTS_HINTS) else base)
-    if stt_kind == "deepgram":
-        detail += " · Deepgram streaming" if stt.get("streaming", True) else " · Deepgram"
+    if stt_kind in ("deepgram", "cartesia"):
+        name = stt_kind.title()
+        detail += f" · {name} streaming" if stt.get("streaming", True) else f" · {name}"
     return (not problems), "; ".join(problems) or detail
 
 

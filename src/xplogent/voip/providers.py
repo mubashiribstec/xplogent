@@ -309,6 +309,174 @@ class DeepgramStreamingSTT:
         return DeepgramStream(self.url, self.api_key)
 
 
+class CartesiaSTT:
+    """Cartesia Ink pre-recorded transcription (``POST /stt``, ``ink-whisper``): the batch
+    path, and the streaming adapter's fallback for an utterance whose stream failed."""
+
+    def __init__(self, model: str = "ink-whisper", api_key: str = "", language: str = "en",
+                 api_version: str = "", base_url: str = "https://api.cartesia.ai") -> None:
+        self._client = httpx.AsyncClient(
+            base_url=base_url.rstrip("/"), timeout=httpx.Timeout(30.0),
+            headers={"Authorization": f"Bearer {api_key}", "Cartesia-Version": api_version or CARTESIA_API_VERSION})
+        # Live-only models (ink-2, ink-preview) are not offered for files: use ink-whisper.
+        self.model = model if model and model.startswith("ink-whisper") else "ink-whisper"
+        self.language = language
+        self.label = f"cartesia-stt:{self.model}"
+
+    async def transcribe(self, pcm16_16k: bytes) -> str:
+        if not pcm16_16k:
+            return ""
+        resp = await self._client.post("/stt", data={"model": self.model, "language": self.language},
+                                       files={"file": ("speech.wav", pcm_to_wav(pcm16_16k), "audio/wav")})
+        await _raise_for_status(resp)
+        return str(resp.json().get("text") or "").strip()
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
+class CartesiaStream:
+    """One utterance on Cartesia's live STT WebSocket (``/stt/websocket``): audio frames in,
+    ``finalize`` at the end of speech, the final transcript pieces until ``flush_done``."""
+
+    def __init__(self, url: str, api_key: str, finish_timeout_s: float = 3.0) -> None:
+        self.url, self.api_key, self.finish_timeout_s = url, api_key, finish_timeout_s
+        self._queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self._finals: list[str] = []
+        self._done = asyncio.Event()
+        self._finalized = False
+        self._task: asyncio.Task | None = None
+        self._error: BaseException | None = None
+
+    def start(self) -> None:
+        self._task = asyncio.create_task(self._run())
+
+    def feed(self, pcm16: bytes) -> None:
+        if pcm16:
+            self._queue.put_nowait(pcm16)
+
+    async def _run(self) -> None:
+        import json
+
+        from websockets.asyncio.client import connect
+
+        try:
+            async with connect(self.url, additional_headers={"X-API-Key": self.api_key},
+                               open_timeout=5, close_timeout=1) as ws:
+                async def send() -> None:
+                    while (chunk := await self._queue.get()) is not None:
+                        await ws.send(chunk)
+                    await ws.send("finalize")
+
+                sender = asyncio.create_task(send())
+                try:
+                    async for raw in ws:
+                        if isinstance(raw, bytes):
+                            continue
+                        msg = json.loads(raw)
+                        kind = msg.get("type")
+                        if kind == "error":
+                            raise RuntimeError(f"{msg.get('title') or 'error'}: {msg.get('message') or ''}"[:300])
+                        if kind == "transcript" and msg.get("is_final"):
+                            self._finals.append(str(msg.get("text") or ""))   # deltas: joined as sent
+                        if kind == "flush_done":
+                            self._finalized = True
+                            self._done.set()
+                            with contextlib.suppress(Exception):
+                                await ws.send("close")
+                            break
+                finally:
+                    sender.cancel()
+        except Exception as exc:  # noqa: BLE001 - surfaced by finish()
+            self._error = exc
+        finally:
+            self._done.set()
+
+    async def finish(self) -> str:
+        """The utterance's transcript. Raises if the stream failed (the engine then
+        transcribes the buffered audio with the batch chain: no words are lost)."""
+        self._queue.put_nowait(None)
+        await asyncio.wait_for(self._done.wait(), timeout=self.finish_timeout_s)
+        if self._error is not None:
+            raise RuntimeError(f"streaming speech-to-text failed: {self._error}") from self._error
+        if not self._finalized:
+            raise RuntimeError("streaming speech-to-text did not confirm the end of speech")
+        return "".join(self._finals).strip()
+
+    async def aclose(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            with contextlib.suppress(BaseException):
+                await self._task
+
+
+class CartesiaStreamingSTT:
+    """Factory for per-utterance Cartesia Ink live streams (8 kHz 16-bit PCM in)."""
+
+    sample_rate = 8000
+
+    def __init__(self, model: str = "ink-2", api_key: str = "", language: str = "en",
+                 api_version: str = "", ws_url: str = "wss://api.cartesia.ai/stt/websocket") -> None:
+        from urllib.parse import urlencode
+
+        params = {"model": model, "encoding": "pcm_s16le", "sample_rate": self.sample_rate,
+                  "cartesia_version": api_version or CARTESIA_API_VERSION}
+        if model.startswith("ink-whisper"):
+            params["language"] = language            # ink-2 / ink-preview detect the language
+        self.url, self.api_key = f"{ws_url}?{urlencode(params)}", api_key
+        self.label = f"cartesia-stream:{model}"
+
+    def new_stream(self) -> CartesiaStream:
+        return CartesiaStream(self.url, self.api_key)
+
+
+# Deepgram Aura-2 voices (developers.deepgram.com/docs/tts-models): UK first, then the rest.
+DEEPGRAM_VOICES: list[dict[str, str]] = [
+    {"id": "aura-2-pandora-en", "name": "Pandora · UK female · smooth, calm"},
+    {"id": "aura-2-draco-en", "name": "Draco · UK male · warm, trustworthy"},
+    {"id": "aura-2-theia-en", "name": "Theia · Australian female"},
+    {"id": "aura-2-hyperion-en", "name": "Hyperion · Australian male"},
+    *({"id": f"aura-2-{v}-en", "name": f"{v.title()} · US female"} for v in (
+        "thalia", "andromeda", "asteria", "athena", "aurora", "callista", "cora", "cordelia", "delia",
+        "electra", "harmonia", "helena", "hera", "iris", "juno", "luna", "minerva", "ophelia", "phoebe",
+        "selene", "vesta")),
+    *({"id": f"aura-2-{v}-en", "name": f"{v.title()} · US male"} for v in (
+        "apollo", "arcas", "aries", "atlas", "hermes", "jupiter", "mars", "neptune", "odysseus", "orion",
+        "orpheus", "pluto", "saturn", "zeus")),
+]
+DEEPGRAM_DEFAULT_VOICE = "aura-2-pandora-en"
+
+
+class DeepgramTTS:
+    """Deepgram Aura text-to-speech (``POST /v1/speak``), raw 16-bit PCM at ``sample_rate``."""
+
+    _RATES = (8000, 16000, 24000, 32000, 48000)
+
+    def __init__(self, voice: str = DEEPGRAM_DEFAULT_VOICE, api_key: str = "", sample_rate: int = 24000,
+                 base_url: str = "https://api.deepgram.com") -> None:
+        self.sample_rate = sample_rate if sample_rate in self._RATES else 24000
+        self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=httpx.Timeout(30.0),
+                                         headers={"Authorization": f"Token {api_key}"})
+        self.voice = voice or DEEPGRAM_DEFAULT_VOICE
+        self.label = f"deepgram:{self.voice}"
+
+    async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+        if not text.strip():
+            return
+        params = {"model": self.voice, "encoding": "linear16", "sample_rate": self.sample_rate,
+                  "container": "none"}
+        async with self._client.stream("POST", "/v1/speak", params=params, json={"text": text}) as resp:
+            await _raise_for_status(resp)
+            async for chunk in _pcm_stream(resp):
+                yield chunk
+
+    async def voices(self) -> list[dict[str, str]]:
+        return [dict(v) for v in DEEPGRAM_VOICES]
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
 class ElevenLabsTTS:
     """ElevenLabs streaming text-to-speech, raw 16-bit PCM at ``sample_rate``."""
 
@@ -399,25 +567,39 @@ def _env_key(cfg: dict[str, Any], env: str) -> str:
     return os.environ.get(env, "")
 
 
+def _dg_model(cfg: dict[str, Any]) -> str:
+    model = str(cfg.get("model") or "")
+    return "nova-3" if model in ("", "auto") or model.startswith(("ink", "small", "large", "base")) else model
+
+
 def build_stt(cfg: dict[str, Any]) -> STT:
     kind = str(cfg.get("provider", "whisper-local"))
     if kind == "whisper-local":
         return WhisperLocalSTT(model=cfg.get("model", "auto"), device=cfg.get("device", "auto"),
                                language=cfg.get("language", "en"))
     if kind == "deepgram":
-        return DeepgramSTT(model=cfg.get("model") or "nova-3", api_key=_env_key(cfg, "DEEPGRAM_API_KEY"),
+        return DeepgramSTT(model=_dg_model(cfg), api_key=_env_key(cfg, "DEEPGRAM_API_KEY"),
                            language=cfg.get("language", "en"))
+    if kind == "cartesia":
+        return CartesiaSTT(model=str(cfg.get("model") or ""), api_key=_env_key(cfg, "CARTESIA_API_KEY"),
+                           language=str(cfg.get("language") or "en"))
     key = os.environ.get(str(cfg.get("api_key_env", "OPENAI_API_KEY")), "")
     return OpenAICompatSTT(base_url=cfg.get("base_url") or "https://api.openai.com/v1",
                            model=cfg.get("model") or "whisper-1", api_key=key,
                            language=cfg.get("language", "en"))
 
 
-def build_streaming_stt(cfg: dict[str, Any]) -> DeepgramStreamingSTT | None:
+def build_streaming_stt(cfg: dict[str, Any]) -> DeepgramStreamingSTT | CartesiaStreamingSTT | None:
     """The live (streaming) speech-to-text, when the provider has one and it's on."""
-    if str(cfg.get("provider", "")) != "deepgram" or not cfg.get("streaming", True):
+    kind = str(cfg.get("provider", ""))
+    if kind not in ("deepgram", "cartesia") or not cfg.get("streaming", True):
         return None
-    return DeepgramStreamingSTT(model=cfg.get("model") or "nova-3",
+    if kind == "cartesia":
+        model = str(cfg.get("model") or "")
+        model = model if model.startswith("ink") else "ink-2"      # e.g. "auto" from Whisper: the default
+        return CartesiaStreamingSTT(model=model, api_key=_env_key(cfg, "CARTESIA_API_KEY"),
+                                    language=str(cfg.get("language") or "en"))
+    return DeepgramStreamingSTT(model=_dg_model(cfg),
                                 api_key=_env_key(cfg, "DEEPGRAM_API_KEY"),
                                 language=cfg.get("language", "en"))
 
@@ -432,6 +614,9 @@ def build_tts(cfg: dict[str, Any]) -> TTS:
         return CartesiaTTS(voice=cfg.get("voice") or "", model=str(cfg.get("model") or ""),
                            api_key=_env_key(cfg, "CARTESIA_API_KEY"), sample_rate=rate,
                            language=str(cfg.get("language") or "en"))
+    if kind == "deepgram":
+        return DeepgramTTS(voice=str(cfg.get("voice") or ""), api_key=_env_key(cfg, "DEEPGRAM_API_KEY"),
+                           sample_rate=rate)
     key = os.environ.get(str(cfg.get("api_key_env", "OPENAI_API_KEY")), "")
     return OpenAICompatTTS(base_url=cfg.get("base_url") or "https://api.openai.com/v1",
                            model=cfg.get("model") or "tts-1", voice=cfg.get("voice") or "alloy",
@@ -456,7 +641,7 @@ async def list_voices(cfg: dict[str, Any]) -> list[dict[str, str]]:
     kind = str(cfg.get("provider") or "openai")
     tts = build_tts(cfg)
     try:
-        if kind in ("elevenlabs", "cartesia"):
+        if kind in ("elevenlabs", "cartesia", "deepgram"):
             return await tts.voices()
         base = str(cfg.get("base_url") or "")
         if "kokoro" in base or "8880" in base:

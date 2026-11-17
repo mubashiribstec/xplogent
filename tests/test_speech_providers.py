@@ -264,3 +264,124 @@ async def test_cartesia_retired_models_are_sent_as_the_current_one(saved, sent):
     tts = sp.build_tts({"provider": "cartesia", "voice": sp.GEMMA_UK_VOICE, "model": saved})
     assert tts.model == sent
     await tts.aclose()
+
+
+# ── Cartesia Ink speech-to-text and Deepgram Aura text-to-speech (17 Nov) ──────────
+async def test_cartesia_stream_against_a_fake_server():
+    from websockets.asyncio.server import serve
+
+    got = {"audio": 0, "key": "", "path": "", "close": False}
+
+    async def handler(ws):
+        got["key"] = ws.request.headers.get("X-API-Key", "")
+        got["path"] = ws.request.path
+        async for msg in ws:
+            if isinstance(msg, bytes):
+                got["audio"] += len(msg)
+                continue
+            if msg == "finalize":
+                for text, fin in (("Hello", False), ("Hello", True), (" there, how are you?", True)):
+                    await ws.send(json.dumps({"type": "transcript", "is_final": fin, "text": text,
+                                              "request_id": "r1"}))
+                await ws.send(json.dumps({"type": "flush_done", "request_id": "r1"}))
+            elif msg == "close":
+                got["close"] = True
+                return
+
+    async with serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        stt = sp.CartesiaStreamingSTT(api_key="car-key", ws_url=f"ws://127.0.0.1:{port}/stt/websocket")
+        stream = stt.new_stream()
+        stream.start()
+        for _ in range(5):
+            stream.feed(b"\x01\x00" * 160)
+        assert await stream.finish() == "Hello there, how are you?"     # final deltas joined as sent
+        await stream.aclose()
+    assert got["audio"] == 5 * 320 and got["key"] == "car-key" and got["close"]
+    for part in ("model=ink-2", "encoding=pcm_s16le", "sample_rate=8000", "cartesia_version=2026-08-14"):
+        assert part in got["path"]
+    assert "language=" not in got["path"]                                 # ink-2 detects the language
+
+
+async def test_cartesia_stream_error_raises_for_the_fallback():
+    from websockets.asyncio.server import serve
+
+    async def handler(ws):
+        async for msg in ws:
+            if msg == "finalize":
+                await ws.send(json.dumps({"type": "error", "status_code": 401, "title": "Unauthorized",
+                                          "message": "bad key"}))
+
+    async with serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        stream = sp.CartesiaStreamingSTT(api_key="x", ws_url=f"ws://127.0.0.1:{port}/stt/websocket").new_stream()
+        stream.start()
+        stream.feed(b"\x00\x00" * 160)
+        with pytest.raises(RuntimeError, match="Unauthorized: bad key"):
+            await stream.finish()
+        await stream.aclose()
+
+
+async def test_cartesia_batch():
+    def handler(request):
+        assert request.url.path == "/stt" and request.headers["authorization"] == "Bearer car-key"
+        assert request.headers["cartesia-version"] == sp.CARTESIA_API_VERSION
+        body = request.content
+        assert b'name="model"' in body and b"ink-whisper" in body and b"RIFF" in body
+        return httpx.Response(200, json={"type": "transcript", "text": " hi there ", "language": "en"})
+
+    stt = sp.build_stt({"provider": "cartesia", "model": "ink-2"})         # files: ink-whisper
+    assert isinstance(stt, sp.CartesiaSTT) and stt.model == "ink-whisper"
+    stt._client = httpx.AsyncClient(base_url="https://api.cartesia.ai",
+                                    headers={"Authorization": "Bearer car-key",
+                                             "Cartesia-Version": sp.CARTESIA_API_VERSION},
+                                    transport=httpx.MockTransport(handler))
+    assert await stt.transcribe(b"\x00\x00" * 1600) == "hi there"
+    await stt.aclose()
+
+
+async def test_deepgram_tts_streams_pcm_and_lists_uk_voices_first():
+    def handler(request):
+        assert request.url.path == "/v1/speak" and request.headers["authorization"] == "Token dg"
+        q = request.url.params
+        assert q["model"] == "aura-2-draco-en" and q["encoding"] == "linear16"
+        assert q["sample_rate"] == "24000" and q["container"] == "none"
+        if json.loads(request.content)["text"] == "fail":
+            return httpx.Response(402, json={"err_msg": "no credit"})
+        return httpx.Response(200, content=b"\x00\x01" * 600)
+
+    tts = sp.build_tts({"provider": "deepgram", "voice": "aura-2-draco-en"})
+    assert isinstance(tts, sp.DeepgramTTS) and tts.sample_rate == 24000
+    await tts._client.aclose()
+    _mock(tts, handler, "https://api.deepgram.com", {"Authorization": "Token dg"})
+    assert len(b"".join([c async for c in tts.synthesize("Hello")])) == 1200
+    with pytest.raises(RuntimeError, match="HTTP 402"):
+        _ = [c async for c in tts.synthesize("fail")]
+    voices = await tts.voices()
+    assert [v["id"] for v in voices[:2]] == ["aura-2-pandora-en", "aura-2-draco-en"]
+    assert all(v["id"].startswith("aura-2-") for v in voices) and len(voices) > 30
+    await tts.aclose()
+
+
+def test_new_providers_use_their_own_keys_and_defaults(monkeypatch):
+    monkeypatch.setenv("CARTESIA_API_KEY", "c-key")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "d-key")
+    live = sp.build_streaming_stt({"provider": "cartesia", "model": "auto"})   # left over from Whisper
+    assert isinstance(live, sp.CartesiaStreamingSTT) and live.api_key == "c-key" and "model=ink-2" in live.url
+    assert sp.build_streaming_stt({"provider": "cartesia", "streaming": False}) is None
+    dg = sp.build_streaming_stt({"provider": "deepgram", "model": "auto"})
+    assert "model=nova-3" in dg.url
+    tts = sp.build_tts({"provider": "deepgram"})
+    assert tts.voice == "aura-2-pandora-en" and tts._client.headers["Authorization"] == "Token d-key"
+    assert sp.build_tts({"provider": "deepgram", "sample_rate": 8000}).sample_rate == 8000
+    assert sp.build_tts({"provider": "deepgram", "sample_rate": 22050}).sample_rate == 24000
+
+
+def test_readiness_knows_the_new_providers():
+    from xplogent.voip.readiness import speech_status
+
+    ok, detail = speech_status({"stt": {"provider": "cartesia"}, "tts": {"provider": "deepgram"}},
+                               {"CARTESIA_API_KEY": "c", "DEEPGRAM_API_KEY": "d"})
+    assert ok and "deepgram" in detail and "Cartesia streaming" in detail
+    ok, problem = speech_status({"stt": {"provider": "cartesia"}, "tts": {"provider": "deepgram"}}, {})
+    assert not ok and "CARTESIA_API_KEY" in problem and "DEEPGRAM_API_KEY" in problem
