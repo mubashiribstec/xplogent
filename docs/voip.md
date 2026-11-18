@@ -208,8 +208,8 @@ Deepgram can't be reached when a call starts, the call runs in the standard mode
 idle prompts and hang-up, quick close and per-call cost cap apply as in the standard mode; the
 cost estimate adds `voip.costs.voice_agent_per_minute` (default $0.075, set it to your Deepgram
 plan). Campaigns may use this mode: as there is no answering-machine detection here, a call that
-reaches a voicemail box is ended by the idle and time limits and is recorded as no answer, not as
-voicemail, and no voicemail message is left.
+reaches a voicemail box is ended by the idle and time limits, is not marked as voicemail, and
+no voicemail message is left.
 
 **Realtime speech-to-speech (optional).** Set **Conversation mode → Realtime** (`voip.mode:
 realtime`, OpenAI key; `voip.realtime` holds the model, voice and transcription model). The OpenAI
