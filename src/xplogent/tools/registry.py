@@ -5,6 +5,7 @@ from __future__ import annotations
 from xplogent.providers.base import ToolSpec
 from xplogent.tools.base import Tool
 from xplogent.tools.filesystem import filesystem_tools
+from xplogent.tools.knowledge import knowledge_tools
 from xplogent.tools.memory import memory_tools
 from xplogent.tools.shell import ShellTool
 
@@ -13,7 +14,11 @@ _BUILTIN_GROUPS = {
     "shell": lambda: [ShellTool()],
     "filesystem": filesystem_tools,
     "memory": memory_tools,
+    "knowledge": knowledge_tools,
 }
+# Read-only and needed for answers from the company's documents: on even when a saved
+# tool list predates it.
+_ALWAYS_ON = ("knowledge",)
 
 
 class ToolRegistry:
@@ -50,7 +55,8 @@ class ToolRegistry:
     @classmethod
     def from_config(cls, enabled: list[str] | None = None) -> ToolRegistry:
         registry = cls()
-        groups = enabled if enabled is not None else list(_BUILTIN_GROUPS)
+        groups = list(enabled) if enabled is not None else list(_BUILTIN_GROUPS)
+        groups += [g for g in _ALWAYS_ON if g not in groups]
         for group in groups:
             factory = _BUILTIN_GROUPS.get(group)
             if factory:

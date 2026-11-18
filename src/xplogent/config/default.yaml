@@ -92,6 +92,7 @@ tools:
     - shell
     - filesystem
     - memory
+    - knowledge                    # search the knowledge base (always on: read-only)
 
 # ─── Execution backend for the `shell` tool ───────────────────────────
 # Where commands run. "local" = this machine (default). "docker" runs them
