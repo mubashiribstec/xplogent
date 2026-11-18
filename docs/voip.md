@@ -37,6 +37,9 @@ You can also use **both**.
 3. Telnyx portal: create a Voice API (Call Control) application with the webhook URL shown,
    assign your number, create an API key. Paste key, application ID and number in the
    Telnyx card and press **Test Telnyx**.
+4. **Required:** paste the account's public key (Telnyx portal → Keys & Credentials → Public
+   Key) as **Webhook public key**. Every webhook's Ed25519 signature is checked; without the key
+   Telnyx webhooks are refused, so a leaked webhook URL can't fake calls or start paid actions.
 
 ### SIP trunk (built-in client)
 
@@ -201,7 +204,12 @@ interrupted. Not in this mode: the price guard on the model's sentences, local a
 detection, the voicemail message and "listen first" (Telnyx carrier detection still works). **Test
 Voice Agent** connects with your choices, asks one question and shows the connection time, the
 time to the first audio and the reply; **Run checks** in the browser test call does the same. If
-Deepgram can't be reached when a call starts, the call runs in the standard mode.
+Deepgram can't be reached when a call starts, the call runs in the standard mode. The time limit,
+idle prompts and hang-up, quick close and per-call cost cap apply as in the standard mode; the
+cost estimate adds `voip.costs.voice_agent_per_minute` (default $0.075, set it to your Deepgram
+plan). Campaigns may use this mode: as there is no answering-machine detection here, a call that
+reaches a voicemail box is ended by the idle and time limits and is recorded as no answer, not as
+voicemail, and no voicemail message is left.
 
 **Realtime speech-to-speech (optional).** Set **Conversation mode → Realtime** (`voip.mode:
 realtime`, OpenAI key; `voip.realtime` holds the model, voice and transcription model). The OpenAI
