@@ -111,5 +111,6 @@ def test_staged_call_data_is_private(tmp_path, monkeypatch):
     from xplogent.voip import warmup
     warmup._stage("k1", "+447700900123", {"brief": {"name": "Sarah", "lock_token": "t"}}, "Hello")
     path = warmup.staging_dir() / "k1.json"
-    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    if os.name != "nt":                             # Windows has no Unix modes
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     assert "lock_token" not in path.read_text()
