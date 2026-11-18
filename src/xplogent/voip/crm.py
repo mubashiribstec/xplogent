@@ -520,6 +520,30 @@ def _num(v: Any) -> float | None:
         return None
 
 
+# Free text from the CRM goes into the call prompt (an LLM provider) and the stored brief:
+# personal details the call doesn't need are removed here too, whatever the CRM already did.
+_FREE_TEXT = {"cv_excerpt", "last_note", "callback_note"}
+_REDACT = [
+    (re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+"), "[email]"),
+    (re.compile(r"\b[A-Z]{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?[A-D]\b", re.I), "[NI number]"),
+    (re.compile(r"\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b", re.I), "[postcode]"),
+    (re.compile(r"(?:\+|\b0)(?:[\s-]?\d){9,13}\b"), "[phone]"),
+    (re.compile(r"\b(?:d\.?o\.?b\.?|date of birth|birth ?date)\s*[:\-]?\s*[^\n.;]{0,40}", re.I),
+     "[date of birth]"),
+    (re.compile(r"\b(?:born(?: on)?|aged?)\s*[:\-]?\s*\d[^\n.;,]{0,25}", re.I), "[date of birth]"),
+    (re.compile(r"\b(?:gender|sex|marital status|religion|nationality)\s*[:\-]\s*[^\n.;,]{0,30}", re.I),
+     "[personal detail]"),
+]
+
+
+def redact_free_text(text: str) -> str:
+    """Remove emails, NI numbers, full postcodes, phone numbers, date-of-birth and other
+    personal-detail fields from CRM free text (CV excerpt, notes)."""
+    for pattern, repl in _REDACT:
+        text = pattern.sub(repl, text)
+    return text
+
+
 def _pick(data: Any, spec: dict[str, Any]) -> dict[str, Any]:
     """Only the expected keys, each typed and capped: CRM data is untrusted."""
     data = data if isinstance(data, dict) else {}
@@ -537,6 +561,8 @@ def _pick(data: Any, spec: dict[str, Any]) -> dict[str, Any]:
                         if re.fullmatch(r"[a-z_]{1,40}", str(k))}
         else:
             out[key] = _clean(v, kind) if v is not None else ""
+            if key in _FREE_TEXT and out[key]:
+                out[key] = redact_free_text(out[key])
     return out
 
 

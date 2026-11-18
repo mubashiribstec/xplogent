@@ -238,3 +238,61 @@ def test_our_own_line_failing_is_not_sent_as_the_candidates_outcome(env):
     raw, headers = _signed(BODY)
     assert not client.post("/voip/crm/dial", content=raw, headers=headers).json()["ok"]
     assert _crm_rows(load_config()) == []
+
+
+# ── audit 18 Nov: P1-7, P1-8, P1-10 ─────────────────────────────────────────────────────
+def test_a_dashboard_call_to_a_candidate_is_refused_when_do_not_call_cant_be_checked(env, monkeypatch):
+    """A call the CRM asked for was vetted by the CRM (blocked / do-not-call) and must still
+    get the lock (below); a dashboard call about a CRM candidate has only this lookup."""
+    import asyncio
+
+    client, svc, mock = env
+
+    async def down(*a, **k):
+        return {"ok": False, "found": False, "contact": None, "error": "timed out", "ms": 0.0}
+    monkeypatch.setattr(crm, "lookup", down)
+    res = asyncio.run(svc.dial("07700900123", via="sip", brief={"applicant_id": 123, "name": "Sarah"}))
+    assert not res["ok"] and "do-not-call" in res["error"] and not svc.metas    # never dialled
+
+
+def test_a_crm_call_is_refused_when_the_dial_lock_cant_be_checked(env, monkeypatch):
+    client, svc, mock = env
+
+    async def no_lock(*a, **k):
+        return {"ok": False, "status": 500, "error": "server error", "locked": False,
+                "lock_token": "", "locked_by": "", "expires_at": ""}
+    monkeypatch.setattr(crm, "dial_lock", no_lock)
+    raw, headers = _signed(BODY)
+    res = client.post("/voip/crm/dial", content=raw, headers=headers).json()
+    assert not res["ok"] and "dial lock" in res["error"] and not svc.metas
+
+
+def test_a_plain_manual_dial_still_goes_ahead_with_a_warning(env, monkeypatch):
+    import asyncio
+
+    client, svc, mock = env
+
+    async def down(*a, **k):
+        return {"ok": False, "found": False, "contact": None, "error": "timed out", "ms": 0.0}
+    monkeypatch.setattr(crm, "lookup", down)
+    res = asyncio.run(svc.dial("07700900999", via="sip"))      # no brief, no applicant
+    assert res["ok"] and svc.metas
+
+
+def test_a_telnyx_dial_failure_for_a_crm_call_reaches_the_crm(env, monkeypatch):
+    import asyncio
+
+    client, svc, mock = env
+
+    async def refused(number, meta, v):
+        return {"ok": False, "error": "Telnyx refused the call: 422 invalid destination"}
+    monkeypatch.setattr(svc.telnyx, "dial", refused)
+    brief = {"source": "crm_agent_call", "applicant_id": 123, "sale_id": 45, "name": "Sarah"}
+    res = asyncio.run(svc.dial("+447700900123", via="telnyx", brief=brief))
+    assert not res["ok"] and "422" in res["error"], res
+    call, payload = _crm_rows(load_config())[0]
+    assert payload["applicant_id"] == 123 and call["outcome"] != ""
+    # Our own account's problem is not the candidate's outcome.
+    from xplogent.voip.dialler import line_fault
+    assert line_fault("set your Telnyx number and Voice API application ID first")
+    assert line_fault("Telnyx refused the call: 402 insufficient balance")

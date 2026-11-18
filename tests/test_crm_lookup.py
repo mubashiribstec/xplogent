@@ -178,3 +178,21 @@ async def test_crm_do_not_call_blocks_an_outbound_dial(monkeypatch):
     svc.sip_dialer = dialer
     out = await svc.dial("+15550001111", via="sip")
     assert not out["ok"] and "do-not-call" in out["error"] and not dialled
+
+
+def test_crm_free_text_is_redacted_before_prompt_or_storage():
+    """Audit 18 Nov P1-11: the CV excerpt and notes reach the LLM and the stored brief."""
+    from xplogent.voip.crm import CANDIDATE_SPEC, _pick, redact_free_text
+
+    cv = ("DOB: 12/03/1990. Gender: Female. Email sarah.j@example.com, tel 07700 900123, "
+          "LS7 3AA, NI AB 12 34 56 C. Born 1990 in Leeds. Aged 34. 5 years as a care assistant "
+          "with an agency from 2018; average 40 hours; NVQ Level 3.")
+    out = redact_free_text(cv)
+    for leak in ("12/03/1990", "Female", "sarah.j@", "07700", "LS7 3AA", "AB 12 34 56 C", "1990 in", "34"):
+        assert leak not in out, leak
+    for kept in ("care assistant", "agency from 2018", "average 40 hours", "NVQ Level 3"):
+        assert kept in out, kept
+    picked = _pick({"cv_excerpt": cv, "last_note": "call back on 07700 900123", "name": "Sarah"},
+                   CANDIDATE_SPEC)
+    assert "07700" not in picked["cv_excerpt"] and "07700" not in picked["last_note"]
+    assert picked["name"] == "Sarah"

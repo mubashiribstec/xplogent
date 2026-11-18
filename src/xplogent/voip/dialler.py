@@ -56,8 +56,9 @@ def unanswered_outcome(reason: str) -> str:
 
 
 # Our own line failing (not the candidate's phone): never counts as an attempt.
-_LINE_FAULT = re.compile(r"\b(401|407)\b|unauthori[sz]ed|proxy authentication|not set up|not switched on"
-                         r"|not registered", re.I)
+_LINE_FAULT = re.compile(r"\b(401|402|403|407)\b|unauthori[sz]ed|forbidden|proxy authentication|not set up"
+                         r"|not switched on|not registered|voip is disabled|set your telnyx|application id"
+                         r"|insufficient (funds|balance|credit)", re.I)
 
 
 def line_fault(reason: str) -> bool:

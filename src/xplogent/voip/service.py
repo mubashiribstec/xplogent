@@ -773,6 +773,15 @@ class VoipService:
                                          sale_id=(brief or {}).get("sale_id"))
                 if found.get("found") and (found.get("contact") or {}).get("do_not_call"):
                     return {"ok": False, "error": "the CRM marks this number do-not-call"}
+                # A call about a CRM candidate needs the CRM's say before it goes out. One the CRM
+                # asked for was vetted there (blocked / do-not-call) and must still take the lock
+                # below; a dashboard call naming an applicant has only this lookup, so without it
+                # do-not-call is unknown: refuse. Campaigns stop here too; a plain manual dial
+                # goes ahead with a warning.
+                crm_candidate = crm_asked(brief) or bool((brief or {}).get("applicant_id"))
+                if not found.get("ok") and crm_candidate and not crm_asked(brief):
+                    return {"ok": False, "error": "the CRM can't be reached to check do-not-call "
+                                                  f"({found.get('error') or 'no answer'}): not dialling, try again"}
                 meta["crm_lookup"] = found
                 person = found.get("contact") or {}
                 # Who the CRM says this is; a call the CRM asked for (or a campaign preview) names the
@@ -792,7 +801,10 @@ class VoipService:
                         brief = {**(brief or brief_from_lookup(person)), "lock_token": lock["lock_token"],
                                  "lock_phone": number, "manual_lock": True}
                         meta["brief"] = brief
-                    else:                # the CRM can't say: a person chose to call, so go ahead and warn
+                    elif crm_candidate:  # a recruiter could be ringing them right now: don't
+                        return {"ok": False, "error": "the CRM dial lock can't be checked "
+                                                      f"({lock.get('error') or lock['status']}): not dialling, try again"}
+                    else:                # a plain manual dial: a person chose to call, so go ahead and warn
                         meta["lock_warning"] = f"CRM dial lock unavailable ({lock.get('error') or lock['status']})"
                         _log.warning("calling %s without the CRM dial lock: %s", number, meta["lock_warning"])
         if via in ("sip", "extension"):
@@ -812,8 +824,9 @@ class VoipService:
             res = await self.telnyx.dial(number, meta, v)
         if not test:
             alerts.dial_result(res)          # 5 carrier/line failures in a row → alert
-        if not res.get("ok") and not test and via in ("sip", "extension") and crm_asked(brief):
-            # Refused before it rang for long (busy, unavailable): the CRM still hears about it.
+        if not res.get("ok") and not test and crm_asked(brief):
+            # Refused before it rang for long (busy, unavailable, a carrier API error): the CRM
+            # still hears about it. Our own line faults are skipped inside.
             self.record_crm_unanswered(cfg, number, brief or {}, str(res.get("error") or "dial failed"))
         if not res.get("ok") and (brief or {}).get("manual_lock"):
             await release_manual_lock(cfg, brief)
