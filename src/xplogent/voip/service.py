@@ -434,7 +434,8 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
     costs = v.get("costs") or {}
     session_kw.setdefault("cost_rates", {"per_minute": float(v.get("cost_per_minute", 0) or 0),
                                          **{k: float(costs.get(k) or 0) for k in
-                                            ("tts_per_1k_chars", "llm_input_per_m", "llm_output_per_m")}})
+                                            ("tts_per_1k_chars", "llm_input_per_m", "llm_output_per_m",
+                                             "voice_agent_per_minute")}})
     session_kw.setdefault("cost_cap", float(brief.get("per_call_cost_cap") or v.get("per_call_cost_cap") or 0))
     session_kw.setdefault("quick_close_s", float(v.get("quick_close_s", 45)))
     vad_cfg = v.get("vad", {}) or {}

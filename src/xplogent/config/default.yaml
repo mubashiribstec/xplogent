@@ -230,6 +230,7 @@ voip:
     tts_per_1k_chars: 0            # e.g. ElevenLabs Flash ≈ 0.04
     llm_input_per_m: 0             # the call model's price per million input tokens
     llm_output_per_m: 0            # ... and per million output tokens
+    voice_agent_per_minute: 0.075  # Deepgram Voice Agent (listen + think + speak), per minute; check your Deepgram plan
   per_call_cost_cap: 0             # end a call politely once its estimate reaches this ($; 0 = no cap)
   daily_cost_cap: 0                # no new outbound calls (test calls too) once today's spend reaches this ($; 0 = no cap; alert at 80 %)
   quick_close_s: 45                # after "not interested" / "no job" / "do not call", the call ends within this time

@@ -352,7 +352,7 @@ class CallSession:
         if self.voicemail_message:
             # Wait for the beep (or the greeting to stop) before speaking: on_audio watches.
             self._vm_state, self._vm_quiet_s, self._vm_wait_s = "waiting", 0.0, 0.0
-            if "beep" in reason:
+            if reason == "voicemail beep":      # not "beep" anywhere: a greeting may say it
                 self._start_voicemail()
             return
         await self._hangup("answering machine")
@@ -376,12 +376,14 @@ class CallSession:
         st = self.brain.state
         self.event("voicemail_message")
         self._record("agent", self.voicemail_message)
+        left = False
         try:
             await self._say(self.voicemail_message)
             st.summary = f"Answering machine ({self.amd.reason if self.amd else 'detected'}); voicemail message left."
+            left = True
         except Exception:  # noqa: BLE001 - the voice failed: still end the call cleanly
             _log.exception("leaving the voicemail message failed")
-        await self._hangup("voicemail message left")
+        await self._hangup("voicemail message left" if left else "voicemail message failed")
 
     async def machine_detected(self, reason: str) -> None:
         """The carrier's own detection (Telnyx) said machine."""
@@ -418,7 +420,9 @@ class CallSession:
         """Live estimate (dollars): minutes × per-minute rate + voice characters + model tokens."""
         r = self.cost_rates
         tokens = getattr(self.brain, "tokens", None) or {}
-        return round(self.duration_s / 60 * float(r.get("per_minute", 0))
+        # Deepgram Voice Agent bills by the minute for listening, thinking and speaking together.
+        agent_rate = float(r.get("voice_agent_per_minute", 0)) if getattr(self, "mode", "") == "voice_agent" else 0.0
+        return round(self.duration_s / 60 * (float(r.get("per_minute", 0)) + agent_rate)
                      + self.tts_chars / 1000 * float(r.get("tts_per_1k_chars", 0))
                      + int(tokens.get("input", 0)) / 1e6 * float(r.get("llm_input_per_m", 0))
                      + int(tokens.get("output", 0)) / 1e6 * float(r.get("llm_output_per_m", 0)), 4)
@@ -1032,51 +1036,64 @@ class CallSession:
 
     # -- watchdog: silence + max duration -------------------------------------------
     async def _watch(self) -> None:
+        """Time limit, wrap-up, cost cap, quick close and silence: checked every second. A failing
+        check is logged and the watchdog carries on: without it a call has no limits at all."""
         while not self.finished.is_set():
             await asyncio.sleep(1.0)
-            now = time.time()
-            if now - self.started > self.max_call_s:
-                await self._prompt("I'm sorry, we've reached the time limit for this call. "
-                                   "Goodbye.", interrupt=True, wait=True)
-                await self._hangup("time limit reached")
-                return
-            if (not self._wrapped_up and self.max_call_s > 2 * self.wrap_up_s
-                    and now - self.started > self.max_call_s - self.wrap_up_s):
-                self._wrapped_up = True
-                self.event("wrap_up", f"{int(self.wrap_up_s)} s left")
-                self.brain.instruct("About one minute left on this call: wrap up now. Briefly sum up, "
-                                    "offer a recruiter callback for anything still open, then say goodbye.")
-            if self.cost_cap and self.cost_estimate() >= self.cost_cap:
-                self.event("cost_cap", f"${self.cost_estimate():.2f} of ${self.cost_cap:.2f}")
-                st = self.brain.state
-                st.outcome = st.outcome or "screen_incomplete"
-                st.exit_path = st.exit_path or "cost_cap"
-                await self._prompt("I'm sorry, I need to end our call now. A recruiter will follow up "
-                                   "with you. Goodbye.", interrupt=True, wait=True)
-                await self._hangup("cost cap reached")
-                return
-            since = getattr(self.brain.state, "closing_since", 0.0)
-            if since and now - since > self.quick_close_s and not self._speaking \
-                    and not (self._turn_task is not None and not self._turn_task.done()):
-                self.event("quick_close", f"{int(now - since)} s after the call's purpose ended")
-                await self._prompt("Thanks for your time. Goodbye.", wait=True)
-                await self._hangup("quick close")
-                return
-            if self._speaking or self.vad.in_speech or getattr(self.brain, "paused", False):
-                continue
-            if self._turn_task is not None and not self._turn_task.done():
-                continue  # the agent is still working on a reply: not silence
-            idle = now - self._last_activity
-            if idle > self.idle_hangup_s:
-                task = await self._prompt(
-                    "I haven't heard anything, so I'll end the call. Goodbye.", wait=True)
-                if task is not None and task.cancelled():
-                    continue  # the caller spoke over the goodbye: they're still there
-                await self._hangup("caller silent")
-                return
-            if self._idle_prompts < self.idle_max_prompts:
-                step = (self.idle_hangup_s - self.idle_prompt_s) / max(1, self.idle_max_prompts)
-                if idle > self.idle_prompt_s + self._idle_prompts * step:
-                    text = SILENCE_PROMPTS[min(self._idle_prompts, len(SILENCE_PROMPTS) - 1)]
-                    self._idle_prompts += 1
-                    await self._prompt(text)
+            try:
+                if await self._watch_tick():
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                _log.exception("call watchdog check failed; still watching")
+
+    async def _watch_tick(self) -> bool:
+        """One watchdog pass; True when the call has been ended."""
+        now = time.time()
+        if now - self.started > self.max_call_s:
+            await self._prompt("I'm sorry, we've reached the time limit for this call. "
+                               "Goodbye.", interrupt=True, wait=True)
+            await self._hangup("time limit reached")
+            return True
+        if (not self._wrapped_up and self.max_call_s > 2 * self.wrap_up_s
+                and now - self.started > self.max_call_s - self.wrap_up_s):
+            self._wrapped_up = True
+            self.event("wrap_up", f"{int(self.wrap_up_s)} s left")
+            self.brain.instruct("About one minute left on this call: wrap up now. Briefly sum up, "
+                                "offer a recruiter callback for anything still open, then say goodbye.")
+        if self.cost_cap and self.cost_estimate() >= self.cost_cap:
+            self.event("cost_cap", f"${self.cost_estimate():.2f} of ${self.cost_cap:.2f}")
+            st = self.brain.state
+            st.outcome = st.outcome or "screen_incomplete"
+            st.exit_path = st.exit_path or "cost_cap"
+            await self._prompt("I'm sorry, I need to end our call now. A recruiter will follow up "
+                               "with you. Goodbye.", interrupt=True, wait=True)
+            await self._hangup("cost cap reached")
+            return True
+        since = getattr(self.brain.state, "closing_since", 0.0)
+        if since and now - since > self.quick_close_s and not self._speaking \
+                and not (self._turn_task is not None and not self._turn_task.done()):
+            self.event("quick_close", f"{int(now - since)} s after the call's purpose ended")
+            await self._prompt("Thanks for your time. Goodbye.", wait=True)
+            await self._hangup("quick close")
+            return True
+        if self._speaking or self.vad.in_speech or getattr(self.brain, "paused", False):
+            return False
+        if self._turn_task is not None and not self._turn_task.done():
+            return False  # the agent is still working on a reply: not silence
+        idle = now - self._last_activity
+        if idle > self.idle_hangup_s:
+            task = await self._prompt(
+                "I haven't heard anything, so I'll end the call. Goodbye.", wait=True)
+            if task is not None and task.cancelled():
+                return False  # the caller spoke over the goodbye: they're still there
+            await self._hangup("caller silent")
+            return True
+        if self._idle_prompts < self.idle_max_prompts:
+            step = (self.idle_hangup_s - self.idle_prompt_s) / max(1, self.idle_max_prompts)
+            if idle > self.idle_prompt_s + self._idle_prompts * step:
+                text = SILENCE_PROMPTS[min(self._idle_prompts, len(SILENCE_PROMPTS) - 1)]
+                self._idle_prompts += 1
+                await self._prompt(text)
+        return False

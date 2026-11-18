@@ -279,3 +279,103 @@ def test_build_session_readiness_and_api(tmp_path, monkeypatch):
     client = TestClient(create_app())
     voices = client.get("/voip/voice-agent/voices").json()["voices"]
     assert voices[0]["id"] == "aura-2-pandora-en"
+
+
+# ── audit 18 Nov: P0-1, P1-3, P1-4, P1-5, P2-2 ─────────────────────────────────────────
+async def test_supervisor_say_and_the_watchdog_work_in_voice_agent_mode():
+    """The voice agent's prompt builder used to be called _prompt, hiding the engine's
+    _prompt(text): Say returned 500 and the first idle prompt killed the watchdog."""
+    import time
+
+    async with FakeAgent() as fake:
+        session, sent, _c, turns, hung = make(fake.url, idle_prompt_s=0.5, idle_hangup_s=60)
+        await session.start()
+        assert session.mode == "voice_agent"
+        await session.say("One moment please.")                      # no TypeError
+        await until(lambda: "One moment please." in session.tts.spoken)
+        session._greeting_live = False
+        session._last_activity = time.time() - 5                    # silence: the idle prompt
+        await until(lambda: len(session.tts.spoken) >= 2, t=4)
+        assert not session._watchdog.done(), "the watchdog keeps running"
+        session.started = time.time() - session.max_call_s - 1      # the time limit still ends it
+        await until(lambda: bool(hung), t=4)
+        await session.stop()
+
+
+async def test_the_watchdog_survives_a_failing_check():
+    async with FakeAgent() as fake:
+        session, *_ = make(fake.url, cost_cap=0.01)
+        calls = []
+
+        def broken():
+            calls.append(1)
+            raise RuntimeError("boom")
+
+        session.cost_estimate = broken
+        await session.start()
+        await until(lambda: len(calls) >= 2, t=4)                    # still checking after the error
+        assert not session._watchdog.done()
+        await session.stop()
+
+
+def test_a_long_prompt_keeps_the_guardrails_and_drops_knowledge():
+    from xplogent.voip.voice_agent import PROMPT_LIMIT
+
+    session, *_ = make("ws://127.0.0.1:9")
+    session.brain._system = lambda hint: "PERSONA AND GUARDRAILS\n" + "k" * 40_000 + "LAST KNOWLEDGE"
+    prompt = session._system_prompt()
+    assert len(prompt) <= PROMPT_LIMIT
+    assert prompt.startswith("PERSONA AND GUARDRAILS") and "LAST KNOWLEDGE" not in prompt
+    assert prompt.endswith("Keep replies short and natural.") and "knowledge shortened" in prompt
+    assert session.settings()["agent"]["think"]["prompt"] == prompt
+
+
+async def test_the_greeting_hold_ends_without_agent_audio_done(monkeypatch):
+    from xplogent.voip import voice_agent
+
+    async with FakeAgent() as fake:
+        session, sent, cleared, *_ = make(fake.url)
+        await session.start()
+        await until(lambda: fake.ws is not None and fake.sent("Settings"))
+        await fake.play([text("assistant", GREETING), text("assistant", "How can I help?")])
+        await until(lambda: not session._greeting_live)              # moved past the greeting
+        await fake.play([b"\xff" * 4800, {"type": "UserStartedSpeaking"}])
+        await until(lambda: bool(cleared))                           # barge-in works again
+        await session.stop()
+    monkeypatch.setattr(voice_agent, "GREETING_MAX_S", 0.2)
+    async with FakeAgent() as fake:
+        session, *_ = make(fake.url)
+        await session.start()
+        assert session._greeting_live
+        await session._greeting_timeout(0.2)
+        assert not session._greeting_live
+        assert any(e["kind"] == "greeting_timeout" for e in session.timeline)
+        await session.stop()
+
+
+async def test_a_failing_tool_still_answers_deepgram():
+    async with FakeAgent() as fake:
+        session, *_ = make(fake.url)
+        await session.start()
+        await until(lambda: fake.ws is not None)
+
+        def broken(name, args):
+            raise ValueError("bad")
+
+        session.brain._run_tool = broken
+        await fake.play([{"type": "FunctionCallRequest",
+                          "functions": [{"id": "f1", "name": "book_callback", "arguments": "{}"}]}])
+        await until(lambda: fake.sent("FunctionCallResponse"))
+        assert "failed" in fake.sent("FunctionCallResponse")[0]["content"]
+        await session.stop()
+
+
+def test_voice_agent_minutes_count_towards_the_cost_cap():
+    import time
+
+    session, *_ = make("ws://127.0.0.1:9", cost_rates={"per_minute": 0.01, "voice_agent_per_minute": 0.08})
+    session.started = time.time() - 120
+    session.mode = "voice_agent"
+    assert abs(session.cost_estimate() - 0.18) < 0.01
+    session.mode = "cascaded"                                        # fell back: not billed by Deepgram
+    assert abs(session.cost_estimate() - 0.02) < 0.01

@@ -312,3 +312,16 @@ def test_the_message_reaches_outbound_calls_only():
     _, store, session, _, _ = _build(inbound)
     assert session.voicemail_message == ""
     store.close()
+
+
+async def test_a_greeting_that_mentions_the_beep_is_not_the_beep():
+    """Audit 18 Nov P1-6: AMD's reason quotes the greeting; "…after the beep" in it is not a beep."""
+    session, sent, turns, hung = outbound_session(hello_wait_s=5, voicemail_message=VM)
+    await session.start()
+    await session.machine_detected('voicemail greeting ("please leave a message after the beep")')
+    await asyncio.sleep(0.1)
+    assert not session.tts.spoken, "the message waits for the real beep or the greeting to end"
+    await session.on_audio(pcm16_to_mulaw(sine(1000, 400)))      # the real beep
+    assert await wait_for(lambda: bool(hung))
+    assert session.tts.spoken == [VM]
+    await session.stop()

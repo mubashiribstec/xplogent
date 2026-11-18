@@ -43,6 +43,7 @@ _log = get_logger("voip.voice_agent")
 
 DEFAULT_URL = "wss://agent.deepgram.com/v1/agent/converse"
 MODELS_URL = "https://agent.deepgram.com/v1/agent/settings/think/models"
+GREETING_MAX_S = 20.0           # stop holding barge-in for the greeting after this
 PROMPT_LIMIT = 24_000            # Deepgram-hosted models take up to 25,000 characters
 KEEPALIVE_S = 8.0
 
@@ -116,6 +117,7 @@ class DeepgramAgentSession(RealtimeSession):
         self._keepalive: asyncio.Task | None = None
         self._greeting_live = False          # the agent's greeting is still arriving / playing
         self._greeting_text_seen = False
+        self._greeting_guard: asyncio.Task | None = None
         self._user_said_at = 0.0
 
     # -- lifecycle -------------------------------------------------------------------------
@@ -137,6 +139,15 @@ class DeepgramAgentSession(RealtimeSession):
             self.event("greeting")
             self._record("agent", self.greeting)
             self._greeting_live = True
+            self._greeting_guard = asyncio.create_task(self._greeting_timeout())
+
+    async def _greeting_timeout(self, seconds: float = GREETING_MAX_S) -> None:
+        """Barge-in is held while the greeting (with the AI disclosure) plays. If Deepgram never
+        says the greeting is done (an interrupted greeting, a glitch), stop holding it."""
+        await asyncio.sleep(seconds)
+        if self._greeting_live:
+            self._greeting_live = False
+            self.event("greeting_timeout")
 
     async def _connect(self) -> None:
         from websockets.asyncio.client import connect
@@ -172,12 +183,21 @@ class DeepgramAgentSession(RealtimeSession):
         self._player = asyncio.create_task(self._play_loop())
         self._keepalive = asyncio.create_task(self._keep_alive())
 
-    def _prompt(self) -> str:
+    def _system_prompt(self) -> str:
+        """The think prompt. Not ``_prompt``: that name is the engine's "say this now" method,
+        which the watchdog (time limit, idle, cost cap) and the supervisor's Say use.
+
+        Over the limit, the end of the system text goes first: its last section is KNOWLEDGE,
+        while the persona, guardrails, identity rules and instructions come first and stay."""
         hint = ["(use the search_knowledge tool to look facts up before answering)"] \
             if self.brain.retrieve is not None else []
-        text = (self.brain._system(hint) + "\n\nYou are speaking on a phone call. The greeting has "
-                "already been said: do not greet again. Keep replies short and natural.")
-        return text[-PROMPT_LIMIT:] if len(text) > PROMPT_LIMIT else text
+        system = self.brain._system(hint)
+        tail = ("\n\nYou are speaking on a phone call. The greeting has already been said: "
+                "do not greet again. Keep replies short and natural.")
+        if len(system) + len(tail) > PROMPT_LIMIT:
+            cut = "\n[…knowledge shortened…]"
+            system = system[:PROMPT_LIMIT - len(tail) - len(cut)] + cut
+        return system + tail
 
     def settings(self) -> dict[str, Any]:
         """The ``Settings`` message: μ-law 8 kHz both ways, Nova-3 listening, a hosted model
@@ -190,7 +210,7 @@ class DeepgramAgentSession(RealtimeSession):
             functions.append({k: SEARCH_TOOL[k] for k in ("name", "description", "parameters")})
         agent: dict[str, Any] = {
             "listen": {"provider": {"type": "deepgram", "model": str(self.va.get("listen_model") or "nova-3")}},
-            "think": {"provider": think_provider(self.va), "prompt": self._prompt(), "functions": functions},
+            "think": {"provider": think_provider(self.va), "prompt": self._system_prompt(), "functions": functions},
             "speak": speak_provider(self.va, dict(os.environ)),
         }
         if self.greeting:
@@ -201,8 +221,9 @@ class DeepgramAgentSession(RealtimeSession):
                 "agent": agent}
 
     async def stop(self) -> None:
-        if self._keepalive is not None and not self._keepalive.done():
-            self._keepalive.cancel()
+        for task in (self._keepalive, self._greeting_guard):
+            if task is not None and not task.done():
+                task.cancel()
         await super().stop()
 
     async def _keep_alive(self) -> None:
@@ -287,6 +308,7 @@ class DeepgramAgentSession(RealtimeSession):
                 if not self._greeting_text_seen and _same_words(text, self.greeting):
                     self._greeting_text_seen = True       # the greeting: recorded at the start
                     return
+                self._greeting_live = False               # the agent has moved past the greeting
                 self._record("agent", text)
                 if hasattr(self.brain, "said"):
                     self.brain.said(text)
@@ -297,6 +319,8 @@ class DeepgramAgentSession(RealtimeSession):
                 return                  # the disclosure is never cut off: answered after it
             if self._model_speaking or self._speaking:
                 await self._barge_in()
+        elif kind == "AgentStartedSpeaking" and self._greeting_text_seen:
+            self._greeting_live = False                   # a reply after the greeting
         elif kind == "FunctionCallRequest":
             for fn in ev.get("functions") or []:
                 if fn.get("client_side", True):
@@ -334,8 +358,12 @@ class DeepgramAgentSession(RealtimeSession):
             except Exception:  # noqa: BLE001
                 result = "(the knowledge base is unavailable right now)"
         else:
-            result = self.brain._run_tool(name, args)
-            self.brain.state.events.append(f"{name}: {result}")
+            try:
+                result = self.brain._run_tool(name, args)
+                self.brain.state.events.append(f"{name}: {result}")
+            except Exception as exc:  # noqa: BLE001 - answer anyway, or Deepgram waits for ever
+                _log.exception("tool %s failed", name)
+                result = f"(the {name} tool failed: {type(exc).__name__}; carry on without it)"
         self.event("tool", f"{name}: {result[:80]}")
         await self._send({"type": "FunctionCallResponse", "id": fn.get("id", ""), "name": name,
                           "content": result[:4000]})
