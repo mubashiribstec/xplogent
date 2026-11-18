@@ -129,3 +129,12 @@ async def test_folder_ingest_skips_secret_files_big_files_and_symlinks(tmp_path,
     assert any("big.txt" in r for r in res["refused"])
     assert (await ingest_path(store, Embedder(ScriptedProvider([])), str(docs / "link.txt")))["ingested"] == []
     store.close()
+
+
+def test_a_parent_folder_named_like_a_secret_does_not_hide_documents():
+    from pathlib import Path
+
+    from xplogent.core.rag import is_sensitive
+    assert not is_sensitive(Path("/srv/secret-projects/handbook/faq.md"))
+    assert not is_sensitive(Path("/tmp/test_credentials_case0/proj/notes.md"))
+    assert is_sensitive(Path("/srv/docs/secrets/notes.md"))

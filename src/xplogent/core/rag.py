@@ -85,6 +85,7 @@ _SECRET_TEXT = re.compile(
     r"|\bAIza[0-9A-Za-z_-]{35}\b"
     r"|(?im:^\s*(?:export\s+)?[A-Z0-9_]*(?:API_?KEY|SECRET|TOKEN|PASSWORD|PASSWD)[A-Z0-9_]*\s*[:=]\s*"
     r"[\"']?[^\s\"']{8,})")
+_SECRET_DIR_NAMES = {"secrets", "secret", ".secrets", "credentials", ".credentials", "private-keys"}
 MAX_FILE_BYTES = 25 * 1024 * 1024        # one file (PDFs are bigger than their text)
 MAX_TEXT_CHARS = 2_000_000               # text from one file or one paste
 MAX_CHUNKS_PER_INGEST = 5_000            # one ingest call, all files together
@@ -107,7 +108,9 @@ def is_sensitive(path: Path) -> bool:
         return True
     if path.suffix.lower() in _SENSITIVE_SUFFIXES or _SECRET_NAME.search(name):
         return True
-    return any(part.lower() in _SENSITIVE_DIRS or _SECRET_NAME.search(part)
+    # Folders: exact names only (a parent such as /srv/secret-projects/ must not hide every
+    # document under it; the file's own name and content are still checked).
+    return any(part.lower() in _SENSITIVE_DIRS or part.lower() in _SECRET_DIR_NAMES
                for part in path.parts[:-1])
 
 
