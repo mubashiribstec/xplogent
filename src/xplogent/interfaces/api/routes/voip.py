@@ -1075,8 +1075,12 @@ async def voip_crm_dial(request: Request):
         return {"ok": True, "test": True, "agent_enabled": bool(v.get("enabled")),
                 "telephony": str(v.get("telephony") or "telnyx"), "revision": build_info().get("revision", "")}
     try:
+        if any(isinstance(data.get(k), bool) for k in ("applicant_id", "sale_id")):
+            raise TypeError("an id can't be true/false")
         applicant_id, sale_id = int(data["applicant_id"]), int(data["sale_id"])
-        phone = str(data["phone"])[:40]
+        phone = str(data["phone"]).strip()
+        if not phone or len(phone) > 40:             # checked, not cut: a cut number is a wrong one
+            raise ValueError("bad phone")
     except (ValueError, TypeError, KeyError):
         return JSONResponse({"ok": False, "error": "phone, applicant_id and sale_id are required"},
                             status_code=400)

@@ -100,3 +100,16 @@ async def test_dial_starts_the_warm_up_for_a_crm_call(monkeypatch):
     started.clear()
     await svc.dial("+447700900124", via="sip")                  # no brief: nothing to prepare
     assert not started
+
+
+def test_staged_call_data_is_private(tmp_path, monkeypatch):
+    """Audit 18 Nov P2-5: the staged brief holds the candidate's details."""
+    import os
+    import stat
+
+    monkeypatch.setenv("XPLOGENT_HOME", str(tmp_path))
+    from xplogent.voip import warmup
+    warmup._stage("k1", "+447700900123", {"brief": {"name": "Sarah", "lock_token": "t"}}, "Hello")
+    path = warmup.staging_dir() / "k1.json"
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert "lock_token" not in path.read_text()

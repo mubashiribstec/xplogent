@@ -296,3 +296,11 @@ def test_a_telnyx_dial_failure_for_a_crm_call_reaches_the_crm(env, monkeypatch):
     from xplogent.voip.dialler import line_fault
     assert line_fault("set your Telnyx number and Voice API application ID first")
     assert line_fault("Telnyx refused the call: 402 insufficient balance")
+
+
+def test_bool_ids_and_overlong_phones_are_refused(env):
+    client, svc, _ = env
+    for body in ({**BODY, "applicant_id": True}, {**BODY, "sale_id": False}, {**BODY, "phone": "0" * 41}):
+        raw, headers = _signed(body)
+        assert client.post("/voip/crm/dial", content=raw, headers=headers).status_code == 400
+    assert not svc.metas

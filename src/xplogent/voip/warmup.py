@@ -14,8 +14,10 @@ day (calls that were never answered) is swept by the callback loop.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -116,9 +118,14 @@ def _stage(key: str, number: str, meta: dict[str, Any], greeting: str) -> None:
     folder = staging_dir()
     folder.mkdir(parents=True, exist_ok=True)
     brief = {k: val for k, val in (meta.get("brief") or {}).items() if k not in ("lock_token",)}
-    (folder / f"{key}.json").write_text(json.dumps(
-        {"created": time.time(), "number": number, "brief": brief, "opening": greeting}, default=str),
-        encoding="utf-8")
+    path = folder / f"{key}.json"
+    # The candidate's name, number and brief: readable by this service only.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"created": time.time(), "number": number, "brief": brief,
+                            "opening": greeting}, default=str))
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o600)                      # an older file keeps its mode on O_TRUNC
 
 
 def sweep(now: float | None = None) -> int:
