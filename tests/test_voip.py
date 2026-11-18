@@ -369,7 +369,6 @@ def test_webhook_to_media_socket_end_to_end(monkeypatch, ed25519):
         "call_control_id": "cc-1", "from": "+1 555 010 2000", "to": "+15559990000", "direction": "incoming"}}}
     def signed(ev):
         import json as _json
-
         import time as _time
 
         body, now = _json.dumps(hook(ev)).encode(), int(_time.time())
