@@ -491,3 +491,20 @@ async def test_unacknowledged_answer_is_ended_with_bye(rig):
     bye, addr = await pbx.expect(lambda m: m.method == "BYE" and m.call_id == "no-ack", timeout=5)
     pbx.send(pbx.reply(bye, 200, "OK"), addr)
     await _until(lambda: "no-ack" not in trunk.calls and not service.active)
+
+
+async def test_a_failure_after_dial_stopped_waiting_still_reaches_the_service(rig):
+    """Audit 18 Nov P1-9: no 180/183, then 486 after dial() answered "calling": the outcome
+    used to be dropped (no CRM summary, the manual dial lock held until it expired)."""
+    trunk, pbx, rtp, rtp_port, service = rig
+    await _register(trunk, pbx)
+    trunk.dial_wait_s = 0.2
+    reported = []
+    service.not_answered = lambda meta, why: reported.append(why)
+    res = await trunk.dial("+15550102222", {"number": "+15550102222"})
+    assert res["ok"] and res["state"] == "calling"
+    inv, addr = await pbx.expect(lambda m: m.method == "INVITE")
+    pbx.send(pbx.reply(inv, 486, "Busy Here", to_tag="b"), addr)
+    await pbx.expect(lambda m: m.method == "ACK")
+    await _until(lambda: bool(reported))
+    assert "486" in reported[0]

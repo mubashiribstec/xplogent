@@ -310,7 +310,7 @@ async def test_engine_ignores_empty_transcripts():
 
 
 # ── webhook -> media socket round trip ────────────────────────────────────────────────
-def test_webhook_to_media_socket_end_to_end(monkeypatch):
+def test_webhook_to_media_socket_end_to_end(monkeypatch, ed25519):
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
@@ -319,7 +319,8 @@ def test_webhook_to_media_socket_end_to_end(monkeypatch):
     from xplogent.core.config import load_config, save_user_config
     from xplogent.interfaces.api.server import create_app
 
-    save_user_config({"voip": {"enabled": True, "webhook_secret": "s3cret",
+    pub, sign = ed25519
+    save_user_config({"voip": {"enabled": True, "webhook_secret": "s3cret", "telnyx_public_key": pub,
                                "public_url": "https://agent.test", "cost_per_minute": 0.6,
                                "vad": {"threshold": 500, "silence_ms": 100}}})
 
@@ -366,8 +367,18 @@ def test_webhook_to_media_socket_end_to_end(monkeypatch):
 
     hook = lambda ev: {"data": {"event_type": ev, "payload": {   # noqa: E731
         "call_control_id": "cc-1", "from": "+1 555 010 2000", "to": "+15559990000", "direction": "incoming"}}}
-    assert c.post("/telephony/webhook/s3cret", json=hook("call.initiated")).json()["ok"]
-    assert c.post("/telephony/webhook/s3cret", json=hook("call.answered")).json()["ok"]
+    def signed(ev):
+        import json as _json
+
+        import time as _time
+
+        body, now = _json.dumps(hook(ev)).encode(), int(_time.time())
+        return c.post("/telephony/webhook/s3cret", content=body,
+                      headers={"telnyx-signature-ed25519": sign(body, now), "telnyx-timestamp": str(now)})
+
+    assert c.post("/telephony/webhook/s3cret", json=hook("call.initiated")).status_code == 403  # unsigned
+    assert signed("call.initiated").json()["ok"]
+    assert signed("call.answered").json()["ok"]
 
     # let the fire-and-forget carrier actions run, then find the stream URL we gave Telnyx
     import time

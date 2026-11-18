@@ -139,8 +139,11 @@ def test_checklist_explains_what_is_missing():
             "connection_id": "123", "model": "ollama:llama3.1",
             "stt": {"provider": "whisper-local"}, "tts": {"base_url": "http://kokoro:8880/v1"}}
     items = checklist(good, "openai:x", env={"TELNYX_API_KEY": "k"})
-    assert all(i["ok"] for i in items if i["required"])
-    assert not {i["id"]: i for i in items}["telnyx_signature"]["ok"]       # recommended, not required
+    assert all(i["ok"] for i in items if i["required"] and i["id"] != "telnyx_signature")
+    sig = {i["id"]: i for i in items}["telnyx_signature"]
+    assert not sig["ok"] and sig["required"]                                 # audit 18 Nov P1-2: required
+    signed_cfg = checklist({**good, "telnyx_public_key": "k"}, "openai:x", env={"TELNYX_API_KEY": "k"})
+    assert all(i["ok"] for i in signed_cfg if i["required"])
     weak = {i["id"]: i for i in checklist({**good, "webhook_secret": "123"}, "openai:x", env={})}
     assert not weak["webhook_secret"]["ok"] and "short" in weak["webhook_secret"]["detail"]
 

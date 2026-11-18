@@ -38,12 +38,15 @@ async def telephony_webhook(secret: str, request: Request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     body = await request.body()
     public_key = str(v.get("telnyx_public_key") or "").strip()
-    if public_key:   # with the account key set, the path secret alone is not enough
-        problem = verify_signature(public_key, request.headers.get("telnyx-signature-ed25519", ""),
-                                   request.headers.get("telnyx-timestamp", ""), body)
-        if problem:
-            deps.audit_event("voip_webhook_rejected", target=problem, risk="high", allowed=False)
-            return JSONResponse({"error": "bad signature"}, status_code=403)
+    # The path secret alone is not enough: a leaked URL would let anyone fake "call answered"
+    # and start paid Telnyx actions. Without the account's public key nothing is accepted.
+    problem = verify_signature(public_key, request.headers.get("telnyx-signature-ed25519", ""),
+                               request.headers.get("telnyx-timestamp", ""), body) if public_key \
+        else "no Telnyx public key set (Calls → Phone lines → Telnyx)"
+    if problem:
+        deps.audit_event("voip_webhook_rejected", target=problem, risk="high", allowed=False)
+        return JSONResponse({"error": "bad signature" if public_key else "signature check not set up"},
+                            status_code=403)
     try:
         payload = json.loads(body)
     except ValueError:

@@ -66,21 +66,6 @@ def test_record_route_values_are_split_in_order():
 
 
 # ── 4. Telnyx webhook signatures ─────────────────────────────────────────────────
-@pytest.fixture
-def ed25519():
-    pytest.importorskip("cryptography")
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
-    priv = Ed25519PrivateKey.generate()
-    pub = priv.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-
-    def sign(body: bytes, ts: int):
-        return base64.b64encode(priv.sign(f"{ts}|".encode() + body)).decode()
-
-    return base64.b64encode(pub).decode(), sign
-
-
 def test_verify_signature(ed25519):
     pub, sign = ed25519
     now = int(time.time())
@@ -109,17 +94,18 @@ def test_webhook_route_requires_signature_once_key_is_set(ed25519, monkeypatch):
     monkeypatch.setattr(service_mod.VoipService, "handle_webhook", handle)
     c = TestClient(create_app())
     body = json.dumps({"data": {"event_type": "call.initiated", "payload": {}}}).encode()
-    assert c.post(f"/telephony/webhook/{secret}", content=body).json() == {"ok": True}   # no key yet
+    no_key = c.post(f"/telephony/webhook/{secret}", content=body)            # no key yet: refused
+    assert no_key.status_code == 403 and "not set up" in no_key.json()["error"]
     assert c.post("/telephony/webhook/wrong", content=body).status_code == 403
     save_user_config({"voip": {"telnyx_public_key": pub}})
     assert c.post(f"/telephony/webhook/{secret}", content=body).status_code == 403
     now = int(time.time())
     ok = c.post(f"/telephony/webhook/{secret}", content=body,
                 headers={"telnyx-signature-ed25519": sign(body, now), "telnyx-timestamp": str(now)})
-    assert ok.json() == {"ok": True} and len(seen) == 2
+    assert ok.json() == {"ok": True} and len(seen) == 1
     forged = c.post(f"/telephony/webhook/{secret}", content=body,
                     headers={"telnyx-signature-ed25519": sign(b"other", now), "telnyx-timestamp": str(now)})
-    assert forged.status_code == 403 and len(seen) == 2
+    assert forged.status_code == 403 and len(seen) == 1
 
 
 # ── 5. media-socket setup failure still cleans up ────────────────────────────────

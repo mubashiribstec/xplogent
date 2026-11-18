@@ -181,6 +181,7 @@ class SipCall:
     acked: asyncio.Event = field(default_factory=asyncio.Event)
     bye_sent: bool = False
     remote_ended: bool = False
+    dial_returned: bool = False          # dial() already answered "calling": report the end separately
     supervisor: asyncio.Task | None = None
     peer: tuple[str, int] | None = None  # where this call's SIP signalling comes from
 
@@ -190,6 +191,8 @@ SessionFactory = Callable[..., Any]
 
 class SipTrunk(asyncio.DatagramProtocol):
     """One SIP account: registration, calls and their media."""
+
+    dial_wait_s = 6.0        # dial() answers "calling" after this; the outcome is reported later
 
     def __init__(self, settings: SipSettings, *, service: Any = None,
                  session_kw: dict[str, Any] | None = None, cfg: Any = None,
@@ -761,15 +764,18 @@ class SipTrunk(asyncio.DatagramProtocol):
         early: asyncio.Future = asyncio.get_running_loop().create_future()
         self._spawn(self._outbound(call, early))
         try:
-            return await asyncio.wait_for(asyncio.shield(early), timeout=6.0)
+            return await asyncio.wait_for(asyncio.shield(early), timeout=self.dial_wait_s)
         except TimeoutError:
+            call.dial_returned = True
             return {"ok": True, "via": self.via_name, "call": {"sip_call_id": call.call_id},
                     "state": "calling"}
 
     def _not_answered(self, call: SipCall, early: asyncio.Future, why: str) -> None:
-        """It rang, then failed (busy, no answer): the dial already returned, so tell the
-        service (a campaign item waits for this)."""
-        if early.done() and self.service is not None and hasattr(self.service, "not_answered"):
+        """It rang, then failed (busy, no answer), or failed after dial() stopped waiting (6 s,
+        no 180/183): the dial already returned, so tell the service (a campaign item waits for
+        this, the CRM hears the outcome, the manual dial lock is released)."""
+        if (early.done() or call.dial_returned) and self.service is not None \
+                and hasattr(self.service, "not_answered"):
             try:
                 self.service.not_answered(dict(call.meta), why)
             except Exception:  # noqa: BLE001

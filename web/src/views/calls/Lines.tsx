@@ -78,8 +78,8 @@ function TelnyxCard({ cfg, keySet, save, toast, onKeySaved }: {
           onCommit={(v) => save({ connection_id: v.trim() })} />
         <TextField label="Your Telnyx number" value={cfg.from_number ?? ""} placeholder="+15551234567" inputMode="tel"
           onCommit={(v) => save({ from_number: v.trim() })} />
-        <TextField label="Webhook public key" className="span-all" value={cfg.telnyx_public_key ?? ""} placeholder="base64 public key"
-          hint="Telnyx portal → Keys & Credentials → Public Key. With it, forged webhooks are rejected even if the URL leaks."
+        <TextField label="Webhook public key (required)" className="span-all" value={cfg.telnyx_public_key ?? ""} placeholder="base64 public key"
+          hint="Telnyx portal → Keys & Credentials → Public Key. Required: Telnyx webhooks are refused until it is set, so a leaked webhook URL can't start calls."
           onCommit={(v) => save({ telnyx_public_key: v.trim() })} />
       </div>
       {result && (result.ok

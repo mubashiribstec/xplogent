@@ -170,7 +170,7 @@ def checklist(v: dict[str, Any], model: str, env: dict[str, str] | None = None,
                                           "too short to be safe: click 'Regenerate webhook secret'"))
         add("telnyx_signature", "Telnyx webhook signature check", bool(v.get("telnyx_public_key")),
             "on" if v.get("telnyx_public_key") else
-            "recommended: paste your Telnyx public key in the Telnyx card", required=False)
+            "paste your Telnyx public key in the Telnyx card: until then Telnyx webhooks are refused")
         key_env = str(v.get("api_key_env", "TELNYX_API_KEY"))
         add("telnyx_key", "Telnyx API key", _key(env, key_env),
             "" if _key(env, key_env) else "paste your Telnyx API v2 key")

@@ -69,3 +69,21 @@ class ScriptedProvider(Provider):
                 vec[ord(ch) % 8] += 1.0
             out.append(vec)
         return out
+
+
+@pytest.fixture
+def ed25519():
+    """A Telnyx-style Ed25519 key pair: (public key base64, sign(body, ts))."""
+    import base64
+
+    pytest.importorskip("cryptography")
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    priv = Ed25519PrivateKey.generate()
+    pub = priv.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+
+    def sign(body: bytes, ts: int):
+        return base64.b64encode(priv.sign(f"{ts}|".encode() + body)).decode()
+
+    return base64.b64encode(pub).decode(), sign
