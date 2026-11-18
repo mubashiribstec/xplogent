@@ -237,6 +237,7 @@ voip:
   test_numbers: []                 # your own phones: the only numbers a test call (Call me) may ring
   test_calls_per_day: 30           # at most this many test calls a day (they skip calling hours, not the cost cap)
   knowledge_top_k: 3
+  knowledge_min_similarity: 0.3   # a knowledge chunk with no word in common with the question needs at least this similarity
   vad: { threshold: 500, silence_ms: 700, min_speech_ms: 200, max_utterance_ms: 15000 }
   silence: { prompt_after_s: 12, hangup_after_s: 30, max_prompts: 2 }   # caller gone quiet: up to max_prompts short prompts, then a polite goodbye and hang up
   template: ""                     # built-in template pack: kingsbury_inbound | kingsbury_outbound_screener (supplies greeting + playbook + field schema)

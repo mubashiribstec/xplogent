@@ -279,7 +279,7 @@ async def process_item(item_id: int, *, cfg: Config | None = None,
                        make_provider: Callable[[str], Any] | None = None,
                        transcribe: Callable[..., str] | None = None) -> dict[str, Any]:
     """Turn one uploaded item into knowledge (and a transcript for recordings)."""
-    from xplogent.core.rag import chunk_text, read_text
+    from xplogent.core.rag import chunk_text, read_text, secret_in_text
     from xplogent.memory.vector import Embedder
 
     cfg = cfg or load_config()
@@ -320,11 +320,15 @@ async def process_item(item_id: int, *, cfg: Config | None = None,
             if not pairs:
                 raise ValueError("no question/answer rows found (use columns 'question' and 'answer')")
             pieces = [f"Q: {q}\nA: {a}" for q, a in pairs]
+            if found := secret_in_text("\n".join(pieces)):
+                raise ValueError(f"it contains {found}: not added to the knowledge base")
             transcript = "\n\n".join(pieces)
         else:
             text = await asyncio.to_thread(read_text, path)
             if not text.strip():
                 raise ValueError("no text found in the file (a scanned PDF needs OCR first)")
+            if found := secret_in_text(text):
+                raise ValueError(f"it contains {found}: not added to the knowledge base")
             pieces = chunk_text(text)
             transcript = text[:200_000]
         provider = make_provider(cfg.embedding_model)

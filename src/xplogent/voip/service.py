@@ -512,14 +512,19 @@ class _Retriever:
 
         self.store, self.k = store, k
         self.embedder = embedder or Embedder(build_provider(cfg.embedding_model))
+        self.min_similarity = float((cfg.voip or {}).get("knowledge_min_similarity", 0.3) or 0)
 
     async def __call__(self, query: str) -> list[str]:
+        """Relevant chunks, each labelled with its document: a chunk that matched no word of the
+        question and is only loosely similar is dropped (the agent then says it doesn't know,
+        instead of reading out whatever ranked first)."""
         from xplogent.core.rag import hybrid_search
 
         hits = await hybrid_search(self.store, self.embedder, query, k=self.k)
+        hits = [h for h in hits if h.get("keyword") or h.get("similarity", 0.0) >= self.min_similarity]
         if not hits:
             log_knowledge_gap(query)
-        return [h["content"] for h in hits]
+        return [f"[source: {h.get('source') or 'knowledge base'}]\n{h['content']}" for h in hits]
 
     async def aclose(self) -> None:
         await self.embedder.provider.aclose()

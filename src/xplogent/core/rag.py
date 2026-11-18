@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -70,21 +71,53 @@ _SENSITIVE_NAMES = {".env", ".netrc", ".pgpass", ".npmrc", ".pypirc", "secrets.e
 _SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".kdbx", ".keystore", ".jks"}
 
 
+# Names that say "secrets inside" (credentials.txt, prod.env, .envrc, service-account.json,
+# api-keys.csv, a secrets/ folder). Content is checked as well: see secret_in_text().
+_SECRET_NAME = re.compile(r"credential|secret|api[_-]?keys?\b|private[_-]?key|service[_-]?account"
+                          r"|^\.env(rc)?$|\.env$|^\.env\.", re.I)
+# High-confidence credential shapes. A document that contains one is refused, not trimmed.
+_SECRET_TEXT = re.compile(
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    r"|\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}"
+    r"|\bAKIA[0-9A-Z]{16}\b"
+    r"|\bgh[pousr]_[A-Za-z0-9]{30,}"
+    r"|\bxox[abprs]-[A-Za-z0-9-]{10,}"
+    r"|\bAIza[0-9A-Za-z_-]{35}\b"
+    r"|(?im:^\s*(?:export\s+)?[A-Z0-9_]*(?:API_?KEY|SECRET|TOKEN|PASSWORD|PASSWD)[A-Z0-9_]*\s*[:=]\s*"
+    r"[\"']?[^\s\"']{8,})")
+MAX_FILE_BYTES = 25 * 1024 * 1024        # one file (PDFs are bigger than their text)
+MAX_TEXT_CHARS = 2_000_000               # text from one file or one paste
+MAX_CHUNKS_PER_INGEST = 5_000            # one ingest call, all files together
+
+
+def secret_in_text(text: str) -> str:
+    """What looks like a credential in ``text`` ("" when nothing does)."""
+    m = _SECRET_TEXT.search(text or "")
+    if not m:
+        return ""
+    hit = m.group(0)
+    if hit.startswith("-----BEGIN"):
+        return "a private key"
+    return "an API key, token or password"
+
+
 def is_sensitive(path: Path) -> bool:
     name = path.name.lower()
     if name in _SENSITIVE_NAMES or name.startswith((".env.", "id_rsa", "id_ed25519")):
         return True
-    if path.suffix.lower() in _SENSITIVE_SUFFIXES:
+    if path.suffix.lower() in _SENSITIVE_SUFFIXES or _SECRET_NAME.search(name):
         return True
-    return any(part.lower() in _SENSITIVE_DIRS for part in path.parts[:-1])
+    return any(part.lower() in _SENSITIVE_DIRS or _SECRET_NAME.search(part)
+               for part in path.parts[:-1])
 
 
 def _iter_files(path: Path) -> list[Path]:
     if path.is_file():
         # A single file gets the same rules as a walked one: the extension
         # allowlist applies too (ingesting "/etc/passwd" or a config file by
-        # direct path was possible when only the name denylist checked it).
-        if is_sensitive(path) or is_sensitive(path.resolve()):
+        # direct path was possible when only the name denylist checked it),
+        # and a symlink is never followed (a harmless name, a credential target).
+        if path.is_symlink() or is_sensitive(path) or is_sensitive(path.resolve()):
             return []
         if path.suffix.lower() not in _TEXT_EXT and path.suffix.lower() != ".pdf":
             return []
@@ -113,8 +146,15 @@ async def ingest_path(store, embedder: Embedder, path: str) -> dict[str, Any]:
         return {"ok": False, "error": f"refusing to ingest credentials/secret files: {root}"}
     ingested, skipped, chunks_total = [], 0, 0
     files = await asyncio.to_thread(_iter_files, root)   # big folders: don't block the loop
+    refused: list[str] = []
     for fp in files:
+        if chunks_total >= MAX_CHUNKS_PER_INGEST:
+            refused.append(f"{fp.name}: this ingest reached {MAX_CHUNKS_PER_INGEST} chunks")
+            continue
         try:
+            if fp.stat().st_size > MAX_FILE_BYTES:
+                refused.append(f"{fp.name}: larger than {MAX_FILE_BYTES // (1024 * 1024)} MB")
+                continue
             text = await asyncio.to_thread(read_text, fp)
         except Exception as exc:  # noqa: BLE001 - one bad file shouldn't stop the rest
             _log.warning("skip %s: %s", fp, exc)
@@ -122,6 +162,13 @@ async def ingest_path(store, embedder: Embedder, path: str) -> dict[str, Any]:
             continue
         if not text.strip():
             skipped += 1
+            continue
+        if len(text) > MAX_TEXT_CHARS:
+            refused.append(f"{fp.name}: more than {MAX_TEXT_CHARS:,} characters of text")
+            continue
+        if found := secret_in_text(text):
+            _log.warning("not ingesting %s: it contains %s", fp, found)
+            refused.append(f"{fp.name}: contains {found}")
             continue
         h = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
         if store.doc_exists(h):
@@ -135,10 +182,18 @@ async def ingest_path(store, embedder: Embedder, path: str) -> dict[str, Any]:
             store.add_chunk(doc_id, i, piece, vec)
         ingested.append(fp.name)
         chunks_total += len(pieces)
-    return {"ok": True, "ingested": ingested, "skipped": skipped, "chunks": chunks_total}
+    return {"ok": True, "ingested": ingested, "skipped": skipped + len(refused), "chunks": chunks_total,
+            "refused": refused}
 
 
 async def ingest_text(store, embedder: Embedder, content: str, title: str = "pasted") -> dict[str, Any]:
+    """Pasted text: the same rules as a file (secret names and content, size)."""
+    if len(content) > MAX_TEXT_CHARS:
+        return {"ok": False, "error": f"too long: more than {MAX_TEXT_CHARS:,} characters"}
+    if is_sensitive(Path(title or "pasted")):
+        return {"ok": False, "error": "the title looks like a credentials file: not added"}
+    if found := secret_in_text(content):
+        return {"ok": False, "error": f"it contains {found}: not added to the knowledge base"}
     h = hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()
     if store.doc_exists(h):
         return {"ok": True, "ingested": [], "skipped": 1, "chunks": 0}
@@ -207,6 +262,10 @@ class _ChunkIndex:
 
     def rank(self, qvec: list[float], limit: int) -> list[int]:
         """Chunk ids ordered by cosine similarity to ``qvec`` (best first)."""
+        return [cid for cid, _ in self.rank_scored(qvec, limit)]
+
+    def rank_scored(self, qvec: list[float], limit: int) -> list[tuple[int, float]]:
+        """``(chunk id, cosine similarity)`` pairs, best first."""
         if not self.ids:
             return []
         np = self._np
@@ -214,7 +273,7 @@ class _ChunkIndex:
             scored = [(cid, cosine(qvec, vec)) for cid, vec in zip(self.ids, self._vectors,
                                                                     strict=False)]
             scored.sort(key=lambda t: t[1], reverse=True)
-            return [cid for cid, _ in scored[:limit]]
+            return scored[:limit]
         scores = np.zeros(len(self.ids))
         entry = self._by_dim.get(len(qvec))
         q = np.asarray(qvec, dtype=np.float64)
@@ -224,7 +283,7 @@ class _ChunkIndex:
             scores[pos] = mat @ (q / qn)
         # Stable sort on the negated scores keeps id order for ties (as list.sort did).
         order = np.argsort(-scores, kind="stable")[:limit]
-        return [self.ids[i] for i in order]
+        return [(self.ids[i], float(scores[i])) for i in order]
 
 
 _INDEXES: dict[str, _ChunkIndex] = {}
@@ -248,6 +307,7 @@ async def hybrid_search(store, embedder: Embedder, query: str, k: int = 5) -> li
     fts_rank = {row["id"]: i for i, row in enumerate(fts)}
 
     sem_rank: dict[int, int] = {}
+    sem_sim: dict[int, float] = {}
     qvec = await embedder.embed_one(query)
     if qvec:
         # Embeddings work now: give a batch of earlier vector-less chunks their vectors.
@@ -255,8 +315,9 @@ async def hybrid_search(store, embedder: Embedder, query: str, k: int = 5) -> li
     # A rebuild after ingest reads + decodes every vector: keep it off the event loop.
     index = await asyncio.to_thread(_chunk_index, store)
     if qvec:
-        for i, cid in enumerate(index.rank(qvec, 20)):
+        for i, (cid, sim) in enumerate(index.rank_scored(qvec, 20)):
             sem_rank[cid] = i
+            sem_sim[cid] = sim
 
     by_id = dict(index.rows)
     for row in fts:
@@ -276,6 +337,9 @@ async def hybrid_search(store, embedder: Embedder, query: str, k: int = 5) -> li
         c = by_id.get(cid)
         if not c:
             continue
+        # The fused score is rank-based (it never says "unrelated"): ``keyword`` and
+        # ``similarity`` let a caller drop hits that only ranked because nothing better existed.
         out.append({"content": c["content"], "source": store.doc_title(c["doc_id"]),
-                    "doc_id": c["doc_id"], "score": round(fused[cid], 4)})
+                    "doc_id": c["doc_id"], "score": round(fused[cid], 4),
+                    "keyword": cid in fts_rank, "similarity": round(sem_sim.get(cid, 0.0), 4)})
     return out

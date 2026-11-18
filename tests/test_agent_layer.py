@@ -153,6 +153,36 @@ async def test_zero_hit_retrieval_is_logged_as_a_knowledge_gap(tmp_path, monkeyp
     store.close()
 
 
+@pytest.mark.asyncio
+async def test_unrelated_chunks_are_dropped_and_kept_ones_cite_their_source(tmp_path, monkeypatch):
+    """Audit 18 Nov P1-14: the top hits came back whatever their relevance, without a source."""
+    monkeypatch.setenv("XPLOGENT_HOME", str(tmp_path))
+    from xplogent.core.config import load_config
+    from xplogent.memory.store import Store
+    from xplogent.voip import service
+    from xplogent.voip.service import _Retriever, knowledge_gap_path
+
+    hits = [{"content": "We open at nine.", "source": "faq.md", "keyword": True, "similarity": 0.1},
+            {"content": "Parking is free.", "source": "site.md", "keyword": False, "similarity": 0.62},
+            {"content": "Old 2019 price list.", "source": "old.md", "keyword": False, "similarity": 0.12}]
+
+    async def fake_search(store, embedder, query, k=5):
+        return hits
+
+    import xplogent.core.rag as rag
+    monkeypatch.setattr(rag, "hybrid_search", fake_search)
+    cfg = load_config()
+    store = Store(cfg.db_path)
+    retriever = _Retriever(cfg, store, 3, embedder=object())
+    got = await retriever("when do you open and is parking free?")
+    assert got == ["[source: faq.md]\nWe open at nine.", "[source: site.md]\nParking is free."]
+    hits[:] = [hits[2]]                                     # only the unrelated one
+    assert await retriever("what is the price?") == []
+    assert "what is the price?" in knowledge_gap_path().read_text(encoding="utf-8")
+    assert service is not None
+    store.close()
+
+
 def test_top_knowledge_gaps_counts_and_orders(tmp_path, monkeypatch):
     monkeypatch.setenv("XPLOGENT_HOME", str(tmp_path))
     from xplogent.voip.service import log_knowledge_gap, top_knowledge_gaps
