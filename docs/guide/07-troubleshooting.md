@@ -26,6 +26,14 @@ ollama pull llama3.1
 
 Or switch to a hosted model in Settings → Models.
 
+## The SIP line says "can't look up … (DNS)" / cloud speech fails (Docker)
+
+The container can't resolve names or reach the internet. On the server run
+`sudo xplogent-docker doctor`: it checks the host, the firewall and the container and prints the
+fix (most often Debian's nftables service clearing Docker's rules, or a PBX name only the office
+DNS knows; use the PBX's IP address, or `sudo xplogent-docker dns <office DNS IP>`). Details:
+the "Containers have no internet" section of the Linux deployment guide.
+
 ## Something's off but you're not sure what
 Run `xplogent doctor`. It checks your config files, saved API keys, whether
 your model answers, the database, the dashboard build and the server port,

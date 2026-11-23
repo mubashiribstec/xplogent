@@ -508,3 +508,18 @@ async def test_a_failure_after_dial_stopped_waiting_still_reaches_the_service(ri
     await pbx.expect(lambda m: m.method == "ACK")
     await _until(lambda: bool(reported))
     assert "486" in reported[0]
+
+
+async def test_an_unresolvable_server_name_says_what_to_do():
+    """23 Nov: inside Docker without DNS the line said only "[Errno -3] Temporary failure in
+    name resolution"; now it names the server and the fixes."""
+    import pytest
+
+    trunk = SipTrunk(SipSettings(server="pbx.invalid", port=5060, username="2000", password="x",
+                                 public_ip="127.0.0.1", local_port=_free_port()))
+    with pytest.raises(RuntimeError) as err:
+        await trunk.start()
+    msg = str(err.value)
+    assert "pbx.invalid" in msg and "IP address" in msg and "xplogent-docker doctor" in msg
+    assert "Errno" not in msg
+    await trunk.stop()

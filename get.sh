@@ -145,6 +145,7 @@ run() { if [ "$DRY" -eq 1 ]; then say "(dry run) $*"; else "$@"; fi; }
 sip_suffix() {
   [ "$(get_env "$ENV_FILE" XPLOGENT_SIP 2>/dev/null)" = "1" ] && printf ':compose.sip.yml'
   [ "$(get_env "$ENV_FILE" XPLOGENT_CRM_LINK 2>/dev/null)" = "1" ] && printf ':compose.crm.yml'
+  [ -n "$(get_env "$ENV_FILE" XPLOGENT_DNS_1 2>/dev/null)" ] && printf ':compose.dns.yml'
   return 0
 }
 
@@ -181,7 +182,7 @@ fi
 
 # ── files ─────────────────────────────────────────────────────────────────────
 FILES="deploy/docker/docker-compose.yml deploy/docker/compose.https.yml deploy/docker/compose.local.yml
-deploy/docker/compose.sip.yml deploy/docker/compose.crm.yml deploy/docker/.env.example deploy/docker/xplogent-docker
+deploy/docker/compose.sip.yml deploy/docker/compose.crm.yml deploy/docker/compose.dns.yml deploy/docker/.env.example deploy/docker/xplogent-docker
 deploy/caddy/Caddyfile"
 umask 077
 mkdir -p "$DIR/deploy/docker" "$DIR/deploy/caddy" "$DIR/backups"

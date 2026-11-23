@@ -79,6 +79,8 @@ model is set in Settings → Backup model.
 | `xplogent-docker speech on [--gpu] \| off` | local voices for the phone agent (Kokoro) |
 | `xplogent-docker sip on [--ip ADDR] \| off` | open UDP 5060 + 10000-10100 for the built-in SIP trunk client |
 | `xplogent-docker crm link \| unlink \| status` | the CRM in Docker on this same server: one shared Docker network (below) |
+| `xplogent-docker doctor` | read-only network check: internet and DNS on the host and in the container, the firewall (nftables, IP forwarding, Docker's NAT), the SIP/PBX server names; prints the fix for each problem |
+| `xplogent-docker dns IP [IP2] \| auto \| off \| status` | the name servers the container uses (an office DNS that knows `pbx.office.local`, or the host's real servers instead of Docker's 8.8.8.8 fallback) |
 | `xplogent-docker restart \| stop \| start` | |
 | `xplogent-docker uninstall [--purge]` | remove containers; `--purge` also deletes all data |
 
@@ -316,3 +318,32 @@ Caddy forwards WebSockets automatically, which the call audio stream needs.
 | Lost the token | `xplogent-docker token` (Docker) or `/etc/xplogent/xplogent.env` (systemd) |
 | Calls never connect | Webhook URL in Telnyx must be exactly the one shown in Calls; `public_url` must be `https://` |
 | WebSocket drops after a minute | Another proxy in front of Caddy with a short timeout; raise it or remove it |
+| SIP line: `could not start: can't look up '…' (DNS)` (older builds: `[Errno -3] Temporary failure in name resolution`), or cloud speech/models fail | The container has no DNS or no internet: see "Containers have no internet" below |
+
+### Containers have no internet (or no DNS)
+
+Inside the container `/etc/resolv.conf` says `nameserver 127.0.0.11`: that is normal, it is
+Docker's own DNS, which forwards to the host's name servers (or to 8.8.8.8 when the host lists
+only a local stub such as 127.0.0.53). When the **host has internet but containers don't**,
+Docker's forwarding is broken, and DNS fails with it. Run:
+
+```bash
+sudo xplogent-docker doctor
+```
+
+It names the cause and the fix. The usual ones:
+
+- **Debian's nftables service wiped Docker's rules.** `/etc/nftables.conf` starts with `flush
+  ruleset`, so when nftables loads (at boot, or on a reload after Docker started) Docker's NAT
+  rules are gone. Quick check: `sudo systemctl restart docker && sudo xplogent-docker restart`
+  brings the internet back until the next reload. Permanent fix: `sudo systemctl disable --now
+  nftables` if you don't use your own firewall rules, or replace `flush ruleset` with `flush table
+  inet filter` in `/etc/nftables.conf`; then restart Docker.
+- **IP forwarding is off:** `echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/99-docker.conf
+  && sudo sysctl --system && sudo systemctl restart docker`.
+- **`"iptables": false` in `/etc/docker/daemon.json`:** remove it and restart Docker.
+- **The PBX has a name only the office knows** (`pbx.office.local`, or a line in the host's
+  `/etc/hosts`, which containers never see): enter the PBX's **IP address** in Calls → Phone
+  lines, or `sudo xplogent-docker dns <office DNS IP>`.
+- **Docker's 8.8.8.8 fallback is blocked** on your network: `sudo xplogent-docker dns auto` (the
+  host's real name servers) or `dns <IP>`. `dns off` goes back to Docker's default.

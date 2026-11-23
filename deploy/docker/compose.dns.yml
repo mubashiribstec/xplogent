@@ -1,0 +1,10 @@
+# Name servers for the Xplogent container, set with `xplogent-docker dns IP [IP2]`.
+# Inside the container /etc/resolv.conf still says 127.0.0.11 (Docker's own DNS); Docker
+# forwards to these instead of guessing from the host. Use it when the PBX or CRM has a
+# name only the office DNS knows (pbx.office.local), or when the host's resolver is a
+# local stub (127.0.0.53) and Docker's fallback (8.8.8.8) isn't reachable from the LAN.
+services:
+  xplogent:
+    dns:
+      - ${XPLOGENT_DNS_1:?set with xplogent-docker dns IP}
+      - ${XPLOGENT_DNS_2:-${XPLOGENT_DNS_1}}

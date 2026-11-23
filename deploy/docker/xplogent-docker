@@ -15,6 +15,10 @@
 #   xplogent-docker sip on [--ip ADDR] | off   open UDP ports for the built-in SIP trunk client
 #   xplogent-docker crm link | unlink | status  the CRM (in Docker) on this same server: one
 #                                       shared Docker network, no extra port opened
+#   xplogent-docker doctor              check the network: internet and DNS on the host and in
+#                                       the container, the firewall, the SIP/PBX names (read-only)
+#   xplogent-docker dns IP [IP2] | auto | off | status   name servers for the container
+#                                       (an office DNS that knows pbx.office.local, ...)
 #   xplogent-docker cli ARGS...         run an xplogent command inside the container
 #                                       (e.g. cli voip status · cli dial +1555… --test)
 #   xplogent-docker uninstall [--purge] remove containers (--purge: also all data!)
@@ -127,6 +131,7 @@ compose_files() {
   local files="docker-compose.yml:$1"
   [ "$(get_env XPLOGENT_SIP)" = "1" ] && files="$files:compose.sip.yml"
   [ "$(get_env XPLOGENT_CRM_LINK)" = "1" ] && files="$files:compose.crm.yml"
+  [ -n "$(get_env XPLOGENT_DNS_1)" ] && files="$files:compose.dns.yml"
   echo "$files"
 }
 mode_file() { case "$(get_env COMPOSE_FILE)" in *https*) echo compose.https.yml ;; *) echo compose.local.yml ;; esac; }
@@ -208,6 +213,138 @@ cmd_crm() {
       fi ;;
     *) die "usage: xplogent-docker crm link | unlink | status" ;;
   esac
+}
+
+# ── network: name servers and a read-only check ─────────────────────────────────────
+is_ip() { [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ || "$1" =~ ^[0-9a-fA-F:]+:[0-9a-fA-F:]*$ ]]; }
+
+# The host's real upstream name servers (not a local stub such as 127.0.0.53).
+host_dns_servers() {
+  local f out=""
+  if command -v resolvectl >/dev/null 2>&1; then
+    out="$(resolvectl dns 2>/dev/null | sed 's/^[^:]*://' | tr ' ' '\n' | grep -vE '^(127\.|::1|$)' || true)"
+  fi
+  for f in /run/systemd/resolve/resolv.conf /etc/resolv.conf; do
+    [ -n "$out" ] && break
+    [ -r "$f" ] && out="$(awk '$1 == "nameserver" { print $2 }' "$f" | grep -vE '^(127\.|::1)' || true)"
+  done
+  printf '%s\n' "$out" | awk 'NF && !seen[$0]++' | head -2
+}
+
+cmd_dns() {
+  local servers
+  case "${1:-status}" in
+    status)
+      if [ -n "$(get_env XPLOGENT_DNS_1)" ]; then
+        ok "The container uses $(get_env XPLOGENT_DNS_1) $(get_env XPLOGENT_DNS_2)"
+      else
+        say "Docker's default: the host's name servers ($(host_dns_servers | tr '\n' ' '))."
+        say "To choose: sudo xplogent-docker dns <office DNS IP> [second IP] | auto"
+      fi
+      return 0 ;;
+    off)
+      set_env "$ENV_FILE" XPLOGENT_DNS_1 ""
+      set_env "$ENV_FILE" XPLOGENT_DNS_2 ""
+      set_env "$ENV_FILE" COMPOSE_FILE "$(compose_files "$(mode_file)")"
+      apply
+      ok "The container uses Docker's default name servers again"; return 0 ;;
+    auto) servers="$(host_dns_servers)"
+          [ -n "$servers" ] || die "found no name server on this host besides a local stub; give one: xplogent-docker dns IP" ;;
+    *) servers="$*" ;;
+  esac
+  set -- $servers
+  [ $# -le 2 ] || die "at most two name servers"
+  for s in "$@"; do is_ip "$s" || die "not an IP address: $s (a name server is given by its IP)"; done
+  ensure_deploy_file compose.dns.yml
+  set_env "$ENV_FILE" XPLOGENT_DNS_1 "$1"
+  set_env "$ENV_FILE" XPLOGENT_DNS_2 "${2:-}"
+  set_env "$ENV_FILE" COMPOSE_FILE "$(compose_files "$(mode_file)")"
+  apply
+  ok "The container now asks $* for names"
+  if dc exec -T xplogent python -c "import socket; socket.getaddrinfo('github.com', 443)" >/dev/null 2>&1; then
+    ok "Names resolve inside the container"
+  else
+    warn "Names still don't resolve inside the container: run sudo xplogent-docker doctor"
+  fi
+}
+
+# Read-only network check, with the fix for each problem found.
+cmd_doctor() {
+  local problems=0 ruleset="" daemon="${XPLOGENT_DAEMON_JSON:-/etc/docker/daemon.json}"
+  local nftconf="${XPLOGENT_NFT_CONF:-/etc/nftables.conf}"
+  say "Host"
+  if getent hosts github.com >/dev/null 2>&1; then ok "DNS works on the host"
+  else warn "The host itself can't resolve names: fix the server's DNS first"; problems=$((problems + 1)); fi
+  if command -v curl >/dev/null 2>&1 && curl -fsS -m 6 -o /dev/null https://github.com 2>/dev/null; then
+    ok "The host reaches the internet"
+  else warn "The host can't reach https://github.com (no internet, or a proxy is needed)"; problems=$((problems + 1)); fi
+  if [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = "1" ]; then ok "IP forwarding is on"
+  else
+    warn "IP forwarding is off, so containers can't get out."
+    warn "  Fix: echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/99-docker.conf && sudo sysctl --system && sudo systemctl restart docker"
+    problems=$((problems + 1))
+  fi
+  if [ -r "$daemon" ] && grep -Eq '"iptables"[[:space:]]*:[[:space:]]*false' "$daemon"; then
+    warn "$daemon has \"iptables\": false: Docker doesn't set up NAT, so containers have no internet."
+    warn "  Fix: remove that line, then sudo systemctl restart docker"
+    problems=$((problems + 1))
+  fi
+  if command -v nft >/dev/null 2>&1; then ruleset="$(nft list ruleset 2>/dev/null || true)"; fi
+  if [ -z "$ruleset" ] && command -v iptables >/dev/null 2>&1; then ruleset="$(iptables -t nat -S 2>/dev/null || true)"; fi
+  if [ -n "$ruleset" ] && ! printf '%s' "$ruleset" | grep -qiE 'masquerade'; then
+    warn "Docker's NAT rule (masquerade) is missing: something cleared the firewall rules after Docker started."
+    warn "  Quick fix: sudo systemctl restart docker && sudo xplogent-docker restart"
+    problems=$((problems + 1))
+  fi
+  if systemctl is-enabled nftables >/dev/null 2>&1 && grep -qE '^[[:space:]]*flush[[:space:]]+ruleset' "$nftconf" 2>/dev/null; then
+    warn "The nftables service loads $nftconf, which starts with 'flush ruleset': at boot or"
+    warn "  on a reload it wipes Docker's rules and containers lose the internet."
+    warn "  Fix (one of): sudo systemctl disable --now nftables   (no custom firewall in use), or"
+    warn "  replace 'flush ruleset' with 'flush table inet filter' in /etc/nftables.conf; then restart docker."
+    problems=$((problems + 1))
+  fi
+  if [ -n "$(get_env XPLOGENT_DNS_1)" ]; then ok "Container name servers: $(get_env XPLOGENT_DNS_1) $(get_env XPLOGENT_DNS_2) (xplogent-docker dns)"
+  elif [ -z "$(host_dns_servers)" ]; then
+    warn "The host lists only a local resolver (127.0.0.x): Docker then falls back to 8.8.8.8 for containers."
+    warn "  If that's blocked here: sudo xplogent-docker dns <office DNS IP>"
+    problems=$((problems + 1))
+  fi
+
+  say "Container"
+  if ! running; then warn "Xplogent isn't running: sudo xplogent-docker start"; return 1; fi
+  if dc exec -T xplogent python -c "import socket; socket.getaddrinfo('github.com', 443)" >/dev/null 2>&1; then
+    ok "DNS works in the container"
+  else
+    warn "The container can't resolve names (Docker's DNS 127.0.0.11 gets no answer upstream)."
+    warn "  Fix the problems above, or: sudo xplogent-docker dns auto   (or dns <office DNS IP>)"
+    problems=$((problems + 1))
+  fi
+  if dc exec -T xplogent python -c "import urllib.request as u; u.urlopen('https://github.com', timeout=6)" >/dev/null 2>&1; then
+    ok "The container reaches the internet"
+  else warn "The container can't reach https://github.com (cloud speech and models won't work)"; problems=$((problems + 1)); fi
+  local names name
+  names="$(dc exec -T xplogent python -c "
+from xplogent.core.config import load_config
+from xplogent.voip.telephony.sip import SipSettings
+v = load_config().voip or {}
+for s in (SipSettings.from_config(v), SipSettings.extension_from_config(v)):
+    if s.server: print(s.server)
+" 2>/dev/null | sort -u || true)"
+  for name in $names; do
+    is_ip "$name" && { ok "SIP/PBX server $name (an IP address: no DNS needed)"; continue; }
+    if dc exec -T xplogent python -c "import socket,sys; socket.getaddrinfo(sys.argv[1], 5060)" "$name" >/dev/null 2>&1; then
+      ok "SIP/PBX server $name resolves in the container"
+    else
+      warn "SIP/PBX server '$name' doesn't resolve in the container."
+      if grep -qw -- "$name" /etc/hosts 2>/dev/null; then
+        warn "  It's in this host's /etc/hosts, which containers don't see: enter its IP in Calls -> Phone lines."
+      else
+        warn "  Enter the PBX's IP address in Calls -> Phone lines, or point the container at the office DNS: sudo xplogent-docker dns <IP>"
+      fi
+      problems=$((problems + 1))
+    fi
+  done
+  if [ "$problems" -eq 0 ]; then ok "No network problem found"; else warn "$problems problem(s) found: see the fixes above"; return 1; fi
 }
 
 add_profile() {  # add_profile NAME / remove with "-NAME"
@@ -318,7 +455,7 @@ cmd_backup() {
 
 DEPLOY_FILES="deploy/docker/docker-compose.yml deploy/docker/compose.https.yml
 deploy/docker/compose.local.yml deploy/docker/compose.sip.yml deploy/docker/compose.crm.yml
-deploy/docker/.env.example deploy/caddy/Caddyfile"
+deploy/docker/compose.dns.yml deploy/docker/.env.example deploy/caddy/Caddyfile"
 
 rollback_files() {
   local f
@@ -474,6 +611,8 @@ case "$cmd" in
       *) die "usage: xplogent-docker speech on [--gpu] | off" ;;
     esac ;;
   crm) cmd_crm "$@" ;;
+  dns) cmd_dns "$@" ;;
+  doctor) cmd_doctor ;;
   sip)
     mode_file="$(mode_file)"
     case "${1:-}" in
@@ -520,6 +659,6 @@ case "$cmd" in
     fi
     rm -f /usr/local/bin/xplogent-docker 2>/dev/null || true ;;
   url) url ;;
-  help|-h|--help) sed -n '2,24p' "$0" ;;
+  help|-h|--help) sed -n '2,28p' "$0" ;;
   *) die "unknown command: $cmd (xplogent-docker help)" ;;
 esac

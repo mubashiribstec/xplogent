@@ -189,6 +189,14 @@ class SipCall:
 SessionFactory = Callable[..., Any]
 
 
+def dns_problem(name: str) -> str:
+    """What to tell the operator when the SIP/PBX server name doesn't resolve."""
+    return (f"can't look up '{name}' (DNS). If Xplogent runs in Docker, the container couldn't "
+            "resolve the name: enter the PBX's IP address in Calls → Phone lines, or run "
+            "'sudo xplogent-docker doctor' on the server (a name only in the host's /etc/hosts or "
+            "the office DNS needs 'sudo xplogent-docker dns <office DNS IP>').")
+
+
 class SipTrunk(asyncio.DatagramProtocol):
     """One SIP account: registration, calls and their media."""
 
@@ -245,8 +253,11 @@ class SipTrunk(asyncio.DatagramProtocol):
         if not (self.s.server and self.s.username):
             raise ValueError("SIP server and username are required")
         loop = asyncio.get_running_loop()
-        infos = await loop.getaddrinfo(self.s.server, self.s.port, family=socket.AF_INET,
-                                       type=socket.SOCK_DGRAM)
+        try:
+            infos = await loop.getaddrinfo(self.s.server, self.s.port, family=socket.AF_INET,
+                                           type=socket.SOCK_DGRAM)
+        except socket.gaierror as exc:
+            raise RuntimeError(dns_problem(self.s.server)) from exc
         self.server_addr = (infos[0][4][0], self.s.port)
         self.local_ip = _route_ip(self.server_addr[0])
         await asyncio.to_thread(self._resolve_trusted)

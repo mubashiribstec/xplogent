@@ -299,3 +299,65 @@ def test_installer_keeps_the_crm_link_when_switching_mode(tmp_path):
 def test_helper_has_sip_command():
     helper = (REPO / "deploy" / "docker" / "xplogent-docker").read_text()
     assert "sip on [--ip ADDR] | off" in helper and "compose.sip.yml" in helper
+
+
+# ── containers without DNS / internet (23 Nov) ──────────────────────────────────────────
+def test_dns_compose_file_sets_the_containers_name_servers():
+    import yaml
+    doc = yaml.safe_load((REPO / "deploy" / "docker" / "compose.dns.yml").read_text())
+    assert doc["services"]["xplogent"]["dns"][0].startswith("${XPLOGENT_DNS_1")
+
+
+def test_helper_has_dns_and_doctor_and_keeps_the_dns_file():
+    helper = (REPO / "deploy" / "docker" / "xplogent-docker").read_text()
+    assert "dns IP [IP2] | auto | off | status" in helper and "cmd_doctor" in helper
+    assert "flush" in helper and "ip_forward" in helper and "masquerade" in helper
+    assert 'files="$files:compose.dns.yml"' in helper
+    assert "compose.dns.yml" in helper.split("DEPLOY_FILES=")[1].split('"')[1]     # refreshed by update
+    get_sh = (REPO / "get.sh").read_text()
+    assert "deploy/docker/compose.dns.yml" in get_sh and "XPLOGENT_DNS_1" in get_sh
+
+
+@_bash
+def test_installer_keeps_the_dns_setting_when_switching_mode(tmp_path):
+    assert _get_sh(tmp_path, "--mode", "local").returncode == 0
+    assert (tmp_path / "x" / "deploy" / "docker" / "compose.dns.yml").exists()
+    env_file = tmp_path / "x" / "deploy" / "docker" / ".env"
+    env_file.write_text(env_file.read_text() + "XPLOGENT_DNS_1=192.168.110.1\n")
+    res = _get_sh(tmp_path, "--reconfigure", "--domain", "agent.example.com")
+    assert res.returncode == 0, res.stderr
+    assert _env(tmp_path)["COMPOSE_FILE"] == "docker-compose.yml:compose.https.yml:compose.dns.yml"
+
+
+@_bash
+def test_doctor_names_the_firewall_that_wiped_dockers_rules(tmp_path):
+    """Debian 13: nftables.conf starts with 'flush ruleset' and Docker's masquerade is gone."""
+    import os
+    import stat
+    compose = tmp_path / "inst" / "deploy" / "docker"
+    compose.mkdir(parents=True)
+    (compose / "docker-compose.yml").write_text("services: {}\n")
+    (compose / ".env").write_text("COMPOSE_FILE=docker-compose.yml:compose.local.yml\n")
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    stubs = {
+        "docker": "exit 0",                                   # `compose ps -q` → empty: not running
+        "nft": "echo 'table inet filter { chain forward { policy drop; } }'",
+        "systemctl": '[ "$1" = is-enabled ] && exit 0; exit 1',
+        "getent": "exit 0", "curl": "exit 0", "resolvectl": "echo 'Global: 192.168.110.1'",
+    }
+    for name, body in stubs.items():
+        f = bin_ / name
+        f.write_text("#!/bin/sh\n" + body + "\n")
+        f.chmod(f.stat().st_mode | stat.S_IEXEC)
+    nft_conf = tmp_path / "nftables.conf"
+    nft_conf.write_text("#!/usr/sbin/nft -f\nflush ruleset\ntable inet filter {}\n")
+    env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "XPLOGENT_DOCKER_DIR": str(tmp_path / "inst"),
+           "XPLOGENT_NFT_CONF": str(nft_conf), "XPLOGENT_DAEMON_JSON": str(tmp_path / "none.json")}
+    res = subprocess.run(["bash", str(REPO / "deploy" / "docker" / "xplogent-docker"), "doctor"],
+                         capture_output=True, text=True, env=env)
+    out = res.stdout + res.stderr
+    assert res.returncode != 0
+    assert "flush ruleset" in out and "systemctl disable --now nftables" in out
+    assert "masquerade" in out.lower() and "systemctl restart docker" in out
+    assert "isn't running" in out
