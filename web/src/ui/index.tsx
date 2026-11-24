@@ -84,17 +84,17 @@ export function Field({ label, hint, error, optional, children, className, id }:
 }
 
 /** A text input that saves when it loses focus (or on Enter), only if the value changed. */
-export function TextField({ label, hint, value, onCommit, placeholder, type = "text", optional, className, inputMode, step, min }: {
+export function TextField({ label, hint, value, onCommit, placeholder, type = "text", optional, className, inputMode, step, min, max }: {
   label: ReactNode; hint?: ReactNode; value: string | number | undefined; onCommit: (v: string) => void;
   placeholder?: string; type?: string; optional?: boolean; className?: string;
-  inputMode?: "text" | "numeric" | "decimal" | "tel" | "url" | "email"; step?: string; min?: number;
+  inputMode?: "text" | "numeric" | "decimal" | "tel" | "url" | "email"; step?: string; min?: number; max?: number;
 }) {
   const initial = value === undefined || value === null ? "" : String(value);
   return (
     <Field label={label} hint={hint} optional={optional} className={className}>
       {(id) => (
         <input id={id} key={initial} type={type} defaultValue={initial} placeholder={placeholder} inputMode={inputMode}
-          step={step} min={min}
+          step={step} min={min} max={max}
           onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
           onBlur={(e) => { if (e.target.value !== initial) onCommit(e.target.value); }} />
       )}

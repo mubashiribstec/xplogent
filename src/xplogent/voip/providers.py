@@ -446,6 +446,29 @@ DEEPGRAM_VOICES: list[dict[str, str]] = [
 ]
 DEEPGRAM_DEFAULT_VOICE = "aura-2-pandora-en"
 
+# Deepgram Flux TTS voices (Voice Agent, speak version v2; developers.deepgram.com/docs/flux-tts/voices).
+_FLUX_ACCENT = {"maeve": "Irish", "sharon": "Australian", "kai": "Singaporean", "marcelo": "Filipino",
+                "meena": "Indian", "naveen": "Indian", "priya": "Indian"}
+FLUX_VOICES: list[dict[str, str]] = [
+    {"id": f"flux-{v}-en", "name": f"{v.title()}" + (f" · {_FLUX_ACCENT[v]}" if v in _FLUX_ACCENT else "")
+     + (" · featured" if i < 13 else "")}
+    for i, v in enumerate((
+        "hannah", "kit", "alexis", "cliff", "sienna", "cole", "brooke", "colin", "gemma", "haley", "heather",
+        "miles", "sean", "bree", "brittany", "bruce", "conor", "donovan", "drew", "elise", "jack", "kai",
+        "kelsey", "maeve", "marcelo", "marcus", "meena", "meghan", "naveen", "paige", "priya", "rufus",
+        "sharon", "tanner", "wade", "wes"))]
+FLUX_DEFAULT_VOICE = "flux-hannah-en"
+# The original Deepgram Aura voices (speak version v1).
+AURA_V1_VOICES: list[dict[str, str]] = [
+    {"id": "aura-helios-en", "name": "Helios · UK male"},
+    {"id": "aura-athena-en", "name": "Athena · UK female"},
+    {"id": "aura-angus-en", "name": "Angus · Irish male"},
+    *({"id": f"aura-{v}-en", "name": f"{v.title()} · US {g}"} for v, g in (
+        ("asteria", "female"), ("luna", "female"), ("stella", "female"), ("hera", "female"),
+        ("orion", "male"), ("arcas", "male"), ("perseus", "male"), ("orpheus", "male"), ("zeus", "male"))),
+]
+AURA_V1_DEFAULT_VOICE = "aura-helios-en"
+
 
 class DeepgramTTS:
     """Deepgram Aura text-to-speech (``POST /v1/speak``), raw 16-bit PCM at ``sample_rate``."""

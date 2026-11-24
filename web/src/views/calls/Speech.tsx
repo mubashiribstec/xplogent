@@ -10,7 +10,7 @@ import {
   type SpeechTest, type ThinkModel, type VoiceAgentTest,
 } from "../../api";
 import {
-  Badge, Button, Callout, Card, ChoiceCards, Field, ResultLine, SecretField, Segmented, SelectField, TextField,
+  Badge, Button, Callout, Card, ChoiceCards, Field, ResultLine, SecretField, SelectField, TextField,
 } from "../../ui";
 import type { Saver, Toaster } from "./shared";
 
@@ -242,29 +242,54 @@ function SpeechResult({ r }: { r: SpeechTest }) {
 }
 
 // ── Deepgram Voice Agent ───────────────────────────────────────────────────
+type VaVoice = "deepgram" | "flux" | "aura" | "cartesia" | "elevenlabs" | "openai";
+// What Deepgram's Voice Agent can speak with (developers.deepgram.com/docs/voice-agent-tts-models).
+const VA_VOICES: { id: VaVoice; label: string; field: string; fallback: string; key?: string;
+                   speed?: [number, number]; preview: boolean }[] = [
+  { id: "deepgram", label: "Deepgram Aura-2", field: "voice", fallback: "aura-2-pandora-en", speed: [0.7, 1.5], preview: true },
+  { id: "flux", label: "Deepgram Flux", field: "flux_voice", fallback: "flux-hannah-en", speed: [0.5, 1.5], preview: false },
+  { id: "aura", label: "Deepgram Aura", field: "aura_voice", fallback: "aura-helios-en", preview: true },
+  { id: "cartesia", label: "Cartesia", field: "cartesia_voice", fallback: GEMMA, key: "CARTESIA_API_KEY", speed: [0.6, 1.5], preview: true },
+  { id: "elevenlabs", label: "ElevenLabs", field: "elevenlabs_voice", fallback: "", key: "ELEVENLABS_API_KEY", preview: true },
+  { id: "openai", label: "OpenAI", field: "openai_voice", fallback: "alloy", key: "OPENAI_API_KEY", preview: true },
+];
+
 function VoiceAgentCards({ cfg, secrets, save, toast, saveKey }: CardProps) {
   const va: Record<string, any> = cfg.voice_agent ?? {};
   const think: Record<string, any> = va.think ?? { provider: "open_ai", model: "gpt-4o-mini", temperature: 0.6 };
-  const voiceProvider: "deepgram" | "cartesia" = va.voice_provider === "cartesia" ? "cartesia" : "deepgram";
+  const voiceProvider: VaVoice = (VA_VOICES.find((x) => x.id === va.voice_provider)?.id ?? "deepgram");
+  const vp = VA_VOICES.find((x) => x.id === voiceProvider)!;
   const putVa = (u: Record<string, any>) => save({ voice_agent: { ...va, ...u } });
   const [models, setModels] = useState<ThinkModel[]>([]);
-  const [dgVoices, setDgVoices] = useState<{ list: { id: string; name: string }[] | null }>({ list: null });
-  const cartesiaVoices = useVoices(voiceProvider === "cartesia" && secrets.CARTESIA_API_KEY ? "cartesia" : "", `${voiceProvider}|${secrets.CARTESIA_API_KEY}`);
+  const [voices, setVoices] = useState<{ list: { id: string; name: string }[] | null }>({ list: null });
+  const keyMissing = !!vp.key && !secrets[vp.key];
   const [busy, setBusy] = useState<"" | "agent" | "voice">("");
   const [result, setResult] = useState<VoiceAgentTest | null>(null);
 
   useEffect(() => {
     getVoiceAgentModels().then((r) => setModels(r.models ?? [])).catch(() => setModels([]));
-    getVoiceAgentVoices().then((r) => setDgVoices({ list: r.voices ?? [] })).catch(() => setDgVoices({ list: [] }));
   }, [secrets.DEEPGRAM_API_KEY]);
+  useEffect(() => {
+    let live = true;
+    setVoices({ list: null });
+    if (keyMissing) { setVoices({ list: [] }); return; }
+    getVoiceAgentVoices(voiceProvider).then((r) => live && setVoices({ list: r.voices ?? [] }))
+      .catch(() => live && setVoices({ list: [] }));
+    return () => { live = false; };
+  }, [voiceProvider, keyMissing]);
 
   const modelValue = `${think.provider ?? "open_ai"}|${think.model ?? "gpt-4o-mini"}`;
   const preview = async () => {
     setBusy("voice");
     try {
+      const voice = String(va[vp.field] || vp.fallback);
       const tts = voiceProvider === "cartesia"
-        ? { provider: "cartesia", model: "sonic-3.6", voice: va.cartesia_voice || GEMMA, sample_rate: 24000, language: "en" }
-        : { provider: "deepgram", voice: va.voice || "aura-2-pandora-en", sample_rate: 24000 };
+        ? { provider: "cartesia", model: "sonic-3.6", voice, sample_rate: 24000, language: "en" }
+        : voiceProvider === "elevenlabs"
+          ? { provider: "elevenlabs", model: "eleven_turbo_v2_5", voice, sample_rate: 24000 }
+          : voiceProvider === "openai"
+            ? { provider: "openai", base_url: "https://api.openai.com/v1", model: va.openai_model || "tts-1", voice, sample_rate: 24000 }
+            : { provider: "deepgram", voice, sample_rate: 24000 };
       const r = await testSpeech(false, { play: true, tts, text: "Hello, thanks for calling. How can I help you today?" });
       if (r.ok && r.wav) await playWav(r.wav);
       else toast(r.error ?? "the voice didn't answer", "error");
@@ -274,7 +299,7 @@ function VoiceAgentCards({ cfg, secrets, save, toast, saveKey }: CardProps) {
     setBusy("agent"); setResult(null);
     try { setResult(await testVoiceAgent()); } catch (e) { setResult({ ok: false, error: String(e) }); } finally { setBusy(""); }
   };
-  const needCartesia = voiceProvider === "cartesia" && !secrets.CARTESIA_API_KEY;
+  const needKey = keyMissing || (!!vp.key && !String(va[vp.field] || vp.fallback));
 
   return <>
     <Card title="Deepgram connection" description="One Deepgram key covers listening, the hosted model and Aura-2 voices.">
@@ -300,30 +325,39 @@ function VoiceAgentCards({ cfg, secrets, save, toast, saveKey }: CardProps) {
         (callbacks, outcomes, transfer, required fields).</p>
     </Card>
 
-    <Card title="Voice" description="Deepgram speaks with Aura-2, or with your Cartesia voice (such as Gemma, UK)."
+    <Card title="Voice" description="Deepgram's own voices (Aura-2, Flux, Aura) need only the Deepgram key; Cartesia, ElevenLabs and OpenAI use your key for them."
       actions={<Button icon={Play} loading={busy === "voice"} onClick={preview}
-        disabled={!secrets.DEEPGRAM_API_KEY && voiceProvider === "deepgram" || needCartesia}>Preview</Button>}>
-      <Segmented<"deepgram" | "cartesia"> label="Voice provider" value={voiceProvider}
-        onChange={(p) => putVa({ voice_provider: p, ...(p === "cartesia" && !va.cartesia_voice ? { cartesia_voice: GEMMA } : {}) })}
-        options={[{ value: "deepgram", label: "Deepgram Aura-2" }, { value: "cartesia", label: "Cartesia" }]} />
-      <div className="form-grid mt-4">
-        {voiceProvider === "deepgram"
-          ? <VoicePicker label="Aura-2 voice" value={String(va.voice ?? "aura-2-pandora-en")} voices={dgVoices}
-              onChange={(v) => putVa({ voice: v })} />
-          : <>
-              <SecretField label="CARTESIA_API_KEY" isSet={!!secrets.CARTESIA_API_KEY} onSave={(v) => saveKey("CARTESIA_API_KEY", v)} />
-              <VoicePicker label="Cartesia voice" value={String(va.cartesia_voice || GEMMA)} voices={cartesiaVoices}
-                extra={[{ id: GEMMA, name: "Gemma · UK female (recommended for UK calls)" }]}
-                onChange={(v) => putVa({ cartesia_voice: v })} />
-            </>}
+        disabled={!vp.preview || !secrets.DEEPGRAM_API_KEY && !vp.key || needKey}>Preview</Button>}>
+      <div className="form-grid">
+        <SelectField label="Voice provider" value={voiceProvider}
+          options={VA_VOICES.map((x) => ({ value: x.id, label: x.label, group: x.key ? "Your own key" : "Deepgram (no extra key)" }))}
+          onChange={(p) => putVa({ voice_provider: p, ...(p === "cartesia" && !va.cartesia_voice ? { cartesia_voice: GEMMA } : {}) })} />
+        {vp.key && <SecretField label={vp.key} isSet={!!secrets[vp.key]} onSave={(v) => saveKey(vp.key!, v)} />}
+        <VoicePicker label={`${vp.label} voice`} value={String(va[vp.field] || vp.fallback)} voices={voices}
+          extra={voiceProvider === "cartesia" ? [{ id: GEMMA, name: "Gemma · UK female (recommended for UK calls)" }] : []}
+          onChange={(v) => putVa({ [vp.field]: v })} />
+        {voiceProvider === "elevenlabs" && <SelectField label="ElevenLabs model" value={String(va.elevenlabs_model || "eleven_turbo_v2_5")}
+          options={[{ value: "eleven_turbo_v2_5", label: "Turbo v2.5 (streaming, fastest)" }, { value: "eleven_v3", label: "v3 (most expressive, slower)" }]}
+          onChange={(v) => putVa({ elevenlabs_model: v })} />}
+        {voiceProvider === "openai" && <SelectField label="OpenAI model" value={String(va.openai_model || "tts-1")}
+          options={[{ value: "tts-1", label: "tts-1 (fast)" }, { value: "tts-1-hd", label: "tts-1-hd (higher quality)" }]}
+          onChange={(v) => putVa({ openai_model: v })} />}
+        {vp.speed && <TextField label="Speed" type="number" step="0.05" min={vp.speed[0]} max={vp.speed[1]}
+          value={va.speed ?? ""} placeholder="1.0" hint={`${vp.speed[0]}–${vp.speed[1]}; empty is the voice's normal pace.`}
+          onCommit={(v) => putVa({ speed: v === "" ? null : Math.max(vp.speed![0], Math.min(vp.speed![1], Number(v) || 1)) })} />}
+        {voiceProvider === "flux" && <SelectField label="Expressivity (beta)" value={String(va.expressivity ?? "")}
+          options={[{ value: "", label: "Default" }, { value: "-2", label: "−2 · calmest" }, { value: "-1", label: "−1 · calm" },
+            { value: "0", label: "0 · neutral" }, { value: "1", label: "1 · lively" }, { value: "2", label: "2 · most animated" }]}
+          onChange={(v) => putVa({ expressivity: v === "" ? null : Number(v) })} />}
       </div>
-      {voiceProvider === "cartesia" && <Callout tone="info">With a Cartesia voice, your Cartesia key is sent to Deepgram in
-        the session settings, so Deepgram can call Cartesia for you.</Callout>}
+      {!vp.preview && <p className="fld-hint mt-3">Flux voices play only inside the Voice Agent: use <b>Test Voice Agent</b> below to hear one.</p>}
+      {vp.key && <Callout tone="info">With {vp.label}, your {vp.key} is sent to Deepgram in the session settings,
+        so Deepgram can call {vp.label} for you. If it fails, the call falls back to your Aura-2 voice.</Callout>}
     </Card>
 
     <Card title="Test the Voice Agent" description="Connects to Deepgram with these choices, sends one question and times the reply. No call is placed."
       actions={<Button variant="primary" icon={AudioLines} loading={busy === "agent"} onClick={runTest}
-        disabled={!secrets.DEEPGRAM_API_KEY || needCartesia}>Test Voice Agent</Button>}>
+        disabled={!secrets.DEEPGRAM_API_KEY || needKey}>Test Voice Agent</Button>}>
       {!secrets.DEEPGRAM_API_KEY && <Callout tone="warn">Add your Deepgram key above first.</Callout>}
       {result && (result.ok
         ? <ResultLine ok>Connected in <b>{result.connect_ms} ms</b>, first audio after <b>{result.first_audio_ms} ms</b>

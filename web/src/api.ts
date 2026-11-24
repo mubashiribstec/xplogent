@@ -543,8 +543,8 @@ export interface ThinkModel { provider: string; model: string; name: string }
 export async function getVoiceAgentModels(): Promise<{ ok: boolean; models: ThinkModel[] }> {
   return (await fetch("/voip/voice-agent/models")).json();
 }
-export async function getVoiceAgentVoices(): Promise<{ ok: boolean; voices: { id: string; name: string }[] }> {
-  return (await fetch("/voip/voice-agent/voices")).json();
+export async function getVoiceAgentVoices(provider = "deepgram"): Promise<{ ok: boolean; voices: { id: string; name: string }[]; error?: string }> {
+  return (await fetch(`/voip/voice-agent/voices?provider=${encodeURIComponent(provider)}`)).json();
 }
 export interface VoiceAgentTest {
   ok: boolean; model?: string; voice?: string; connect_ms?: number; first_audio_ms?: number; reply?: string;

@@ -193,10 +193,22 @@ call's debug view shows which provider served each turn and why a fallback happe
 (`voip.mode: voice_agent`, `DEEPGRAM_API_KEY`). One connection to Deepgram does the whole turn:
 Deepgram listens (`voip.voice_agent.listen_model`, default `nova-3`), a **Deepgram-hosted model**
 answers (`voip.voice_agent.think`: OpenAI, Anthropic or Google models; the list in the dashboard is
-Deepgram's live list, no separate key needed) and the chosen voice speaks: an Aura-2 voice
-(`voip.voice_agent.voice`), or your Cartesia voice such as Gemma (`voice_provider: cartesia`,
-`cartesia_voice`, `CARTESIA_API_KEY`; the key is then sent to Deepgram in the session settings so
-Deepgram can call Cartesia). The agent gets the same prompt, knowledge search and tools as in the
+Deepgram's live list, no separate key needed) and the chosen voice speaks
+(`voip.voice_agent.voice_provider`):
+
+| Voice provider | Setting | Key | Notes |
+| --- | --- | --- | --- |
+| `deepgram` (Aura-2, default) | `voice`, e.g. `aura-2-pandora-en` | Deepgram only | `speed` 0.7–1.5 |
+| `flux` (Deepgram Flux) | `flux_voice`, e.g. `flux-hannah-en` (36 English voices) | Deepgram only | `speed` 0.5–1.5, `expressivity` −2…2 (beta); no Preview, use **Test Voice Agent** |
+| `aura` (Deepgram Aura, original) | `aura_voice`, e.g. `aura-helios-en` (UK male) | Deepgram only | |
+| `cartesia` | `cartesia_voice` (Gemma, UK, by default) | `CARTESIA_API_KEY` | `speed` 0.6–1.5 |
+| `elevenlabs` | `elevenlabs_voice` (a voice id from your account), `elevenlabs_model` `eleven_turbo_v2_5` or `eleven_v3` | `ELEVENLABS_API_KEY` | |
+| `openai` | `openai_voice` (`alloy`, `coral`, `nova`, …), `openai_model` `tts-1` or `tts-1-hd` | `OPENAI_API_KEY` | |
+
+With Cartesia, ElevenLabs or OpenAI, that key is sent to Deepgram in the session settings so
+Deepgram can call the provider for you, and an Aura-2 voice (`voice`) is added as a fallback: if
+the provider refuses, the call still has a voice. Deepgram's list of voice providers:
+<https://developers.deepgram.com/docs/voice-agent-tts-models>. The agent gets the same prompt, knowledge search and tools as in the
 standard mode (callbacks, outcomes, transfer, required fields before `end_call`), Pause AI stops
 it hearing the caller, and recording, transcripts, the debug view and the CRM work as usual. The
 greeting, with the AI and recording notice, is spoken by the agent's own voice and can't be

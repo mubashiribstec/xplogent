@@ -531,11 +531,27 @@ async def voip_voice_agent_models() -> dict:
 
 
 @router.get("/voip/voice-agent/voices")
-async def voip_voice_agent_voices() -> dict:
-    """Aura-2 voices for the Voice Agent (UK first)."""
-    from xplogent.voip.providers import DEEPGRAM_VOICES
+async def voip_voice_agent_voices(provider: str = "deepgram") -> dict:
+    """Voices for the Voice Agent's chosen voice provider: Deepgram Aura-2 (UK first), Flux,
+    the original Aura, OpenAI's set, or your own ElevenLabs / Cartesia account's voices."""
+    from xplogent.voip.providers import (
+        AURA_V1_VOICES,
+        DEEPGRAM_VOICES,
+        FLUX_VOICES,
+        OPENAI_VOICES,
+        list_voices,
+    )
 
-    return {"ok": True, "voices": [dict(v) for v in DEEPGRAM_VOICES]}
+    fixed = {"deepgram": DEEPGRAM_VOICES, "flux": FLUX_VOICES, "aura": AURA_V1_VOICES,
+             "openai": [{"id": v, "name": v.title()} for v in OPENAI_VOICES]}
+    if provider in fixed:
+        return {"ok": True, "voices": [dict(v) for v in fixed[provider]]}
+    if provider not in ("elevenlabs", "cartesia"):
+        return {"ok": False, "voices": [], "error": f"unknown voice provider: {provider}"}
+    try:
+        return {"ok": True, "voices": await asyncio.wait_for(list_voices({"provider": provider}), timeout=15)}
+    except Exception as exc:  # noqa: BLE001 - shown in the card (usually a missing key)
+        return {"ok": False, "voices": [], "error": f"{type(exc).__name__}: {exc}"[:300]}
 
 
 @router.post("/voip/voice-agent/test")

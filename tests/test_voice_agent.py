@@ -211,7 +211,8 @@ async def test_a_cartesia_voice_goes_through_deepgram(monkeypatch):
     async with FakeAgent() as fake:
         session, *_ = make(fake.url, va=va)
         await session.start()
-        speak = fake.sent("Settings")[0]["agent"]["speak"]
+        speak, backup = fake.sent("Settings")[0]["agent"]["speak"]     # Cartesia, then an Aura-2 backup
+        assert backup == {"provider": {"type": "deepgram", "model": "aura-2-draco-en"}}
         assert speak["provider"]["type"] == "cartesia" and speak["provider"]["model_id"] == "sonic-3.6"
         assert speak["provider"]["voice"] == {"mode": "id", "id": "62ae83ad-4f6a-430b-af41-a9bede9286ca"}
         assert speak["endpoint"]["headers"]["x-api-key"] == "car-key"
@@ -379,3 +380,60 @@ def test_voice_agent_minutes_count_towards_the_cost_cap():
     assert abs(session.cost_estimate() - 0.18) < 0.01
     session.mode = "cascaded"                                        # fell back: not billed by Deepgram
     assert abs(session.cost_estimate() - 0.02) < 0.01
+
+
+
+# ── more voices (24 Nov): Flux, the original Aura, ElevenLabs, OpenAI ─────────────────────
+def test_every_voice_provider_builds_the_documented_speak_block():
+    from xplogent.voip.voice_agent import speak_provider, voice_key_env
+
+    env = {"ELEVENLABS_API_KEY": "el-key", "OPENAI_API_KEY": "oa-key"}
+    flux = speak_provider({"voice_provider": "flux", "flux_voice": "flux-maeve-en", "speed": 0.4,
+                           "expressivity": -9}, env)
+    assert flux == {"provider": {"type": "deepgram", "version": "v2", "model": "flux-maeve-en",
+                                 "speed": 0.5, "expressivity": -2}}             # clamped; no "language"
+    assert speak_provider({"voice_provider": "aura"}, env) == \
+        {"provider": {"type": "deepgram", "version": "v1", "model": "aura-helios-en"}}
+    assert speak_provider({"speed": 2}, env) == {"provider": {"type": "deepgram", "model": "aura-2-pandora-en",
+                                                              "speed": 1.5}}
+    el, backup = speak_provider({"voice_provider": "elevenlabs", "elevenlabs_voice": "VoiceId123"}, env)
+    assert el["provider"] == {"type": "eleven_labs", "model_id": "eleven_turbo_v2_5", "language_code": "en-US"}
+    assert el["endpoint"] == {"url": "wss://api.elevenlabs.io/v1/text-to-speech/VoiceId123/multi-stream-input",
+                              "headers": {"xi-api-key": "el-key"}}
+    assert backup["provider"]["type"] == "deepgram"
+    v3, _ = speak_provider({"voice_provider": "elevenlabs", "elevenlabs_voice": "V", "elevenlabs_model": "eleven_v3"}, env)
+    assert v3["endpoint"]["url"] == "https://api.elevenlabs.io/v1/text-to-speech/V"     # v3: HTTPS only
+    oa, _ = speak_provider({"voice_provider": "openai", "openai_voice": "nova", "openai_model": "bogus"}, env)
+    assert oa == {"provider": {"type": "open_ai", "model": "tts-1", "voice": "nova"},
+                  "endpoint": {"url": "https://api.openai.com/v1/audio/speech",
+                               "headers": {"authorization": "Bearer oa-key"}}}
+    assert voice_key_env({"voice_provider": "elevenlabs"}) == "ELEVENLABS_API_KEY"
+    assert voice_key_env({"voice_provider": "flux"}) == ""
+    assert speak_provider({"voice_provider": "nonsense"}, env)["provider"]["model"] == "aura-2-pandora-en"
+
+
+def test_voice_lists_and_readiness_per_provider(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from xplogent.interfaces.api.server import create_app
+    from xplogent.voip.readiness import checklist
+
+    c = TestClient(create_app())
+    flux = c.get("/voip/voice-agent/voices?provider=flux").json()
+    assert flux["ok"] and len(flux["voices"]) == 36 and flux["voices"][0]["id"] == "flux-hannah-en"
+    assert any("Irish" in v["name"] for v in flux["voices"])
+    aura = c.get("/voip/voice-agent/voices?provider=aura").json()["voices"]
+    assert len(aura) == 12 and aura[0]["id"] == "aura-helios-en"
+    assert c.get("/voip/voice-agent/voices").json()["voices"][0]["id"] == "aura-2-pandora-en"
+    assert {"id": "nova", "name": "Nova"} in c.get("/voip/voice-agent/voices?provider=openai").json()["voices"]
+    assert not c.get("/voip/voice-agent/voices?provider=bogus").json()["ok"]
+
+    base = {"mode": "voice_agent", "telephony": "extension", "enabled": True}
+    def item(va, env):
+        return {i["id"]: i for i in checklist({**base, "voice_agent": va}, "openai:x", env=env)}["voice_agent"]
+    assert item({"voice_provider": "flux"}, {"DEEPGRAM_API_KEY": "d"})["ok"]
+    bad = item({"voice_provider": "elevenlabs", "elevenlabs_voice": "V"}, {"DEEPGRAM_API_KEY": "d"})
+    assert not bad["ok"] and "ELEVENLABS_API_KEY" in bad["detail"]
+    good = item({"voice_provider": "elevenlabs", "elevenlabs_voice": "V"},
+                {"DEEPGRAM_API_KEY": "d", "ELEVENLABS_API_KEY": "e"})
+    assert good["ok"] and "elevenlabs:V" in good["detail"]

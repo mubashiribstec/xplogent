@@ -63,19 +63,101 @@ FALLBACK_THINK_MODELS: list[dict[str, str]] = [
 THINK_PROVIDERS = ("open_ai", "anthropic", "google")
 
 
-def speak_provider(va: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
-    """``agent.speak`` for the chosen voice: an Aura-2 voice, or a Cartesia voice (Deepgram
-    calls Cartesia with your Cartesia key, which therefore travels in the settings)."""
+# The voices the Voice Agent can speak with (developers.deepgram.com/docs/voice-agent-tts-models).
+# Deepgram's own (Aura-2, Flux, Aura) need no other key; the rest use your key for that provider,
+# which travels to Deepgram in the session settings (Deepgram calls the provider for you).
+VOICE_PROVIDERS = ("deepgram", "flux", "aura", "cartesia", "elevenlabs", "openai")
+ELEVENLABS_MODELS = ("eleven_turbo_v2_5", "eleven_v3")
+OPENAI_TTS_MODELS = ("tts-1", "tts-1-hd")
+_KEY_FOR = {"cartesia": "CARTESIA_API_KEY", "elevenlabs": "ELEVENLABS_API_KEY", "openai": "OPENAI_API_KEY"}
+
+
+def voice_provider_of(va: dict[str, Any]) -> str:
+    p = str(va.get("voice_provider") or "deepgram")
+    return p if p in VOICE_PROVIDERS else "deepgram"
+
+
+def voice_key_env(va: dict[str, Any]) -> str:
+    """The extra key the chosen voice needs ("" for Deepgram's own voices)."""
+    return _KEY_FOR.get(voice_provider_of(va), "")
+
+
+def _speed(va: dict[str, Any], lo: float, hi: float) -> float | None:
+    raw = va.get("speed")
+    if raw in (None, ""):
+        return None
+    try:
+        return round(max(lo, min(float(raw), hi)), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def chosen_voice(va: dict[str, Any]) -> str:
+    """The voice id for the chosen provider (with each provider's default)."""
+    from xplogent.voip.providers import (
+        AURA_V1_DEFAULT_VOICE,
+        DEEPGRAM_DEFAULT_VOICE,
+        FLUX_DEFAULT_VOICE,
+    )
+
+    p = voice_provider_of(va)
+    return str({"deepgram": va.get("voice") or DEEPGRAM_DEFAULT_VOICE,
+                "flux": va.get("flux_voice") or FLUX_DEFAULT_VOICE,
+                "aura": va.get("aura_voice") or AURA_V1_DEFAULT_VOICE,
+                "cartesia": va.get("cartesia_voice") or "",
+                "elevenlabs": va.get("elevenlabs_voice") or "",
+                "openai": va.get("openai_voice") or "alloy"}[p])
+
+
+def speak_provider(va: dict[str, Any], env: dict[str, str]) -> dict[str, Any] | list[dict[str, Any]]:
+    """``agent.speak`` for the chosen voice. A third-party voice is followed by a Deepgram
+    Aura-2 voice: Deepgram tries them in order, so a refused key never leaves the call mute."""
     from xplogent.voip.providers import CARTESIA_API_VERSION, CARTESIA_MODEL, DEEPGRAM_DEFAULT_VOICE
 
-    if str(va.get("voice_provider") or "deepgram") == "cartesia":
-        return {"provider": {"type": "cartesia", "model_id": CARTESIA_MODEL,
-                             "voice": {"mode": "id", "id": str(va.get("cartesia_voice") or "")},
-                             "language": "en"},
+    p, voice = voice_provider_of(va), chosen_voice(va)
+    lang = str(va.get("language") or "en")
+    backup = {"provider": {"type": "deepgram", "model": str(va.get("voice") or DEEPGRAM_DEFAULT_VOICE)}}
+    if p == "deepgram":
+        prov: dict[str, Any] = {"type": "deepgram", "model": voice}
+        if (sp := _speed(va, 0.7, 1.5)) is not None:
+            prov["speed"] = sp
+        return {"provider": prov}
+    if p == "flux":
+        prov = {"type": "deepgram", "version": "v2", "model": voice}
+        if (sp := _speed(va, 0.5, 1.5)) is not None:
+            prov["speed"] = sp
+        if va.get("expressivity") not in (None, ""):
+            try:
+                prov["expressivity"] = max(-2, min(int(va["expressivity"]), 2))
+            except (TypeError, ValueError):
+                pass
+        return {"provider": prov}
+    if p == "aura":
+        return {"provider": {"type": "deepgram", "version": "v1", "model": voice}}
+    if p == "cartesia":
+        prov = {"type": "cartesia", "model_id": CARTESIA_MODEL, "voice": {"mode": "id", "id": voice},
+                "language": lang}
+        if (sp := _speed(va, 0.6, 1.5)) is not None:
+            prov["speed"] = sp
+        main = {"provider": prov,
                 "endpoint": {"url": "https://api.cartesia.ai/tts/bytes",
                              "headers": {"x-api-key": env.get("CARTESIA_API_KEY", ""),
                                          "cartesia-version": CARTESIA_API_VERSION}}}
-    return {"provider": {"type": "deepgram", "model": str(va.get("voice") or DEEPGRAM_DEFAULT_VOICE)}}
+    elif p == "elevenlabs":
+        model = str(va.get("elevenlabs_model") or ELEVENLABS_MODELS[0])
+        model = model if model in ELEVENLABS_MODELS else ELEVENLABS_MODELS[0]
+        url = (f"https://api.elevenlabs.io/v1/text-to-speech/{voice}" if model == "eleven_v3" else
+               f"wss://api.elevenlabs.io/v1/text-to-speech/{voice}/multi-stream-input")
+        main = {"provider": {"type": "eleven_labs", "model_id": model,
+                             "language_code": "en-US" if lang == "en" else lang},
+                "endpoint": {"url": url, "headers": {"xi-api-key": env.get("ELEVENLABS_API_KEY", "")}}}
+    else:  # openai
+        model = str(va.get("openai_model") or OPENAI_TTS_MODELS[0])
+        main = {"provider": {"type": "open_ai", "model": model if model in OPENAI_TTS_MODELS else "tts-1",
+                             "voice": voice},
+                "endpoint": {"url": "https://api.openai.com/v1/audio/speech",
+                             "headers": {"authorization": f"Bearer {env.get('OPENAI_API_KEY', '')}"}}}
+    return [main, backup]
 
 
 def _same_words(a: str, b: str) -> bool:
@@ -99,9 +181,7 @@ def think_provider(va: dict[str, Any]) -> dict[str, Any]:
 
 
 def voice_label(va: dict[str, Any]) -> str:
-    if str(va.get("voice_provider") or "deepgram") == "cartesia":
-        return f"cartesia:{va.get('cartesia_voice') or '?'}"
-    return f"deepgram:{va.get('voice') or 'aura-2-pandora-en'}"
+    return f"{voice_provider_of(va)}:{chosen_voice(va) or '?'}"
 
 
 class DeepgramAgentSession(RealtimeSession):

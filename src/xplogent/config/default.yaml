@@ -315,9 +315,17 @@ voip:
       provider: open_ai
       model: gpt-4o-mini
       temperature: 0.6
-    voice_provider: deepgram       # deepgram (Aura-2) | cartesia (your CARTESIA_API_KEY is passed to Deepgram, which calls Cartesia)
+    voice_provider: deepgram       # deepgram (Aura-2) | flux | aura | cartesia | elevenlabs | openai (a third-party key is passed to Deepgram, which calls that provider)
     voice: aura-2-pandora-en       # Aura-2 voice (aura-2-pandora-en / aura-2-draco-en are British)
     cartesia_voice: ""             # Cartesia voice id when voice_provider is cartesia (e.g. Gemma)
+    flux_voice: flux-hannah-en     # voice_provider: flux (Deepgram Flux TTS)
+    aura_voice: aura-helios-en     # voice_provider: aura (the original Deepgram Aura; Helios is British)
+    elevenlabs_voice: ""           # voice_provider: elevenlabs (a voice id from your ElevenLabs account)
+    elevenlabs_model: eleven_turbo_v2_5   # or eleven_v3
+    openai_voice: alloy            # voice_provider: openai (alloy, ash, coral, echo, fable, nova, onyx, sage, shimmer)
+    openai_model: tts-1            # or tts-1-hd
+    speed: null                    # e.g. 0.9 / 1.1 (Aura-2 0.7-1.5, Flux 0.5-1.5); empty = the voice's own
+    expressivity: null             # Flux only: -2 (calm) … 2 (animated); empty = default
     url: "wss://agent.deepgram.com/v1/agent/converse"
   realtime:                        # voip.mode: realtime
     provider: openai
