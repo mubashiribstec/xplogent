@@ -290,6 +290,19 @@ Everything goes into the knowledge base the agent searches during a call (deleti
 removes it). **Build from calls** asks the call model to write a playbook draft (call flow,
 FAQ, objections, tone) from the transcripts and Q&A; edit it and **Save**: every call reads it.
 
+How each call uses it, in every mode:
+
+- **Playbook:** in the prompt of every call. With a call template (`voip.template`), the
+  template's script leads and the trained playbook is added under it.
+- **Knowledge base (uploads, Q&A, documents):**
+  - **Standard mode:** looked up for every caller turn (`voip.knowledge_top_k`).
+  - **Realtime mode:** looked up for every caller turn, waiting at most 1 second; the model
+    can also search.
+  - **Deepgram Voice Agent:** Deepgram reads the prompt once, when the call connects. So the
+    knowledge for what the call is about (the vacancy from the CRM brief, the company) is
+    loaded then, within 1.5 seconds. The model is also told to call `search_knowledge` before
+    answering any question of fact.
+
 ## Calling and testing
 
 - **Live calls**: transcript as it happens; **Pause AI** (a person takes over by typing what

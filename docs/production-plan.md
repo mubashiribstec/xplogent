@@ -144,8 +144,8 @@ sends an email.
   applies to the next call.
 - The dashboard chat's self-learning is separate and is now gated: no learning from small
   talk or failed tools, and you can review and forget facts.
-- **Gap:** a selected recruitment template *replaces* the trained playbook instead of adding
-  to it.
+- A selected recruitment template's script and the trained playbook both reach the call
+  (the template leads; the trained playbook adds tone, objections and answers). Done.
 
 **Plan P2-N.**
 - **Suggestions queue:** after each day, Xplogent proposes:
@@ -157,8 +157,6 @@ sends an email.
 - **Versioned playbook:** who approved what, with one-click rollback.
 - **Regression check:** before a new playbook version goes live, the scripted test
   conversations (P2-O) must still pass.
-- **Template plus playbook:** the template keeps the rules and questions; the trained
-  playbook adds tone, objections and FAQs.
 
 ### 7. Best model: fast, accurate, low cost
 Estimated model cost per **4-minute screening call** (~15 turns, ~60k input + 1k output

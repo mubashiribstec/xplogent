@@ -14,6 +14,7 @@ and otherwise offer a callback or a human — the main protection against made-u
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -234,8 +235,52 @@ def brief_sections(brief: dict[str, Any] | None) -> list[str]:
     return out
 
 
+PLAYBOOK_CHARS = 8000      # the screener template's script alone is ~5,000 characters
+TRAINING_CHARS = 4000
+PRELOAD_K = 6
+# Speech-to-speech modes (Voice Agent, realtime) see knowledge only when the model asks for it:
+# this tells it to, every time a question of fact comes up.
+SEARCH_RULE = ("(Below: knowledge loaded for this call. Before answering any question about the "
+               "company, its services, the role, pay, hours, policies or process, call "
+               "search_knowledge with the caller's question, even if this section seems to cover "
+               "it. Never guess: if nothing relevant comes back, say a colleague will confirm.)")
+
+
+def knowledge_section(brain: CallBrain, extra: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """The KNOWLEDGE section for a speech-to-speech prompt: the rule to search, what was loaded
+    when the call started, and (realtime) what was looked up for the caller's last words."""
+    if brain.retrieve is None:
+        return list(extra)
+    out = [SEARCH_RULE]
+    for chunk in (*brain.preloaded, *extra):
+        if chunk not in out:
+            out.append(chunk)
+    return out
+
+
+async def preload_knowledge(brain: CallBrain, *, timeout: float = 1.5) -> list[str]:
+    """Knowledge for what the call is about (vacancy, template, company), loaded once when a
+    speech-to-speech call starts, within ``timeout``: on time-out or error the call goes on
+    without it (search_knowledge still works)."""
+    query = (brain.context_query or "").strip()
+    if not query or brain.retrieve is None:
+        return []
+    try:
+        try:
+            hits = await asyncio.wait_for(brain.retrieve(query, k=PRELOAD_K, log_gap=False), timeout)
+        except TypeError:                       # a retriever without those options
+            hits = await asyncio.wait_for(brain.retrieve(query), timeout)
+    except Exception:  # noqa: BLE001 - never delays or breaks a live call
+        return []
+    brain.preloaded = list(hits or [])
+    if brain.sources is not None:
+        for chunk in brain.preloaded:
+            brain.sources.add(chunk)
+    return brain.preloaded
+
+
 class CallBrain:
-    def __init__(self, provider: Provider, *, persona: str = "", playbook: str = "",
+    def __init__(self, provider: Provider, *, persona: str = "", playbook: str = "", training: str = "",
                  contact: dict[str, Any] | None = None, retrieve: Retriever | None = None,
                  store: Any = None, max_turns: int = 16, temperature: float = 0.3,
                  can_transfer: bool = True, can_send_dtmf: bool = False,
@@ -256,6 +301,11 @@ class CallBrain:
         self.opening_words = ""         # what the callee said before the agent's first line
         self.persona = persona or "You are a friendly, professional customer-service agent."
         self.playbook = playbook
+        # The playbook distilled from your training calls, when a call template's script is the
+        # playbook: both reach the model (the template's script leads).
+        self.training = training
+        self.context_query = ""         # what this call is about, for loading knowledge up front
+        self.preloaded: list[str] = []  # knowledge loaded when the call started (speech-to-speech)
         self.contact = contact
         self.retrieve = retrieve
         self.store = store
@@ -284,7 +334,7 @@ class CallBrain:
 
         self.guard_kinds = tuple(kinds)
         self.sources = Sources()
-        for text in (self.persona, self.playbook, *brief_sections(self.brief),
+        for text in (self.persona, self.playbook, self.training, *self.preloaded, *brief_sections(self.brief),
                      " ".join(str(v) for v in (self.contact or {}).get("fields", {}).values())):
             self.sources.add(text)
         start = today or date.today()          # the calendar is a fact: the next two weeks
@@ -325,7 +375,10 @@ class CallBrain:
             parts.append("No colleague can take calls right now: never offer a transfer. When a "
                          "person is needed, offer a callback and use book_callback.")
         if self.playbook:
-            parts.append("SCRIPT / PLAYBOOK:\n" + self.playbook[:4000])
+            parts.append("SCRIPT / PLAYBOOK:\n" + self.playbook[:PLAYBOOK_CHARS])
+        if self.training:
+            parts.append("LEARNED FROM YOUR TRAINING CALLS (answers, objections, tone; where it differs "
+                         "from the script above, the script wins):\n" + self.training[:TRAINING_CHARS])
         if self.contact:
             c = self.contact
             extra = ", ".join(f"{k}: {v}" for k, v in (c.get("fields") or {}).items())

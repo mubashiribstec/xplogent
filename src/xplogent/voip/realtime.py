@@ -30,6 +30,7 @@ import time
 from typing import Any
 
 from xplogent.core.logging import get_logger
+from xplogent.voip.brain import knowledge_section, preload_knowledge
 from xplogent.voip.engine import MULAW_FRAME, CallSession
 
 _log = get_logger("voip.realtime")
@@ -39,6 +40,7 @@ SEARCH_TOOL = {"type": "function", "name": "search_knowledge",
                               "products) before answering a question about them.",
                "parameters": {"type": "object", "properties": {"query": {"type": "string"}},
                               "required": ["query"]}}
+LOOKUP_TIMEOUT_S = 1.0   # the knowledge lookup before each reply (the standard mode waits for it too)
 _AUDIO_DELTA = {"response.output_audio.delta", "response.audio.delta"}
 _AGENT_TEXT = {"response.output_audio_transcript.done", "response.audio_transcript.done"}
 
@@ -60,9 +62,11 @@ class RealtimeSession(CallSession):
         self._speech_stopped_at = 0.0
         self._first_audio_pending = False
         self._agent_line = ""
+        self._turn_knowledge: list[str] = []      # looked up for the caller's last words
 
     # -- lifecycle -----------------------------------------------------------------------
     async def start(self) -> None:
+        await preload_knowledge(self.brain)
         try:
             await self._connect()
         except Exception as exc:  # noqa: BLE001 - fall back to the cascaded engine
@@ -99,9 +103,7 @@ class RealtimeSession(CallSession):
                 "tools": tools, "tool_choice": "auto"}
 
     def _instructions(self) -> str:
-        hint = ["(use the search_knowledge tool to look facts up before answering)"] \
-            if self.brain.retrieve is not None else []
-        return (self.brain._system(hint) + "\n\nYou are speaking on a phone call. The greeting has "
+        return (self.brain._system(knowledge_section(self.brain, self._turn_knowledge)) + "\n\nYou are speaking on a phone call. The greeting has "
                 "already been said: do not greet again. Keep replies short and natural.")
 
     async def stop(self) -> None:
@@ -143,7 +145,18 @@ class RealtimeSession(CallSession):
         self._speech_stopped_at = time.time()
         await self._send({"type": "conversation.item.create", "item": {
             "type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}})
+        await self._lookup(text)
         await self._respond()
+
+    async def _lookup(self, text: str) -> None:
+        """Knowledge for what the caller just said, as the standard mode does every turn; within
+        LOOKUP_TIMEOUT_S, else the model still has search_knowledge."""
+        if self.brain.retrieve is None or getattr(self.brain, "paused", False):
+            return
+        try:
+            self._turn_knowledge = list(await asyncio.wait_for(self.brain.retrieve(text), LOOKUP_TIMEOUT_S))
+        except Exception:  # noqa: BLE001 - never holds up or breaks the reply
+            self._turn_knowledge = []
 
     async def _respond(self) -> None:
         if getattr(self.brain, "paused", False) or self.finished.is_set() or self.transfer_pending:
@@ -185,6 +198,7 @@ class RealtimeSession(CallSession):
                 self._last_activity = time.time()
                 self._record("caller", text)
                 await self._after_greeting()
+                await self._lookup(text)
                 await self._respond()
         elif kind in _AUDIO_DELTA:
             chunk = base64.b64decode(ev.get("delta", "") or "")

@@ -270,6 +270,20 @@ def load_playbook() -> str:
         return ""
 
 
+def call_context_query(v: dict[str, Any], brief: dict[str, Any] | None, contact: dict[str, Any] | None) -> str:
+    """What this call is about, as a knowledge search: the vacancy (CRM brief), the caller's
+    company, ours. The Voice Agent and realtime modes load its results when the call starts."""
+    sale = (brief or {}).get("sale") or {}
+    parts = [str(sale.get(k) or "") for k in ("job_title", "position_type", "client_name", "site_name")]
+    parts.append(str(((contact or {}).get("fields") or {}).get("company") or ""))
+    parts.append(str(v.get("company") or ""))
+    seen: list[str] = []
+    for p in (x.strip() for x in parts):
+        if p and p.lower() not in (s.lower() for s in seen):
+            seen.append(p)
+    return " ".join(seen)[:300]
+
+
 def is_outbound(info: dict[str, str]) -> bool:
     return str(info.get("direction", "")).lower() in ("outgoing", "outbound")
 
@@ -386,16 +400,20 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         # An outbound screener's script must never greet an inbound caller
         # ("is that {{candidate_name}}?"), nor the other way round.
         template = None
-    playbook_text = template["playbook"] if template else load_playbook()
+    trained = load_playbook()
+    # A template's script leads; what the training calls taught is added to it, never dropped.
+    playbook_text, training_text = (template["playbook"], trained) if template else (trained, "")
     field_configs = list(template["fields"]) if template else []
     field_configs += list(v.get("fields") or [])
     brain = CallBrain(provider, persona=render_template(persona, variables),
                       playbook=render_template(playbook_text, variables),
+                      training=render_template(training_text, variables) if training_text else "",
                       fields=build_collector(field_configs),
                       contact=contact, retrieve=retrieve, store=store, can_transfer=can_transfer,
                       can_send_dtmf=send_dtmf is not None and dtmf_on, brief=brief)
     from xplogent.voip import callbacks as cb
 
+    brain.context_query = call_context_query(v, brief, contact)
     brain.now_line = lambda: cb.now_line(v, contact)
     brain.callback_check = lambda at, who: cb.check(v, contact, at, who)
     guard_cfg = v.get("guard") or {}
@@ -514,15 +532,15 @@ class _Retriever:
         self.embedder = embedder or Embedder(build_provider(cfg.embedding_model))
         self.min_similarity = float((cfg.voip or {}).get("knowledge_min_similarity", 0.3) or 0)
 
-    async def __call__(self, query: str) -> list[str]:
+    async def __call__(self, query: str, *, k: int | None = None, log_gap: bool = True) -> list[str]:
         """Relevant chunks, each labelled with its document: a chunk that matched no word of the
         question and is only loosely similar is dropped (the agent then says it doesn't know,
         instead of reading out whatever ranked first)."""
         from xplogent.core.rag import hybrid_search
 
-        hits = await hybrid_search(self.store, self.embedder, query, k=self.k)
+        hits = await hybrid_search(self.store, self.embedder, query, k=k or self.k)
         hits = [h for h in hits if h.get("keyword") or h.get("similarity", 0.0) >= self.min_similarity]
-        if not hits:
+        if not hits and log_gap:
             log_knowledge_gap(query)
         return [f"[source: {h.get('source') or 'knowledge base'}]\n{h['content']}" for h in hits]
 

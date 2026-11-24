@@ -36,6 +36,7 @@ import time
 from typing import Any
 
 from xplogent.core.logging import get_logger
+from xplogent.voip.brain import knowledge_section, preload_knowledge
 from xplogent.voip.engine import CallSession
 from xplogent.voip.realtime import SEARCH_TOOL, RealtimeSession
 
@@ -202,6 +203,8 @@ class DeepgramAgentSession(RealtimeSession):
 
     # -- lifecycle -------------------------------------------------------------------------
     async def start(self) -> None:
+        # Deepgram reads the prompt once, at connect: the call's knowledge goes in it now.
+        await preload_knowledge(self.brain)
         try:
             await self._connect()
         except Exception as exc:  # noqa: BLE001 - fall back to the standard engine
@@ -269,9 +272,7 @@ class DeepgramAgentSession(RealtimeSession):
 
         Over the limit, the end of the system text goes first: its last section is KNOWLEDGE,
         while the persona, guardrails, identity rules and instructions come first and stay."""
-        hint = ["(use the search_knowledge tool to look facts up before answering)"] \
-            if self.brain.retrieve is not None else []
-        system = self.brain._system(hint)
+        system = self.brain._system(knowledge_section(self.brain))
         tail = ("\n\nYou are speaking on a phone call. The greeting has already been said: "
                 "do not greet again. Keep replies short and natural.")
         if len(system) + len(tail) > PROMPT_LIMIT:
