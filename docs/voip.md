@@ -303,6 +303,50 @@ How each call uses it, in every mode:
     loaded then, within 1.5 seconds. The model is also told to call `search_knowledge` before
     answering any question of fact.
 
+## Incoming calls: what the agent knows, and interruptions
+
+**Who is calling.** While the phone rings, Xplogent asks the CRM about the number (at most
+1.5 s; a slow or broken CRM never delays the call) and checks Contacts and its own earlier calls.
+The agent then gets:
+
+- **From the CRM**, when the number belongs to an applicant:
+  - name, area, job title and flags;
+  - the **latest note** (one note, up to 500 characters; after an AI call, usually that call's
+    summary) and the last outcome;
+  - the stage history;
+  - **upcoming interviews** (date, time, job);
+  - **applications** (including "not interested");
+  - the **recruiters' recent calls**;
+  - the CV excerpt, if the CRM shares it.
+- **From Xplogent's own records**: the last 3 calls with this number in the last 90 days (date,
+  outcome, summary). A caller the CRM doesn't know is still remembered, including the name they
+  gave. Test calls never see real callers' history.
+
+**Known caller.** The greeting stays the same for everyone (a phone can be shared). The agent
+asks "Am I speaking with Sarah?" instead of asking for a name it already has, and confirms
+details such as the callback number ("the number you're calling from, ending 123?") instead of
+asking again. Until the caller confirms, it says nothing from their records.
+
+**New caller.** "Unknown caller": the agent asks for what it needs (with the `kingsbury_inbound`
+template: job seeker or client, then name, number read back, and so on). The summary goes to the
+CRM, which logs the call without creating an applicant, and Xplogent remembers the call for next
+time.
+
+**Interruptions** (standard mode):
+
+- The AI and recording disclosure in the greeting is never cut off.
+- When the caller talks over the agent for 1.2 s without a pause (`voip.barge_in.stop_after_s`;
+  0 = off), the agent goes quiet at once.
+- When they finish, what they said decides:
+  - a real interruption ("stop", "wait", a question, 4 words or more) cancels the reply and is
+    answered;
+  - "hmm", "yeah, okay" lets the reply carry on from where it stopped;
+  - "yes" over a question the agent is still asking is taken as the answer.
+- After an interruption the agent knows what the caller heard, so it doesn't repeat itself.
+
+In Voice Agent and realtime modes, Deepgram or OpenAI stop the reply as soon as the caller
+speaks.
+
 ## Calling and testing
 
 - **Live calls**: transcript as it happens; **Pause AI** (a person takes over by typing what

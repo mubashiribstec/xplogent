@@ -240,6 +240,7 @@ voip:
   knowledge_top_k: 3
   knowledge_min_similarity: 0.3   # a knowledge chunk with no word in common with the question needs at least this similarity
   vad: { threshold: 500, silence_ms: 700, min_speech_ms: 200, max_utterance_ms: 15000 }
+  barge_in: { stop_after_s: 1.2 }   # caller talks over the agent this long without a pause: it goes quiet at once (the transcript then decides: a real interruption is answered, "yeah, okay" lets it carry on); 0 = wait for the end of what they say
   silence: { prompt_after_s: 12, hangup_after_s: 30, max_prompts: 2 }   # caller gone quiet: up to max_prompts short prompts, then a polite goodbye and hang up
   template: ""                     # built-in template pack: kingsbury_inbound | kingsbury_outbound_screener (supplies greeting + playbook + field schema)
   training:                        # uploads in Calls → Training (recordings, Q&A sheets, documents)

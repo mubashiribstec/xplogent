@@ -166,8 +166,15 @@ class CallSession:
                  voicemail_message: str = "",
                  prepared_audio: dict[str, tuple[list[bytes], int]] | None = None,
                  wrap_up_s: float = 60.0, quick_close_s: float = 45.0, cost_cap: float = 0.0,
-                 cost_rates: dict[str, float] | None = None) -> None:
+                 cost_rates: dict[str, float] | None = None, barge_in_stop_s: float = 0.0) -> None:
         self.brain, self.stt, self.tts = brain, stt, tts
+        # The caller has talked over the reply this long without a pause: the agent goes quiet
+        # at once (0 = only after the utterance ends and is transcribed, as before).
+        self.barge_in_stop_s = barge_in_stop_s
+        self._play_gate = asyncio.Event()       # cleared = playback held (caller talking over it)
+        self._play_gate.set()
+        self._gate_reopened = False
+        self._barge_in_audio_s = 0.0
         # Limits: a wrap-up note ``wrap_up_s`` before the time limit; ``quick_close_s`` after
         # a closing outcome (not interested…); a polite end at ``cost_cap`` (0 = none).
         self.wrap_up_s, self.quick_close_s, self.cost_cap = wrap_up_s, quick_close_s, cost_cap
@@ -457,6 +464,12 @@ class CallSession:
                     self.amd.frame(frame, self.vad.in_speech):
                 await self._machine(self.amd.reason)
                 return
+            if self._barge_in_pending and self.vad.in_speech:
+                self._barge_in_audio_s += FRAME_BYTES / 16000.0      # audio time, not wall time
+                if (self.barge_in_stop_s > 0 and self._play_gate.is_set()
+                        and self._barge_in_audio_s >= self.barge_in_stop_s
+                        and (self._speaking or self.turn_in_progress)):
+                    await self._hold_playback()
             if self._stream is not None and event != "speech_start":
                 if self.vad.in_speech:
                     self._stream.feed(frame)
@@ -472,6 +485,7 @@ class CallSession:
                     # the 28 Oct restart loop (every "Hello?" rebuilt the reply).
                     self._barge_in_pending = True
                     self._barge_in_started_at = time.time()
+                    self._barge_in_audio_s = len(self.vad._buf) / 16000.0   # speech before the VAD fired
             elif event == "speech_end":
                 self._speech_end_at = time.time()
                 stream, self._stream = self._stream, None
@@ -484,11 +498,14 @@ class CallSession:
                 pcm8k = self.vad.take()
                 if self._barge_in_pending:
                     self._barge_in_pending = False
-                    if not self._speaking and not self.turn_in_progress:
-                        # The reply finished while the caller spoke: a normal turn.
-                        await self._begin_turn(pcm8k, stream)
-                    else:
-                        await self._decide_barge_in(pcm8k, stream)
+                    try:
+                        if not self._speaking and not self.turn_in_progress:
+                            # The reply finished while the caller spoke: a normal turn.
+                            await self._begin_turn(pcm8k, stream)
+                        else:
+                            await self._decide_barge_in(pcm8k, stream)
+                    finally:
+                        self._release_playback()     # filler / held answer: the reply goes on
                     continue
                 await self._begin_turn(pcm8k, stream)
 
@@ -510,6 +527,21 @@ class CallSession:
         if stream is not None:
             asyncio.create_task(stream.aclose())
 
+    async def _hold_playback(self) -> None:
+        """Go quiet now: the caller has talked over the reply for ``barge_in_stop_s``. The
+        reply is only paused; the transcript then decides (real interruption: cancelled;
+        filler: it carries on from where it stopped)."""
+        self._play_gate.clear()
+        self.event("barge_in_hold", f"{self._barge_in_audio_s:.1f}s")
+        if self.clear_audio is not None:
+            with contextlib.suppress(Exception):
+                await self.clear_audio()            # drop what the carrier still had buffered
+
+    def _release_playback(self) -> None:
+        if not self._play_gate.is_set():
+            self._gate_reopened = True
+            self._play_gate.set()
+
     async def _barge_in(self) -> None:
         """Cancel the reply in progress for a REAL interruption (never the greeting
         disclosure — see _barge_in_blocked). Only called once the utterance has
@@ -518,6 +550,7 @@ class CallSession:
             return          # the disclosure is never cut off; the caller is answered after it
         _log.info("barge-in: caller interrupted the agent")
         self.event("barge_in")
+        self._release_playback()                 # the next reply must not start paused
         if self._turn_task and not self._turn_task.done():
             self._cancel_reasons[id(self._turn_task)] = "barge_in"
             self._turn_task.cancel()
@@ -719,6 +752,9 @@ class CallSession:
             except asyncio.CancelledError:
                 if reply_parts:     # interrupted: keep what the caller already heard
                     self._record("agent", " ".join(reply_parts) + " …")
+                    # ...and so does the model: else its next turn doesn't know what was said.
+                    if hasattr(self.brain, "interrupted"):
+                        self.brain.interrupted(" ".join(reply_parts))
                 # Record the interruption so the fix can be measured: a turn killed
                 # by a real barge-in vs one superseded by the next turn vs other.
                 reason = self._cancel_reasons.pop(id(asyncio.current_task()), "cancelled")
@@ -972,6 +1008,11 @@ class CallSession:
 
         async def push(frame: bytes) -> None:
             nonlocal play_end
+            if not self._play_gate.is_set():
+                await self._play_gate.wait()        # held: the caller is talking over us
+            if self._gate_reopened:                 # the carrier's buffer was cleared
+                self._gate_reopened = False
+                play_end = loop.time()
             if self.realtime:
                 ahead = play_end - loop.time()
                 if ahead > self.lead_s:

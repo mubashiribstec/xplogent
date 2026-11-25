@@ -197,6 +197,9 @@ def brief_from_lookup(crm_contact: dict[str, Any]) -> dict[str, Any]:
                                                          "job_title", "flags", "cv_excerpt")
                           if crm_contact.get(k)},
             "history": crm_contact.get("history") or [],
+            "applications": crm_contact.get("applications") or [],
+            "interviews": crm_contact.get("interviews") or [],
+            "crm_calls": crm_contact.get("calls") or [],
             "callback_note": crm_contact.get("callback_note") or ""}
 
 
@@ -282,6 +285,18 @@ def call_context_query(v: dict[str, Any], brief: dict[str, Any] | None, contact:
         if p and p.lower() not in (s.lower() for s in seen):
             seen.append(p)
     return " ".join(seen)[:300]
+
+
+_NAME_FIELD = re.compile(r"\b(?:caller_name|candidate_name|full_name|name)=([^;|]{2,80})")
+
+
+def name_from_calls(calls: list[dict[str, Any]]) -> str:
+    """The name a caller gave on an earlier call (the summary's "Fields: caller_name=…")."""
+    for c in calls:
+        m = _NAME_FIELD.search(str(c.get("summary") or ""))
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+    return ""
 
 
 def is_outbound(info: dict[str, str]) -> bool:
@@ -386,6 +401,8 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
         persona += f" They dialled {info['original_called_number']}."
     silence_cfg = v.get("silence") or {}
     session_kw.setdefault("idle_prompt_s", float(silence_cfg.get("prompt_after_s", 12.0)))
+    session_kw.setdefault("barge_in_stop_s",
+                          float((v.get("barge_in") or {}).get("stop_after_s", 1.2) or 0))
     session_kw.setdefault("idle_hangup_s", float(silence_cfg.get("hangup_after_s", 30.0)))
     session_kw.setdefault("idle_max_prompts", int(silence_cfg.get("max_prompts", 2)))
     dtmf_cfg = v.get("dtmf") or {}
@@ -414,6 +431,14 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
     from xplogent.voip import callbacks as cb
 
     brain.context_query = call_context_query(v, brief, contact)
+    brain.inbound = not is_outbound(info)
+    brain.caller_phone = customer
+    if customer and not info.get("test"):
+        # Our own earlier calls with this number: a caller the CRM doesn't know is still not new
+        # to us. A test call never sees real callers' history.
+        brain.previous_calls = [c for c in store.recent_calls_for_number(customer) if c["id"] != call_id]
+        if not (contact or {}).get("name"):
+            brain.known_name = name_from_calls(brain.previous_calls)
     brain.now_line = lambda: cb.now_line(v, contact)
     brain.callback_check = lambda at, who: cb.check(v, contact, at, who)
     guard_cfg = v.get("guard") or {}

@@ -956,6 +956,26 @@ class Store:
         sk = Store.phone_key(stored)
         return bool(sk) and (sk.endswith(key) or key.endswith(sk))
 
+    def recent_calls_for_number(self, phone: str, *, limit: int = 3, days: float = 90) -> list[dict[str, Any]]:
+        """Our own finished calls with this customer number (they called us, or we called them),
+        newest first: test, demo and still-active calls are left out."""
+        key = self.phone_key(phone)
+        if len(key) < 7:
+            return []
+        since = time.time() - days * 86400
+        out: list[dict[str, Any]] = []
+        rows = self._query(
+            "SELECT id, direction, from_number, to_number, outcome, summary, started_at FROM calls "
+            "WHERE status <> 'active' AND COALESCE(test, 0) = 0 AND COALESCE(demo, 0) = 0 "
+            "AND started_at >= ? ORDER BY id DESC LIMIT 2000", (since,))
+        for r in rows:
+            outbound = str(r["direction"] or "").lower().startswith("out")
+            if self._phone_match(r["to_number"] if outbound else r["from_number"], key):
+                out.append(dict(r))
+                if len(out) >= limit:
+                    break
+        return out
+
     def find_contact_by_phone(self, phone: str) -> dict[str, Any] | None:
         # Match on the last 10 digits so +1-555... and 555... both hit. Too-short input
         # ("123", a withheld caller ID) must not match whichever contact ends that way.
