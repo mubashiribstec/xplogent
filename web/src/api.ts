@@ -294,6 +294,43 @@ export async function getCalls(): Promise<{ calls: CallRow[] }> { return (await 
 export async function getCall(id: number): Promise<{ call: (CallRow & { turns: CallTurn[] }) | null }> {
   return (await fetch(`/voip/calls/${id}`)).json();
 }
+// ── CDR report: every AI call, searchable ───────────────────────────────────
+export interface CdrRow {
+  id: number; direction: string; from_number: string; to_number: string; number: string; name: string;
+  status: string; outcome?: string | null; summary?: string | null; cost: number; started_at: number;
+  ended_at?: number | null; duration_s: number; answered: boolean; end_reason?: string; job: string;
+  campaign_id?: number | null; applicant_id?: number | null; line_label: string; transport?: string;
+  line?: string; test?: number; demo?: number; via_queue?: number; crm_status?: string; crm_detail?: string;
+  recording: boolean;
+}
+export interface CdrTotals { calls: number; answered: number; inbound: number; outbound: number; talk_s: number; cost: number }
+export interface CdrFilters {
+  q?: string; direction?: string; outcome?: string; line?: string; answered?: string; from?: number; to?: number;
+  campaign_id?: number; test?: boolean; transcripts?: boolean; sort?: string;
+}
+function cdrQuery(f: CdrFilters, extra: Record<string, string | number> = {}): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries({ ...f, ...extra })) {
+    if (v === undefined || v === "" || v === false || v === null) continue;
+    p.set(k, v === true ? "1" : String(v));
+  }
+  return p.toString();
+}
+export async function getCdr(f: CdrFilters, page = 1, perPage = 50): Promise<{
+  ok: boolean; rows: CdrRow[]; total: number; totals: CdrTotals; outcomes: string[]; page: number; per_page: number;
+}> {
+  return (await fetch(`/voip/cdr?${cdrQuery(f, { page, per_page: perPage })}`)).json();
+}
+export async function downloadCdrCsv(f: CdrFilters): Promise<void> {
+  const r = await fetch(`/voip/cdr.csv?${cdrQuery(f)}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const name = /filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") || "")?.[1] || "xplogent-cdr.csv";
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement("a");
+  a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
 export async function getContacts(q = ""): Promise<{ contacts: Contact[]; total: number }> {
   return (await fetch(`/voip/contacts?q=${encodeURIComponent(q)}`)).json();
 }

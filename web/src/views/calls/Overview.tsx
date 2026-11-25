@@ -14,7 +14,7 @@ import { CallbacksCard } from "../CallbacksCard";
 import { fmtDur, fmtTime, type Saver, type Toaster } from "./shared";
 import { Transcript } from "./Transcript";
 
-const CRM_TONE: Record<string, "ok" | "warn" | "bad"> = { sent: "ok", failed: "warn", skipped: "bad", dead: "bad", retrying: "warn",
+export const CRM_TONE: Record<string, "ok" | "warn" | "bad"> = { sent: "ok", failed: "warn", skipped: "bad", dead: "bad", retrying: "warn",
   sending: "warn", pending: "warn" };
 
 export function Overview({ cfg, status, calls, turns, open, setOpen, ready, loaded, save, toast, reload, loadReady, goTest }: {
@@ -98,7 +98,10 @@ export function Overview({ cfg, status, calls, turns, open, setOpen, ready, load
   );
 }
 
-function CallDetail({ call: c, turns, toast, reload }: { call: CallRow; turns: CallTurn[]; toast: Toaster; reload: () => void }) {
+export function CallDetail({ call: c, turns, toast, reload }: {
+  call: Pick<CallRow, "id" | "summary" | "crm_status" | "crm_detail"> & { recording?: string | boolean };
+  turns: CallTurn[]; toast: Toaster; reload: () => void;
+}) {
   const [debug, setDebug] = useState(false);
   return (
     <div className="call-detail">

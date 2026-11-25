@@ -7,6 +7,7 @@ interface Cmd { id: string; label: string; hint?: string; run: () => void; }
 // Sub-sections worth jumping to directly.
 const SECTIONS: { path: string; label: string; hint: string }[] = [
   { path: "calls/overview", label: "Calls: overview", hint: "Go live, live calls, recent calls" },
+  { path: "cdr", label: "CDR Report", hint: "Search every AI call (number, name, job), totals, CSV export" },
   { path: "calls/test", label: "Calls: test call", hint: "Talk to the agent in the browser" },
   { path: "calls/setup", label: "Calls: setup", hint: "Greeting, model, costs, calling hours" },
   { path: "calls/speech", label: "Calls: speech", hint: "Listening, voice, Deepgram Voice Agent" },

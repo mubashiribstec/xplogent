@@ -347,6 +347,40 @@ time.
 In Voice Agent and realtime modes, Deepgram or OpenAI stop the reply as soon as the caller
 speaks.
 
+## CDR Report (call history)
+
+**CDR Report** in the Phone agent menu lists every call the AI made or answered, inbound and
+outbound. It comes from Xplogent's own database, so it works with or without the CRM.
+
+- **Search:**
+  - a number in any format ("07700 900123" finds "+447700900123");
+  - a name, job, outcome, summary or call ID;
+  - optionally, the words said on the call ("Also search what was said").
+- **Filters:**
+  - period: today, 7 or 30 days, all time, or custom dates;
+  - direction;
+  - answered or not ("not answered" covers no answer, busy, unobtainable and voicemail);
+  - outcome;
+  - line: SIP trunk, PBX extension, Telnyx or browser test;
+  - test calls (hidden unless you include them).
+- **Totals** for the filtered calls: calls, inbound and outbound, answer rate, talk time and its
+  average, estimated cost.
+- **Each row:** when, number, name, job and campaign, line, duration, outcome, CRM delivery,
+  how the call ended, and cost. Open a row for the summary, recording, transcript and the
+  debug view.
+- **Export CSV** downloads the filtered rows, up to 50,000. Cells that a spreadsheet would read
+  as a formula are written as text.
+
+"Ended by" is recorded from this version on, for example:
+- caller hung up;
+- the agent ended the call;
+- transferred to a person;
+- caller silent;
+- time limit reached;
+- not answered: SIP 486.
+
+Older calls leave it blank. Your filter choices are remembered in this browser.
+
 ## Calling and testing
 
 - **Live calls**: transcript as it happens; **Pause AI** (a person takes over by typing what

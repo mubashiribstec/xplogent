@@ -16,6 +16,7 @@ import { IconButton } from "./ui";
 // Pages load on first visit, so the first screen downloads less.
 const Chat = lazy(() => import("./views/Chat").then((m) => ({ default: m.Chat })));
 const Calls = lazy(() => import("./views/Calls").then((m) => ({ default: m.Calls })));
+const Cdr = lazy(() => import("./views/Cdr").then((m) => ({ default: m.Cdr })));
 const Campaigns = lazy(() => import("./views/Campaigns").then((m) => ({ default: m.Campaigns })));
 const Contacts = lazy(() => import("./views/Contacts").then((m) => ({ default: m.Contacts })));
 const Training = lazy(() => import("./views/Training").then((m) => ({ default: m.Training })));
@@ -27,7 +28,7 @@ const Settings = lazy(() => import("./Settings").then((m) => ({ default: m.Setti
 const Guide = lazy(() => import("./Guide").then((m) => ({ default: m.Guide })));
 
 const PAGES: Record<Tab, React.ComponentType> = {
-  chat: Chat, calls: Calls, campaigns: Campaigns, contacts: Contacts, training: Training, knowledge: Knowledge,
+  chat: Chat, calls: Calls, cdr: Cdr, campaigns: Campaigns, contacts: Contacts, training: Training, knowledge: Knowledge,
   analytics: Analytics, persona: Persona, audit: Audit, settings: Settings, guide: Guide,
 };
 

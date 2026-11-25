@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS call_turns (
     created_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_call_turns_call ON call_turns(call_id);
+CREATE INDEX IF NOT EXISTS idx_calls_started ON calls(started_at);
 CREATE TABLE IF NOT EXISTS call_debug (
     call_id INTEGER PRIMARY KEY,
     data TEXT,
@@ -288,6 +289,8 @@ _MIGRATIONS = [
     ("skills", "trigger", "TEXT DEFAULT ''"),   # when to use this skill
     ("skills", "source", "TEXT DEFAULT ''"),    # learned | installed | pack id
     ("calls", "test", "INTEGER DEFAULT 0"),     # test calls: not counted, no contact updates
+    ("calls", "caller_name", "TEXT DEFAULT ''"),  # CDR: who it was (record, CRM, or the name they gave)
+    ("calls", "end_reason", "TEXT DEFAULT ''"),   # CDR: how it ended (caller hung up, agent ended, no answer…)
     ("calls", "transport", "TEXT DEFAULT ''"),  # telnyx | sip | browser
     ("calls", "line", "TEXT DEFAULT ''"),       # SIP line: trunk | extension ('' otherwise)
     ("calls", "recording", "TEXT DEFAULT ''"),  # path of the call's WAV (voip.recording)
@@ -352,6 +355,35 @@ class SkillRow:
     @property
     def stars(self) -> int:
         return skill_level(self.uses, self.successes, self.failures)[1]
+
+
+# The CDR's derived columns: talk time, and whether a person (not a machine) answered.
+_CDR_DURATION = "MAX(0, CAST(ROUND(COALESCE(c.ended_at, c.started_at) - c.started_at) AS INTEGER))"
+CDR_UNANSWERED = ("no_answer", "busy", "number_unobtainable", "voicemail", "failed")
+_CDR_ANSWERED = ("(CASE WHEN COALESCE(c.outcome, '') IN (" + ", ".join(f"'{o}'" for o in CDR_UNANSWERED)
+                 + ") THEN 0 ELSE 1 END)")
+
+
+def _cdr_row(r: dict[str, Any]) -> dict[str, Any]:
+    """One CDR row: the call, plus who / which job / which campaign from its brief."""
+    try:
+        brief = json.loads(r.pop("brief") or "{}") or {}
+    except ValueError:
+        brief = {}
+    cand = brief.get("candidate") or {}
+    sale = brief.get("sale") or {}
+    outbound = str(r.get("direction") or "").lower() != "inbound"
+    r["number"] = r["to_number"] if outbound else r["from_number"]
+    r["name"] = r.get("caller_name") or r.get("contact_name") or cand.get("name") or cand.get("first_name") or ""
+    r["job"] = sale.get("job_title") or cand.get("job_title") or ""
+    r["campaign_id"] = brief.get("campaign_id")
+    r["applicant_id"] = brief.get("applicant_id")
+    r["line_label"] = ("PBX extension" if r.get("line") == "extension" else "SIP trunk" if r.get("transport") == "sip"
+                       else "Telnyx" if r.get("transport") == "telnyx" else "Browser test" if r.get("transport") == "browser"
+                       else (r.get("transport") or ""))
+    r["recording"] = bool(r.get("recording"))
+    r["answered"] = bool(r.get("answered"))
+    return r
 
 
 def _without_payload(call: dict[str, Any]) -> dict[str, Any]:
@@ -1246,6 +1278,102 @@ class Store:
             "SELECT c.*, ct.name AS contact_name FROM calls c "
             "LEFT JOIN contacts ct ON ct.id = c.contact_id ORDER BY c.id DESC LIMIT ?", (limit,))
         return [_without_payload(dict(r)) for r in rows]
+
+    def set_call_cdr(self, call_id: int, *, caller_name: str | None = None, end_reason: str | None = None) -> None:
+        """The CDR's own fields (only those given)."""
+        if caller_name is not None:
+            self._write("UPDATE calls SET caller_name=? WHERE id=?", (caller_name[:120], call_id))
+        if end_reason is not None:
+            self._write("UPDATE calls SET end_reason=? WHERE id=?", (end_reason[:200], call_id))
+
+    def search_calls(self, *, q: str = "", direction: str = "", outcome: str = "", line: str = "",
+                     answered: str = "", date_from: float | None = None, date_to: float | None = None,
+                     campaign_id: int | None = None, include_test: bool = False, include_demo: bool = False,
+                     transcripts: bool = False, sort: str = "newest", limit: int = 50,
+                     offset: int = 0) -> dict[str, Any]:
+        """The CDR report: every AI call (inbound and outbound) matching the filters, newest first,
+        a page of rows plus totals over all matches."""
+        where, args = self._cdr_where(q=q, direction=direction, outcome=outcome, line=line, answered=answered,
+                                      date_from=date_from, date_to=date_to, campaign_id=campaign_id,
+                                      include_test=include_test, include_demo=include_demo, transcripts=transcripts)
+        order = {"newest": "c.started_at DESC, c.id DESC", "oldest": "c.started_at ASC, c.id ASC",
+                 "longest": f"{_CDR_DURATION} DESC, c.id DESC", "cost": "c.cost DESC, c.id DESC"}.get(sort)
+        order = order or "c.started_at DESC, c.id DESC"
+        base = f"FROM calls c LEFT JOIN contacts ct ON ct.id = c.contact_id WHERE {where}"
+        tot = self._query(
+            f"SELECT COUNT(*) AS calls, SUM({_CDR_ANSWERED}) AS answered, "
+            "SUM(c.direction = 'inbound') AS inbound, SUM(c.direction <> 'inbound') AS outbound, "
+            f"SUM(CASE WHEN {_CDR_ANSWERED} THEN {_CDR_DURATION} ELSE 0 END) AS talk_s, "
+            f"COALESCE(SUM(c.cost), 0) AS cost {base}", tuple(args))[0]
+        rows = self._query(
+            f"SELECT c.id, c.direction, c.from_number, c.to_number, c.status, c.outcome, c.summary, c.cost, "
+            f"c.started_at, c.ended_at, c.transport, c.line, c.test, c.demo, c.via_queue, c.crm_status, "
+            f"c.crm_detail, c.recording, c.caller_name, c.end_reason, c.brief, ct.name AS contact_name, "
+            f"{_CDR_DURATION} AS duration_s, {_CDR_ANSWERED} AS answered {base} ORDER BY {order} LIMIT ? OFFSET ?",
+            (*args, max(1, min(int(limit), 1000)), max(0, int(offset))))
+        totals = {k: (tot[k] or 0) for k in ("calls", "answered", "inbound", "outbound", "talk_s", "cost")}
+        totals["cost"] = round(float(totals["cost"]), 4)
+        return {"rows": [_cdr_row(dict(r)) for r in rows], "total": int(totals["calls"]), "totals": totals}
+
+    def cdr_outcomes(self) -> list[str]:
+        """Every outcome seen, for the report's filter."""
+        return [r[0] for r in self._query(
+            "SELECT DISTINCT outcome FROM calls WHERE COALESCE(outcome, '') <> '' ORDER BY outcome")]
+
+    def _cdr_where(self, *, q: str, direction: str, outcome: str, line: str, answered: str,
+                   date_from: float | None, date_to: float | None, campaign_id: int | None,
+                   include_test: bool, include_demo: bool, transcripts: bool) -> tuple[str, list[Any]]:
+        where, args = ["1=1"], []
+        if not include_test:
+            where.append("COALESCE(c.test, 0) = 0")
+        if not include_demo:
+            where.append("COALESCE(c.demo, 0) = 0")
+        if direction in ("inbound", "outbound"):
+            where.append("c.direction = 'inbound'" if direction == "inbound" else "c.direction <> 'inbound'")
+        if outcome:
+            where.append("c.outcome = ?")
+            args.append(outcome)
+        if line == "extension":
+            where.append("c.line = 'extension'")
+        elif line == "sip":
+            where.append("c.transport = 'sip' AND COALESCE(c.line, '') <> 'extension'")
+        elif line in ("telnyx", "browser"):
+            where.append("c.transport = ?")
+            args.append(line)
+        if answered in ("yes", "no"):
+            where.append(f"{_CDR_ANSWERED} = {1 if answered == 'yes' else 0}")
+        if date_from is not None:
+            where.append("c.started_at >= ?")
+            args.append(float(date_from))
+        if date_to is not None:
+            where.append("c.started_at < ?")
+            args.append(float(date_to))
+        if campaign_id:
+            # Calls without a brief store "": json_extract would fail on them.
+            where.append("(CASE WHEN json_valid(c.brief) THEN json_extract(c.brief, '$.campaign_id') END) = ?")
+            args.append(int(campaign_id))
+        text = " ".join((q or "").split())[:100]
+        if text:
+            like = "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            fields = ["c.from_number", "c.to_number", "c.caller_name", "ct.name", "c.outcome", "c.summary",
+                      "c.end_reason", "c.brief"]
+            ors = [f"{f} LIKE ? ESCAPE '\\'" for f in fields]
+            args += [like] * len(fields)
+            digits = "".join(ch for ch in text if ch.isdigit())
+            if len(digits) >= 4 and len(digits) >= len(text.replace(" ", "").replace("+", "")) - 2:
+                # A number however it was typed: "07700 900123" finds "+447700900123".
+                tail = "%" + digits.lstrip("0")[-9:] + "%"
+                ors += ["REPLACE(REPLACE(c.from_number, ' ', ''), '-', '') LIKE ?",
+                        "REPLACE(REPLACE(c.to_number, ' ', ''), '-', '') LIKE ?"]
+                args += [tail, tail]
+            if text.isdigit() and len(text) <= 9:
+                ors.append("c.id = ?")
+                args.append(int(text))
+            if transcripts:
+                ors.append("EXISTS (SELECT 1 FROM call_turns t WHERE t.call_id = c.id AND t.text LIKE ? ESCAPE '\\')")
+                args.append(like)
+            where.append("(" + " OR ".join(ors) + ")")
+        return " AND ".join(where), args
 
     def count_calls(self, include_demo: bool = False) -> int:
         where = "" if include_demo else " WHERE demo=0"

@@ -360,8 +360,16 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
     if contact is not None and store.is_dnc(contact.get("phone") or customer):
         contact = {**contact, "do_not_call": True}
     brief = dict(info.get("brief") or {}) if isinstance(info.get("brief"), dict) else {}
-    if not brief and lookup.get("found") and lookup.get("contact"):
-        brief = brief_from_lookup(lookup["contact"])
+    if lookup.get("found") and lookup.get("contact"):
+        card = brief_from_lookup(lookup["contact"])
+        if not brief:
+            brief = card
+        elif card and (not brief.get("applicant_id") or brief.get("applicant_id") == card.get("applicant_id")):
+            # A campaign (or other prepared) brief has the vacancy and the candidate, but not the
+            # CRM's history, applications, interviews and recruiters' calls: add those, keep the rest.
+            for key in ("history", "applications", "interviews", "crm_calls", "callback_note"):
+                if card.get(key) and not brief.get(key):
+                    brief[key] = card[key]
     info = {**info, "brief": brief} if brief else info
     direction = str(info.get("direction_label") or ("outbound" if is_outbound(info) else "inbound"))
     call_id = store.start_call(direction, info.get("from", ""), info.get("to", ""),
@@ -431,6 +439,9 @@ def build_session(cfg: Config, store: Store, info: dict[str, Any], *, send_audio
     from xplogent.voip import callbacks as cb
 
     brain.context_query = call_context_query(v, brief, contact)
+    start_name = str((contact or {}).get("name") or ((brief.get("candidate") or {}).get("name")) or "")
+    if start_name:
+        store.set_call_cdr(call_id, caller_name=start_name)
     brain.inbound = not is_outbound(info)
     brain.caller_phone = customer
     if customer and not info.get("test"):
@@ -577,6 +588,18 @@ def _make_retriever(cfg: Config, store: Store, k: int):
     return _Retriever(cfg, store, k)
 
 
+def end_reason(session: Any, st: Any) -> str:
+    """How the call ended, for the CDR: the agent's own reason when it hung up, a transfer, or
+    the caller putting the phone down."""
+    reason = next((e.get("detail") or "" for e in reversed(getattr(session, "timeline", []) or [])
+                   if e.get("kind") == "hangup"), None)
+    if reason is not None:
+        return reason or "the agent ended the call"
+    if getattr(st, "transfer", False) and not getattr(st, "transfer_failed", False):
+        return "transferred to a person"
+    return "caller hung up"
+
+
 def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
                   brain: CallBrain, contact_phone: str = "") -> dict[str, Any]:
     """Write the end-of-call record: outcome, summary, cost; honour do-not-call."""
@@ -600,6 +623,10 @@ def finalize_call(cfg: Config, store: Store, call_id: int, session: CallSession,
     if blocked:
         summary = (summary + f" | Guard: {blocked} sentence(s) with an unconfirmed figure replaced").strip(" |")
     store.end_call(call_id, outcome=outcome, summary=summary, cost=cost)
+    values = (fields_report or {}).get("values") or {}
+    given = next((str(values[k]) for k in ("caller_name", "candidate_name", "full_name", "name")
+                  if values.get(k)), "")
+    store.set_call_cdr(call_id, caller_name=given or None, end_reason=end_reason(session, st))
     try:                                # the debug view's record of the call (voip/debug.py)
         from xplogent.voip import debug
 

@@ -1,14 +1,15 @@
 import type { Branding } from "../api";
 import {
-  BarChart3, BookOpen, BookText, ChevronsLeft, ChevronsRight, Contact, GraduationCap, type LucideIcon, Megaphone,
+  BarChart3, BookOpen, BookText, ChevronsLeft, ChevronsRight, Contact, FileSpreadsheet, GraduationCap, type LucideIcon, Megaphone,
   MessageSquare, MoreHorizontal, PhoneCall, Settings as Cog, ShieldAlert, Sparkles,
 } from "lucide-react";
 
-export type Tab = "chat" | "calls" | "campaigns" | "contacts" | "training" | "knowledge" | "analytics" | "persona" | "audit" | "settings" | "guide";
+export type Tab = "chat" | "calls" | "cdr" | "campaigns" | "contacts" | "training" | "knowledge" | "analytics" | "persona" | "audit" | "settings" | "guide";
 
 export interface TabInfo { id: Tab; label: string; icon: LucideIcon; group: string }
 export const TABS: TabInfo[] = [
   { id: "calls", label: "Calls", icon: PhoneCall, group: "Phone agent" },
+  { id: "cdr", label: "CDR Report", icon: FileSpreadsheet, group: "Phone agent" },
   { id: "campaigns", label: "Campaigns", icon: Megaphone, group: "Phone agent" },
   { id: "contacts", label: "Contacts", icon: Contact, group: "Phone agent" },
   { id: "training", label: "Call training", icon: GraduationCap, group: "Phone agent" },

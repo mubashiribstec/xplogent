@@ -75,6 +75,8 @@ def log_unanswered_call(cfg: Config, phone: str, brief: dict[str, Any], reason: 
         call_id = store.start_call("outbound", "", phone, transport="", line="")
         store.set_call_brief(call_id, brief)
         store.end_call(call_id, outcome=outcome, summary=f"Not answered ({reason[:120]})")
+        store.set_call_cdr(call_id, caller_name=str((brief.get("candidate") or {}).get("name") or ""),
+                           end_reason=f"not answered: {reason[:150]}")
         if crm.crm_enabled(cfg):
             payload = crm.build_payload(cfg, store, call_id, {"outcome": outcome})
             crm.queue_summary(cfg, store, call_id, payload)

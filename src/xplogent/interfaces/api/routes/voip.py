@@ -572,6 +572,78 @@ async def voip_calls(limit: int = 100) -> dict:
     return {"calls": out}
 
 
+def _cdr_filters(request: Request) -> dict:
+    """The CDR report's filters from the query string (unknown or bad values are ignored)."""
+    p = request.query_params
+
+    def num(key: str) -> float | None:
+        try:
+            return float(p[key]) if p.get(key) not in (None, "") else None
+        except ValueError:
+            return None
+
+    camp = num("campaign_id")
+    return {"q": p.get("q", ""), "direction": p.get("direction", ""), "outcome": p.get("outcome", "")[:40],
+            "line": p.get("line", ""), "answered": p.get("answered", ""), "date_from": num("from"),
+            "date_to": num("to"), "campaign_id": int(camp) if camp else None,
+            "include_test": p.get("test") in ("1", "true"), "include_demo": p.get("demo") in ("1", "true"),
+            "transcripts": p.get("transcripts") in ("1", "true"), "sort": p.get("sort", "newest")}
+
+
+@router.get("/voip/cdr")
+async def voip_cdr(request: Request, page: int = 1, per_page: int = 50) -> dict:
+    """The CDR report: every AI call, searchable and filterable, with totals."""
+    per_page = max(10, min(int(per_page), 200))
+    page = max(1, int(page))
+    with Store(load_config().db_path) as store:
+        out = store.search_calls(**_cdr_filters(request), limit=per_page, offset=(page - 1) * per_page)
+        out["outcomes"] = store.cdr_outcomes()
+    return {"ok": True, "page": page, "per_page": per_page, **out}
+
+
+CDR_CSV_MAX = 50_000
+CDR_COLUMNS = (("id", "Call ID"), ("started", "Started"), ("ended", "Ended"), ("direction", "Direction"),
+               ("number", "Customer number"), ("from_number", "From"), ("to_number", "To"), ("name", "Name"),
+               ("job", "Job"), ("campaign_id", "Campaign"), ("applicant_id", "CRM applicant"),
+               ("line_label", "Line"), ("duration_s", "Duration (s)"), ("answered", "Answered"),
+               ("outcome", "Outcome"), ("end_reason", "Ended by"), ("cost", "Est. cost ($)"),
+               ("crm_status", "CRM"), ("recording", "Recording"), ("test", "Test"), ("summary", "Summary"))
+
+
+def _csv_cell(value) -> str:
+    """Text for a spreadsheet: never a formula (a summary starting with = or + stays text)."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+@router.get("/voip/cdr.csv")
+async def voip_cdr_csv(request: Request):
+    """The CDR report as a CSV file (the same filters; up to 50,000 rows)."""
+    import csv
+    import io
+    from datetime import datetime
+
+    from fastapi.responses import Response
+
+    with Store(load_config().db_path) as store:
+        rows = store.search_calls(**_cdr_filters(request), limit=CDR_CSV_MAX)["rows"]
+
+    def iso(t) -> str:
+        return datetime.fromtimestamp(float(t)).isoformat(sep=" ", timespec="seconds") if t else ""
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([label for _, label in CDR_COLUMNS])
+    for r in rows:
+        r = {**r, "started": iso(r.get("started_at")), "ended": iso(r.get("ended_at")),
+             "answered": "yes" if r.get("answered") else "no", "recording": "yes" if r.get("recording") else "",
+             "test": "yes" if r.get("test") else ""}
+        w.writerow([_csv_cell(r.get(key)) for key, _ in CDR_COLUMNS])
+    name = f"xplogent-cdr-{datetime.now():%Y%m%d-%H%M}.csv"
+    return Response("\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @router.get("/voip/calls/{call_id}")
 async def voip_call(call_id: int) -> dict:
     with Store(load_config().db_path) as store:
